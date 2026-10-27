@@ -10,7 +10,7 @@ not changed later in incompatible ways.
 |-------|-------|-------|
 | 1 | GXFIFO Capture | ARM9 hook library + rotating-cube demo (`.nds`), this release |
 | 2 | Analysis Tooling | Host-side tooling to parse captured frames (dump, diff, statistics) |
-| 3 | RTCom Transport | Wire `TwlhdFrame` over RTCom from ARM9 to ARM11 |
+| 3 | RTCom Transport | ARM7 driver (`arm7/`) + ARM11 ucode blob (`arm11_ucode/`) |
 | 4 | PICA200 Re-render | Translate captured DS geometry into PICA200 commands on ARM11 |
 | 5 | Compositing | Composite the high-resolution result back into the displayed frame |
 
@@ -31,11 +31,21 @@ so a host tool can parse a dump without the DS toolchain. Not in this release.
 
 ### Phase 3 - RTCom Transport
 
-The capture hook exposes `fifo_hook_transport_send()` as a weak symbol and its
-default body does nothing. Phase 3 overrides it with an RTCom-backed
-implementation, and the ARM11 side replaces the stub in
-`arm11/source/rtcom_transport.c`. Until then both ARM11 functions return
-`TWLHD_ERR_NOT_IMPLEMENTED` and `arm11/source/main.c` reports "not functional".
+Phase 3 has two halves that must ship together:
+
+- `arm7/` — an ARM7-side RTCom driver linked into the DS title binary. It owns
+  the 3-wire RTC bit-bang, the handshake with the TwlBg RTCom service, and the
+  one-time upload of the ARM11 payload.
+- `arm11_ucode/` — a bare-metal ARM11 ucode blob (base `0x00201000`, 60 KiB
+  window) uploaded at runtime into the already-running TwlBg.cxi process. It is
+  not a standalone executable and has no `.3dsx` form.
+
+The existing `arm11/` libctru application is the Phase 4/5 renderer. It is
+launched independently from the home menu and can never be the receiving end of
+RTCom traffic; `arm11/source/rtcom_transport.c` is therefore not the Phase 3
+transport endpoint. Bandwidth is analysed in `docs/RTCOM_AUDIT.md`; carrying a
+full `TwlhdFrame` over RTCom is not feasible, which is why Phase 3D changes the
+transfer model before Phase 4 consumes it.
 
 ### Phase 4 - PICA200 Re-render
 
