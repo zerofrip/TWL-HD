@@ -235,6 +235,16 @@ default.  Calling it leaves the RTCom service in an undefined state from the
 ARM7's perspective; it should not be considered safe for real hardware until
 that teardown is implemented and verified.
 
+**`HARDWARE UNVERIFIED`** — retries release the bus lock between attempts.
+
+`rtcom_upload_ucode()`'s outer retry loop calls `rtcom_attempt_upload()`,
+which locks and unlocks the bus once per attempt. Between attempts the bus
+lock is released, `REG_RCNT` is restored, and interrupts are re-enabled
+before the next attempt re-locks and reconfigures RCNT. The reference keeps
+the entire retried upload inside one `beginComm`/`endComm` session. This
+only matters when the gate is on (upload is only reachable then); it has not
+been measured on hardware whether the brief gap between attempts is safe.
+
 **`HARDWARE UNVERIFIED`** — gate-off probe leaves the service open.
 
 With the gate off, `rtcom_init()` performs the probe and, on success, restores
@@ -243,6 +253,18 @@ may therefore remain in a "communicating" state after the probe-only default
 run.  The consequences on real hardware are unknown; this invariant is
 deliberately maintained because the gate-off path is required to emit only the
 probe.
+
+**Caveat on "UNIT VERIFIED" labels for `UploadRetryPolicyTest` and
+`BusLockIrqOrderingTest`.** These two test classes in
+`tools/test_rtcom_protocol.py` exercise a host-side Python re-implementation
+of the retry policy and the IRQ-clear ordering, mirroring the design
+decisions made in `arm7/source/rtcom_driver.c` — they do NOT compile or run
+the actual embedded C code (the embedded code uses direct MMIO and cannot
+run on a host; see the module's own docstring). A drift between the C
+implementation and its Python mirror would not be caught by these tests.
+They verify the DESIGN is self-consistent and matches the stated policy, not
+that the shipped C code implements it correctly. Treat the label as "design
+verified on a host model", not as execution of the real driver.
 
 ### Round-trip echo contract
 
@@ -425,10 +447,17 @@ RTCom synchronization is intentionally primitive:
 - **Hard iteration-count timeouts.** The default acknowledge timeout is
   2,062,500 iterations. Exceeding it returns `RTCOM_ERR_TIMEOUT`; the caller
   decides whether to retry.
-- **Deliberate delay asymmetry.** Bit timing uses
-  `RTCOM_BIT_DELAY_SLOW = 48` iterations during the one-time upload.
-  `RTCOM_BIT_DELAY_FAST = 14` is defined for future steady-state traffic but is
-  not currently used.
+- **Delay constants diverge from the reference, conservatively.** This
+  driver uses `RTCOM_BIT_DELAY_SLOW = 48` iterations for every bit transfer
+  (upload and steady-state alike). The reference instead uses `48` only as an
+  unused-in-practice constant (`RTC_DELAY`) and actually transfers bits at
+  `14` iterations during upload and `1` iteration (`fastMode`) for
+  steady-state traffic, with `initDelay = 2` around chip-select. This driver's
+  `RTCOM_BIT_DELAY_SLOW = 48` / `RTCOM_BIT_DELAY_FAST = 14` pair is therefore
+  NOT a deliberate reproduction of the reference's asymmetry — it is a more
+  conservative (slower) divergence, and `RTCOM_BIT_DELAY_FAST` is defined but
+  not currently used anywhere. Real timing correctness is `HARDWARE
+  UNVERIFIED` either way; these constants have not been measured on hardware.
 - **Critical section.** Every top-level exchange (`rtcom_init()`,
   `rtcom_upload_ucode()`, `rtcom_execute_ucode()`) wraps the entire sequence in
   `enterCriticalSection()` / `leaveCriticalSection()` so no other code can
@@ -463,13 +492,17 @@ Errors are values, not resets. `RtcomStatus` has five members:
 | `RTCOM_OK` | Exchange completed and the expected status byte was received (`DONE` for the probe and post-upload wait, `ACK` for all other requests) | Continue |
 | `RTCOM_ERR_TIMEOUT` | Acknowledge poll exhausted `RTCOM_ACK_TIMEOUT` | Retry or report |
 | `RTCOM_ERR_NOT_READY` | Reply was not the expected status byte, or init retries exhausted | Retry or report |
-| `RTCOM_ERR_UPLOAD_FAILED` | A byte exhausted its ten retries, the post-upload `DONE` wait failed, or finish failed | Abort upload |
+| `RTCOM_ERR_UPLOAD_FAILED` | The whole upload attempt exhausted its ten retries (a single step failed, the post-upload `DONE` wait failed, or finish failed), or a retried attempt still failed | Abort upload |
 | `RTCOM_ERR_BAD_ARG` | `rtcom_upload_ucode()` was called with `len == 0` or `len > 60 KiB` | Abort upload |
 
 Rules enforced by the implementation:
 
-- Every function returns a status. No function returns `void` and no function
-  loops without a bound.
+- Every function that can fail returns a status. A few low-level helpers
+  (`rtcom_bus_lock()`, `rtcom_bus_unlock()`, `rtcom_send_async_113()`) return
+  `void` by design because they cannot fail observably at their level (locking
+  always succeeds; the async send has no immediate reply to check) — every
+  function that CAN fail returns a status, and no function loops without a
+  bound.
 - `rtcom_init()` retries the whole probe exchange up to ten times.
 - `rtcom_upload_ucode()` retries the whole upload attempt (from
   `UPLOAD_UCODE` through `FINISH_UCODE`) up to ten times.  Individual steps are
@@ -661,15 +694,15 @@ Labels follow the definitions at the top of this document.
 | 4 | `make -C arm11_ucode` (clean) | `BUILD VERIFIED` — exit 0; `twlhd_ucode.elf` and `.uc11` produced |
 | 5 | `make rtcom_rom` | `BUILD VERIFIED` — exit 0; `twlhd-rtcom.nds` produced |
 | 6 | `ndstool -i twlhd-rtcom.nds` ARM7 size | `BUILD VERIFIED` — 0x15D0 (5584 bytes); default `.nds` ARM7 is 0xB374 (45940 bytes) |
-| 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 13 tests pass |
+| 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 16 tests pass |
 | 8 | `arm11_ucode/source/ucode_entry.s` compiles | `BUILD VERIFIED` — assembled and linked into `.elf`/`uc11` |
 | 9 | `arm11_ucode/Makefile` entry-point check | `BUILD VERIFIED` — check runs and passes; `.uc11` disassembly starts with `push {r1-r12,lr}` / `bl` / `pop {r1-r12,pc}` |
 | 10 | Negative control (broken linker order) | `BUILD VERIFIED` — check fails with "_start is not at base address 0x00201000"; restored to fixed order |
 | 11 | Round-trip test skipped pending EXECUTE+NEXT+read-112 implementation | `BUILD VERIFIED` — `arm7/source/main.c` reports `RTCOM_TEST_ROUNDTRIP_SKIPPED` for both gate-off and gate-on paths |
 | 12 | Opcode/status reference-pinning test | `UNIT VERIFIED` — `ReferencePinningTest` in `tools/test_rtcom_protocol.py` passes |
 | 13 | Clean build (`make clean && make && make rtcom_rom`) | `BUILD VERIFIED` — exit 0, no warnings |
-| 14 | Upload retry policy (whole-attempt, no per-step resend) | `UNIT VERIFIED` — `UploadRetryPolicyTest` in `tools/test_rtcom_protocol.py` passes |
-| 15 | `REG_IF` cleared before and after `REG_RCNT` write | `UNIT VERIFIED` — `BusLockIrqOrderingTest` in `tools/test_rtcom_protocol.py` passes |
+| 14 | Upload retry policy (whole-attempt, no per-step resend) | `UNIT VERIFIED` (design/model-level — exercises a host-side Python model of the retry policy, not the compiled C code; see caveat below) — `UploadRetryPolicyTest` in `tools/test_rtcom_protocol.py` passes |
+| 15 | `REG_IF` cleared before and after `REG_RCNT` write | `UNIT VERIFIED` (design/model-level — see caveat below) — `BusLockIrqOrderingTest` in `tools/test_rtcom_protocol.py` passes |
 | 16 | Gate-off probe-only invariant | `BUILD VERIFIED` — with `TWLHD_RTCOM_UCODE_ENABLED` 0, `arm7/source/main.c` calls only `rtcom_init()`; upload/execute/round-trip are gated off |
 
 Nothing in this document is claimed as working on real hardware. The ARM7
