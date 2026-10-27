@@ -1,0 +1,9 @@
+# build output
+*/build/
+
+# binaries
+*.nds
+*.3dsx
+*.elf
+*.map
+*.smdh
