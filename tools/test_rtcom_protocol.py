@@ -31,6 +31,8 @@ DIR_OUT = PIN_SIO_OUT | PIN_SCK_OUT | PIN_CS_OUT
 
 RTC_WRITE_112 = 0x6C
 RTC_WRITE_113 = 0x6E
+RTC_READ_112 = 0x6D
+RTC_READ_113 = 0x6F
 
 
 def emulate_bitbang_byte(cmd, value, fast_mode=False):
@@ -84,6 +86,70 @@ def emulate_bitbang_byte(cmd, value, fast_mode=False):
 
     end()
     return writes, delay
+
+
+def emulate_bitbang_read_byte(cmd, returned_value, fast_mode=False):
+    """Emulate one rtcom_read_byte() transfer and return the register writes.
+
+    Mirrors the corrected logic in rtcom_driver.c:
+      - command sent MSB-first with SIO in output mode (SIO_OUT set)
+      - 8 data bits sampled MSB-first with SIO_OUT clear, because the RTC
+        chip drives SIO during the read half of each transaction
+    """
+    delay = 14 if fast_mode else 48
+    writes = []
+    reg = 0
+
+    def write(v):
+        reg = v
+        writes.append(reg)
+        return reg
+
+    def delay_step():
+        pass
+
+    def begin():
+        nonlocal reg
+        base = (reg & ~(DIR_OUT | PIN_CS | PIN_SCK | PIN_SIO)) | DIR_OUT
+        reg = write(base | DIR_OUT | PIN_CS | PIN_SCK | PIN_SIO)
+        delay_step()
+
+    def end():
+        nonlocal reg
+        reg = write((reg & ~PIN_CS) | DIR_OUT | PIN_SCK)
+        delay_step()
+
+    def put_bit(bit):
+        nonlocal reg
+        line = (reg & ~(PIN_SIO | PIN_SCK)) | DIR_OUT | PIN_CS
+        if bit:
+            line |= PIN_SIO
+        reg = write(line)
+        delay_step()
+        reg = write(line | PIN_SCK)
+        delay_step()
+
+    def get_bit(bit_from_rtc):
+        nonlocal reg
+        line = (reg & ~(PIN_SIO | PIN_SCK | PIN_SIO_OUT)) | PIN_CS_OUT | PIN_CS | PIN_SCK_OUT
+        reg = write(line)
+        delay_step()
+        reg = write(line | PIN_SCK)
+        delay_step()
+        # The C code reads REG_RTC here; the written value keeps SIO_OUT clear.
+        return bit_from_rtc
+
+    begin()
+
+    for i in range(7, -1, -1):
+        put_bit((cmd >> i) & 1)
+
+    out = 0
+    for i in range(7, -1, -1):
+        out = (out << 1) | get_bit((returned_value >> i) & 1)
+
+    end()
+    return writes, delay, out
 
 
 class BitSerializationTest(unittest.TestCase):
@@ -169,6 +235,28 @@ class RegisterOrderTest(unittest.TestCase):
         self.assertEqual(byte_from_cells(writes_113, 0, 8), RTC_WRITE_113)
         self.assertEqual(byte_from_cells(writes_112, 8, 16), param)
         self.assertEqual(byte_from_cells(writes_113, 8, 16), request)
+
+
+class ReadPathDirectionTest(unittest.TestCase):
+    """Verify SIO_OUT is clear while sampling each bit of a read transaction."""
+
+    def test_sio_out_clear_during_read_data_phase(self):
+        returned = 0xA5
+        writes, _, decoded = emulate_bitbang_read_byte(RTC_READ_113, returned)
+
+        self.assertEqual(decoded, returned, "read byte must match RTC return value")
+
+        # begin() is one write; command phase is 16 writes; data phase is 16
+        # writes; end() is one write.
+        data_writes = writes[1 + 16:1 + 16 + 16]
+        self.assertEqual(len(data_writes), 16,
+                         "expected 16 writes during 8-bit data sampling")
+
+        for i, w in enumerate(data_writes):
+            self.assertFalse(
+                w & PIN_SIO_OUT,
+                f"SIO_OUT must be clear during read sample {i // 2} "
+                f"(write #{i}, value=0x{w:04x})")
 
 
 class TimeoutStateMachineTest(unittest.TestCase):

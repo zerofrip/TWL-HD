@@ -98,9 +98,12 @@ static void rtcom_put_bit(u8 bit) {
 }
 
 static u8 rtcom_get_bit(void) {
-    u16 line = (RTCOM_REG_RTC & ~(RTCOM_PIN_SIO | RTCOM_PIN_SCK)) |
+    /* SIO_OUT must be clear here: SIO is an input while the RTC chip drives
+     * the data.  The write path (rtcom_put_bit) keeps SIO_OUT set. */
+    u16 line = (RTCOM_REG_RTC & ~(RTCOM_PIN_SIO | RTCOM_PIN_SCK |
+                                  RTCOM_PIN_SIO_OUT)) |
                RTCOM_PIN_CS_OUT | RTCOM_PIN_CS |
-               RTCOM_PIN_SCK_OUT | RTCOM_PIN_SIO_OUT;
+               RTCOM_PIN_SCK_OUT;
     u8 bit;
 
     RTCOM_REG_RTC = line;

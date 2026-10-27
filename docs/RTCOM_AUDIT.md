@@ -259,6 +259,17 @@ draft sent data LSB-first; that has been corrected in `arm7/source/rtcom_driver.
 `rtcom_write_byte()` and `rtcom_read_byte()` are the only places that touch
 these lines.
 
+**Direction control during reads.** `rtcom_put_bit()` keeps `SIO_OUT` set
+because the ARM7 drives SIO while shifting out a command or data byte.
+`rtcom_get_bit()` clears `SIO_OUT` before asserting SCK to sample each bit,
+so SIO is an input while the RTC chip drives the data. Leaving `SIO_OUT` set
+during a read would create conflicting drivers on the bidirectional line and
+corrupt the sampled bit.
+
+**Label:** `REFERENCE VERIFIED` (SIO_OUT must be clear for input mode per the
+Calico GPIO header) / `UNIT VERIFIED` (`ReadPathDirectionTest` in
+`tools/test_rtcom_protocol.py` checks every data-phase write).
+
 ### RTC register 112 (`0x70`) — parameter byte
 
 **REFERENCE VERIFIED** against reference `rtcom_requestAsync(u8 request, u8 param)`.
@@ -494,6 +505,7 @@ so the provenance is visible at the point of use.
 | IRQ_NETWORK = IRQ_RTC = bit 7 | `REFERENCE VERIFIED` | `nds/interrupts.h`, `calico/nds/irq.h` |
 | RTC pin mapping (SIO=0, SCK=1, CS=2; dir bits 4/5/6) | `REFERENCE VERIFIED` | Calico `calico/nds/arm7/gpio.h`; reference `rtcom.cpp` |
 | Command and data bytes are MSB-first | `REFERENCE VERIFIED` | Reference `rtcom.cpp` `rtcTransferReversed()` comments/loop |
+| SIO_OUT is clear during read data sampling (SIO input mode) | `REFERENCE VERIFIED` / `UNIT VERIFIED` | Calico GPIO direction-bit semantics; `tools/test_rtcom_protocol.py` `ReadPathDirectionTest` |
 | Register 112 = parameter, register 113 = request/trigger | `REFERENCE VERIFIED` | Reference `rtcom_requestAsync(u8 request, u8 param)` |
 | TwlBg reserves 60 KiB at `0x00201000` for ucode | `REFERENCE VERIFIED` | Process/address-space analysis |
 | ARM11 ucode entry preserves r1-r12,lr and returns | `REFERENCE VERIFIED` | Reference `ucode_entry.s` in both reference repos |
@@ -518,7 +530,7 @@ Labels follow the definitions at the top of this document.
 | 4 | `make -C arm11_ucode` (clean) | `BUILD VERIFIED` — exit 0; `twlhd_ucode.elf` and `.uc11` produced |
 | 5 | `make rtcom_rom` | `BUILD VERIFIED` — exit 0; `twlhd-rtcom.nds` produced |
 | 6 | `ndstool -i twlhd-rtcom.nds` ARM7 size | `BUILD VERIFIED` — 0x155C (5468 bytes); default `.nds` ARM7 is 0xB374 (45940 bytes) |
-| 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 11 tests pass |
+| 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 12 tests pass |
 | 8 | `arm11_ucode/source/ucode_entry.s` compiles | `BUILD VERIFIED` — assembled and linked into `.elf`/`uc11` |
 
 Nothing in this document is claimed as working on real hardware. The ARM7
