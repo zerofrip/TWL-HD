@@ -21,18 +21,19 @@ typedef unsigned char  u8;
 typedef unsigned int   u32;
 typedef int            s32;
 
-#define RTCOM_OP_ECHO 0x43u
-
 int handleCommand(u8 param, u32 stage) {
-    /* Ucode injection is gated off by default in arm7/source/main.c.  When the
-     * gate is on, the RTCom service dispatches requests to this handler with
-     * r0 = parameter byte (register 112) and r1 = request opcode (register 113);
-     * the return value in r0 becomes the status byte read back by the ARM7.
-     * Unknown opcodes and the default case return 0 so the stub always returns
-     * cleanly to TwlBg instead of looping or branching into undefined memory. */
-    if (stage == RTCOM_OP_ECHO) {
-        return (u8)~param;
-    }
-
+    /* The RTCom service dispatches requests to this handler with
+     *   r0 = parameter byte (register 112)
+     *   r1 = call-sequence stage within one logical exchange.
+     * The return value in r0 becomes the data/status written back by the
+     * service.  Stage 0 is the first call after EXECUTE_UCODE dispatches to
+     * the blob; stage 1 is the second call (typically a NEXT follow-up used
+     * to return data via register 112).
+     *
+     * Ucode injection and the round-trip echo test are currently gated off in
+     * arm7/source/main.c, so this stub returns a safe default for every input
+     * rather than implementing a stage-dependent payload. */
+    (void)param;
+    (void)stage;
     return 0;
 }

@@ -55,6 +55,17 @@
 #define RTCOM_INIT_RETRIES   10u
 #define RTCOM_UPLOAD_RETRIES 10u
 
+#define RTCOM_MAX_UCODE_SIZE (60u * 1024u)
+
+/* Saved bus state for an exclusive RTCom exchange.  The reference beginComm
+ * assumes no other code touches REG_RCNT, REG_RTC, or the IRQ_NETWORK bit
+ * while a multi-step exchange is in flight, so the driver enters a critical
+ * section and restores REG_RCNT when the exchange ends. */
+typedef struct {
+    u16 rcnt;
+    int ime;
+} RtcomBusState;
+
 static void rtcom_delay(u32 iters) {
     volatile u32 i;
 
@@ -152,7 +163,42 @@ static void rtcom_read_byte(u8 cmd, u8 *val) {
     }
 }
 
-RtcomStatus rtcom_poll_ack(u32 timeout_iters, u8 *out_status) {
+static void rtcom_configure_rcnt(void) {
+    /* Write the exact reference value (0x8100) rather than preserving stale
+     * GPIO direction bits across repeated probe/upload sessions. */
+    RTCOM_REG_RCNT = RCNT_MODE_GPIO | RCNT_SI_IRQ_ENABLE;
+}
+
+static void rtcom_bus_lock(RtcomBusState *state) {
+    /* Disable interrupts for the duration of the exchange so no other code
+     * can bit-bang the RTC bus or observe a partial RTCom state. */
+    state->ime = enterCriticalSection();
+
+    /* Save REG_RCNT so it can be restored exactly after the exchange. */
+    state->rcnt = RTCOM_REG_RCNT;
+
+    /* Acknowledge any stale IRQ_NETWORK flag before the first request, so a
+     * left-over interrupt cannot be mistaken for a fresh acknowledge. */
+    REG_IF = RTCOM_IRQ_NETWORK;
+
+    rtcom_configure_rcnt();
+
+    /* Enabling the SI/RTC IRQ path can itself raise IRQ_NETWORK as a side
+     * effect of turning the mode on.  Clear it again so that self-raised flag
+     * is not mistaken for the probe's real acknowledge. */
+    REG_IF = RTCOM_IRQ_NETWORK;
+}
+
+static void rtcom_bus_unlock(const RtcomBusState *state) {
+    /* Drop any pending IRQ_NETWORK flag before restoring RCNT, so it cannot
+     * fire once interrupts are re-enabled. */
+    REG_IF = RTCOM_IRQ_NETWORK;
+
+    RTCOM_REG_RCNT = state->rcnt;
+    leaveCriticalSection(state->ime);
+}
+
+static RtcomStatus rtcom_poll_ack(u32 timeout_iters, u8 *out_status) {
     u32 i;
 
     for (i = 0; i < timeout_iters; i++) {
@@ -170,10 +216,15 @@ RtcomStatus rtcom_poll_ack(u32 timeout_iters, u8 *out_status) {
         }
     }
 
+    /* A leftover IRQ_NETWORK flag from the exchange that timed out must not
+     * be visible to the next poll. */
+    REG_IF = RTCOM_IRQ_NETWORK;
+
     return RTCOM_ERR_TIMEOUT;
 }
 
-RtcomStatus rtcom_send_request_status(u8 request, u8 param, u8 *out_status) {
+static RtcomStatus rtcom_send_request_status(u8 request, u8 param,
+                                             u8 *out_status) {
     /* Register 112 receives the parameter byte; register 113 receives the
      * request/trigger byte and is written last so the service latches both. */
     rtcom_write_byte(RTCOM_RTC_WRITE_112, param);
@@ -182,11 +233,75 @@ RtcomStatus rtcom_send_request_status(u8 request, u8 param, u8 *out_status) {
     return rtcom_poll_ack(RTCOM_ACK_TIMEOUT, out_status);
 }
 
-RtcomStatus rtcom_send_request(u8 request, u8 param) {
+static RtcomStatus rtcom_send_request(u8 request, u8 param) {
     u8 status = 0;
     RtcomStatus st;
 
     st = rtcom_send_request_status(request, param, &status);
+    if (st != RTCOM_OK) {
+        return st;
+    }
+
+    if (status != RTCOM_STATUS_ACK) {
+        return RTCOM_ERR_NOT_READY;
+    }
+
+    return RTCOM_OK;
+}
+
+/* Single-argument request variants write only register 113, matching the
+ * reference's requestAsync(request) / request(request) overloads.  No
+ * register-112 write is performed at all. */
+static RtcomStatus rtcom_send_request_113_status(u8 request, u8 *out_status) {
+    rtcom_write_byte(RTCOM_RTC_WRITE_113, request);
+
+    return rtcom_poll_ack(RTCOM_ACK_TIMEOUT, out_status);
+}
+
+static RtcomStatus rtcom_send_request_113(u8 request) {
+    u8 status = 0;
+    RtcomStatus st;
+
+    st = rtcom_send_request_113_status(request, &status);
+    if (st != RTCOM_OK) {
+        return st;
+    }
+
+    if (status != RTCOM_STATUS_ACK) {
+        return RTCOM_ERR_NOT_READY;
+    }
+
+    return RTCOM_OK;
+}
+
+static RtcomStatus rtcom_send_request_113_done(u8 request) {
+    u8 status = 0;
+    RtcomStatus st;
+
+    st = rtcom_send_request_113_status(request, &status);
+    if (st != RTCOM_OK) {
+        return st;
+    }
+
+    if (status != RTCOM_STATUS_DONE) {
+        return RTCOM_ERR_NOT_READY;
+    }
+
+    return RTCOM_OK;
+}
+
+static void rtcom_send_async_113(u8 request) {
+    /* Fire a single-argument request without waiting for its acknowledge.
+     * Used only for KEEPALIVE, where the reply is expected as the following
+     * DONE status. */
+    rtcom_write_byte(RTCOM_RTC_WRITE_113, request);
+}
+
+static RtcomStatus rtcom_wait_done(u32 timeout_iters) {
+    u8 status = 0;
+    RtcomStatus st;
+
+    st = rtcom_poll_ack(timeout_iters, &status);
     if (st != RTCOM_OK) {
         return st;
     }
@@ -199,52 +314,109 @@ RtcomStatus rtcom_send_request(u8 request, u8 param) {
 }
 
 RtcomStatus rtcom_init(void) {
+    RtcomBusState state;
     u32 attempt;
 
-    /* Enable the RTC/network IRQ path and select GPIO mode on RCNT, per
-     * Calico (RCNT_SI_IRQ_ENABLE = bit 8, RCNT_MODE_GPIO = bit 15). */
-    RTCOM_REG_RCNT = (RTCOM_REG_RCNT & ~RCNT_MODE_MASK) |
-                     RCNT_MODE_GPIO | RCNT_SI_IRQ_ENABLE;
+    rtcom_bus_lock(&state);
 
     for (attempt = 0; attempt < RTCOM_INIT_RETRIES; attempt++) {
-        if (rtcom_send_request(RTCOM_OP_COMM, 0) == RTCOM_OK) {
+        if (rtcom_send_request_113_done(RTCOM_REQ_PROBE) == RTCOM_OK) {
+            rtcom_bus_unlock(&state);
             return RTCOM_OK;
         }
     }
 
+    rtcom_bus_unlock(&state);
     return RTCOM_ERR_NOT_READY;
 }
 
-RtcomStatus rtcom_upload_ucode(const u8 *blob, u32 len) {
+static RtcomStatus rtcom_attempt_upload(const u8 *blob, u32 len,
+                                        const u8 *len_bytes) {
+    RtcomBusState state;
     u32 i;
+    RtcomStatus st;
 
-    if (!blob && len != 0) {
-        return RTCOM_ERR_UPLOAD_FAILED;
+    rtcom_bus_lock(&state);
+
+    st = rtcom_send_request(RTCOM_OP_UPLOAD_UCODE, len_bytes[0]);
+    if (st != RTCOM_OK) {
+        goto fail;
+    }
+
+    for (i = 1; i < 4; i++) {
+        st = rtcom_send_request(RTCOM_OP_NEXT, len_bytes[i]);
+        if (st != RTCOM_OK) {
+            goto fail;
+        }
     }
 
     for (i = 0; i < len; i++) {
-        RtcomStatus st = RTCOM_ERR_UPLOAD_FAILED;
-        u32 attempt;
-
-        for (attempt = 0; attempt < RTCOM_UPLOAD_RETRIES; attempt++) {
-            st = rtcom_send_request(RTCOM_OP_SEND_BYTE, blob[i]);
-            if (st == RTCOM_OK) {
-                break;
-            }
-        }
-
+        st = rtcom_send_request(RTCOM_OP_NEXT, blob[i]);
         if (st != RTCOM_OK) {
-            return RTCOM_ERR_UPLOAD_FAILED;
+            goto fail;
         }
     }
 
-    if (rtcom_send_request(RTCOM_OP_FINISH_UPLOAD, 0) != RTCOM_OK) {
+    /* After the last payload byte the reference sends KEEPALIVE without
+     * waiting for ACK, then polls for DONE. */
+    rtcom_send_async_113(RTCOM_OP_KEEPALIVE);
+
+    st = rtcom_wait_done(RTCOM_ACK_TIMEOUT);
+    if (st != RTCOM_OK) {
+        goto fail;
+    }
+
+    st = rtcom_send_request_113(RTCOM_OP_FINISH_UCODE);
+    if (st != RTCOM_OK) {
+        goto fail;
+    }
+
+    rtcom_bus_unlock(&state);
+    return RTCOM_OK;
+
+fail:
+    rtcom_bus_unlock(&state);
+    return st;
+}
+
+RtcomStatus rtcom_upload_ucode(const u8 *blob, u32 len) {
+    u8 len_bytes[4];
+    u32 attempt;
+
+    if (len == 0 || len > RTCOM_MAX_UCODE_SIZE) {
+        return RTCOM_ERR_BAD_ARG;
+    }
+
+    if (!blob) {
         return RTCOM_ERR_UPLOAD_FAILED;
     }
 
-    return RTCOM_OK;
+    len_bytes[0] = (u8)(len & 0xFFu);
+    len_bytes[1] = (u8)((len >> 8) & 0xFFu);
+    len_bytes[2] = (u8)((len >> 16) & 0xFFu);
+    len_bytes[3] = (u8)((len >> 24) & 0xFFu);
+
+    /* Retry the WHOLE upload attempt, not individual steps.  Resending a
+     * single step after the service has already shifted its receive cursor
+     * would corrupt the blob position, so a failed attempt must restart from
+     * UPLOAD_UCODE. */
+    for (attempt = 0; attempt < RTCOM_UPLOAD_RETRIES; attempt++) {
+        if (rtcom_attempt_upload(blob, len, len_bytes) == RTCOM_OK) {
+            return RTCOM_OK;
+        }
+    }
+
+    return RTCOM_ERR_UPLOAD_FAILED;
 }
 
-RtcomStatus rtcom_execute_ucode(void) {
-    return rtcom_send_request(RTCOM_OP_EXEC, 0);
+RtcomStatus rtcom_execute_ucode(u8 param) {
+    RtcomBusState state;
+    RtcomStatus st;
+
+    rtcom_bus_lock(&state);
+
+    st = rtcom_send_request(RTCOM_OP_EXECUTE_UCODE, param);
+
+    rtcom_bus_unlock(&state);
+    return st;
 }

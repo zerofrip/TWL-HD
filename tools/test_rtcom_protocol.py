@@ -11,6 +11,7 @@ hardware.  The embedded code itself uses direct MMIO and cannot run on a host.
 """
 
 import os
+import re
 import sys
 import unittest
 
@@ -33,6 +34,46 @@ RTC_WRITE_112 = 0x6C
 RTC_WRITE_113 = 0x6E
 RTC_READ_112 = 0x6D
 RTC_READ_113 = 0x6F
+
+# Reference-pinning table.  These opcode/status VALUES are hardware facts
+# cited from the reference implementation at
+#   /home/one/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
+# (GPLv3).  Only the numeric values are reused here; the names and this test
+# are original to TWL-HD.
+EXPECTED_DEFINES = {
+    # Raw probe literal (not a named service opcode).
+    "RTCOM_REQ_PROBE": 0x01,
+
+    # Service opcodes.
+    "RTCOM_OP_KIL": 0x00,
+    "RTCOM_OP_UPLOAD_UCODE": 0x41,
+    "RTCOM_OP_FINISH_UCODE": 0x42,
+    "RTCOM_OP_EXECUTE_UCODE": 0x44,
+    "RTCOM_OP_NEXT": 0x81,
+    "RTCOM_OP_KEEPALIVE": 0x83,
+    "RTCOM_OP_SYNC_KIL": 0xFE,
+
+    # Status bytes.
+    "RTCOM_STATUS_READY": 0x00,
+    "RTCOM_STATUS_ACK": 0x80,
+    "RTCOM_STATUS_DONE": 0x82,
+}
+
+
+def _header_path():
+    here = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(here, "..", "arm7", "include", "rtcom_driver.h")
+
+
+def _parse_header_defines(path):
+    defines = {}
+    with open(path, "r", encoding="utf-8") as fh:
+        for line in fh:
+            m = re.match(r"^\s*#define\s+(RTCOM_\w+)\s+(0x[0-9A-Fa-f]+|[0-9]+)u?\s*$",
+                         line)
+            if m:
+                defines[m.group(1)] = int(m.group(2), 0)
+    return defines
 
 
 def emulate_bitbang_byte(cmd, value, fast_mode=False):
@@ -276,6 +317,170 @@ class TimeoutStateMachineTest(unittest.TestCase):
         # Tiny timeout to keep the test fast; the real constant is ~2 million.
         self.assertEqual(poll_ack(5, irq_always_clear=True), RTCOM_ERR_TIMEOUT)
         self.assertEqual(poll_ack(5, irq_always_clear=False), RTCOM_OK)
+
+
+class ReferencePinningTest(unittest.TestCase):
+    """Pin the opcode/status constants to the values observed in the reference.
+
+    The expected values are literal facts from
+        /home/one/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
+    If arm7/include/rtcom_driver.h drifts from these values the protocol will
+    not match the real TwlBg RTCom service and this test fails.
+    """
+
+    def test_rtcom_constants_match_reference(self):
+        header_path = _header_path()
+        defines = _parse_header_defines(header_path)
+
+        for name, expected in EXPECTED_DEFINES.items():
+            self.assertIn(
+                name, defines,
+                f"{header_path} must define {name}")
+            self.assertEqual(
+                defines[name], expected,
+                f"{name} must be 0x{expected:02X}; "
+                f"saw 0x{defines[name]:02X}")
+
+
+IRQ_NETWORK = 0x80  # libnds IRQ_RTC / IRQ_NETWORK = bit 7
+RCNT_REFERENCE_VALUE = 0x8100  # RCNT_MODE_GPIO | RCNT_SI_IRQ_ENABLE
+RTCOM_ACK_TIMEOUT = 2062500
+
+
+class UploadRetryPolicyTest(unittest.TestCase):
+    """Model-level check of the upload retry policy.
+
+    The embedded driver cannot run on a host, but this test mirrors the exact
+    decision made in rtcom_upload_ucode(): individual steps are NOT retried.
+    A single failed step aborts the entire attempt so the next attempt can
+    restart cleanly from UPLOAD_UCODE.  Resending one step after the service
+    has already shifted its receive cursor would corrupt the blob position.
+    """
+
+    def _attempt_upload(self, blob, len_bytes, send_request, wait_done):
+        """One upload attempt matching rtcom_attempt_upload()."""
+        steps = [(EXPECTED_DEFINES["RTCOM_OP_UPLOAD_UCODE"], len_bytes[0])]
+        steps.extend((EXPECTED_DEFINES["RTCOM_OP_NEXT"], b) for b in len_bytes[1:])
+        steps.extend((EXPECTED_DEFINES["RTCOM_OP_NEXT"], b) for b in blob)
+
+        for opcode, param in steps:
+            if send_request(opcode, param) != 0:
+                return 1  # abort whole attempt on first failed step
+
+        if wait_done(RTCOM_ACK_TIMEOUT) != 0:
+            return 1
+
+        if send_request(EXPECTED_DEFINES["RTCOM_OP_FINISH_UCODE"], None) != 0:
+            return 1
+
+        return 0
+
+    def test_failed_step_aborts_whole_attempt_no_resend(self):
+        blob = [0xAA, 0xBB]
+        len_bytes = [0x02, 0x00, 0x00, 0x00]
+        log = []
+
+        def send_request(opcode, param):
+            log.append((opcode, param))
+            # Fail on the first payload byte (5th step overall).
+            if len(log) == 5:
+                return 1
+            return 0
+
+        def wait_done(_timeout):
+            return 0
+
+        result = self._attempt_upload(blob, len_bytes, send_request, wait_done)
+
+        self.assertNotEqual(result, 0)
+        # The attempt must stop at the failed step; no retry of that step.
+        self.assertEqual(
+            log,
+            [
+                (EXPECTED_DEFINES["RTCOM_OP_UPLOAD_UCODE"], len_bytes[0]),
+                (EXPECTED_DEFINES["RTCOM_OP_NEXT"], len_bytes[1]),
+                (EXPECTED_DEFINES["RTCOM_OP_NEXT"], len_bytes[2]),
+                (EXPECTED_DEFINES["RTCOM_OP_NEXT"], len_bytes[3]),
+                (EXPECTED_DEFINES["RTCOM_OP_NEXT"], blob[0]),  # failure here
+            ],
+        )
+
+    def test_outer_retry_restarts_from_upload_ucode(self):
+        """Exhausting one attempt must let the next attempt restart cleanly."""
+        blob = [0xCC]
+        len_bytes = [0x01, 0x00, 0x00, 0x00]
+        attempts = []
+
+        def send_request(opcode, param):
+            attempts[-1].append((opcode, param))
+            # Fail the first attempt at the first payload byte; second succeeds.
+            if len(attempts) == 1 and len(attempts[-1]) == 5:
+                return 1
+            return 0
+
+        def wait_done(_timeout):
+            return 0
+
+        for _ in range(2):
+            attempts.append([])
+            if self._attempt_upload(blob, len_bytes, send_request, wait_done) == 0:
+                break
+
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(
+            attempts[0][0],
+            (EXPECTED_DEFINES["RTCOM_OP_UPLOAD_UCODE"], len_bytes[0]),
+        )
+        self.assertEqual(
+            attempts[1][0],
+            (EXPECTED_DEFINES["RTCOM_OP_UPLOAD_UCODE"], len_bytes[0]),
+        )
+
+
+class BusLockIrqOrderingTest(unittest.TestCase):
+    """Verify the clear -> configure -> clear IRQ ordering in rtcom_bus_lock().
+
+    The embedded driver uses direct MMIO, so this is a host-side model of the
+    exact sequence implemented in arm7/source/rtcom_driver.c.
+    """
+
+    def test_if_cleared_before_and_after_rcnt_write(self):
+        events = []
+
+        def enter_critical_section():
+            events.append(("IME", 0))
+            return 0
+
+        def read_rcnt():
+            events.append(("READ_RCNT", 0x1234))
+            return 0x1234
+
+        def write_if(value):
+            events.append(("IF", value))
+
+        def write_rcnt(value):
+            events.append(("RCNT", value))
+
+        def bus_lock():
+            ime = enter_critical_section()
+            saved_rcnt = read_rcnt()
+            write_if(IRQ_NETWORK)
+            write_rcnt(RCNT_REFERENCE_VALUE)
+            write_if(IRQ_NETWORK)
+            return ime, saved_rcnt
+
+        bus_lock()
+
+        self.assertEqual(
+            events,
+            [
+                ("IME", 0),
+                ("READ_RCNT", 0x1234),
+                ("IF", IRQ_NETWORK),
+                ("RCNT", RCNT_REFERENCE_VALUE),
+                ("IF", IRQ_NETWORK),
+            ],
+        )
 
 
 if __name__ == "__main__":

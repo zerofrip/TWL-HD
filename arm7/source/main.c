@@ -8,10 +8,16 @@
 
 /* ARM11 ucode injection is disabled by default until the entry/return contract
  * has been independently reviewed and found safe.  When this flag is 0 the
- * driver skips rtcom_upload_ucode() / rtcom_execute_ucode() and the ECHO
- * round-trip test, reporting RTCOM_TEST_UCODE_DISABLED /
+ * driver skips rtcom_upload_ucode() / rtcom_execute_ucode() and the round-trip
+ * echo test, reporting RTCOM_TEST_UCODE_DISABLED /
  * RTCOM_TEST_ROUNDTRIP_SKIPPED to the ARM9.  See docs/RTCOM_AUDIT.md and
- * docs/RTCOM_HARDWARE_TEST.md. */
+ * docs/RTCOM_HARDWARE_TEST.md.
+ *
+ * INVARIANT: with TWLHD_RTCOM_UCODE_ENABLED at 0, the only RTCom traffic
+ * emitted by a full main() run is the rtcom_init() probe (RTCOM_REQ_PROBE,
+ * 0x01); the ARM9 status report uses PXI and sends nothing to RTCom.  No
+ * UPLOAD_UCODE, FINISH_UCODE, EXECUTE_UCODE, NEXT, or KEEPALIVE request is
+ * ever sent. */
 #define TWLHD_RTCOM_UCODE_ENABLED 0
 
 /* The real blob is linked in by the ucode build step. These weak, zero-length
@@ -24,53 +30,21 @@ __attribute__((weak)) const u32 _arm11_ucode_size = 0;
 #define RTCOM_TEST_DATA_MISMATCH    4u
 #define RTCOM_TEST_UCODE_DISABLED   5u
 #define RTCOM_TEST_ROUNDTRIP_SKIPPED 6u
-#define RTCOM_TEST_RETRIES          10u
 
 static void rtcom_report(u32 code) {
     pxiSend(PxiChannel_User1, code);
 }
 
-/* Send the 8-byte test message and check that every echo is bitwise inverted.
+/* Round-trip echo test.
  *
- * This exchange is upload/echo-related traffic and is therefore gated behind
- * the same TWLHD_RTCOM_UCODE_ENABLED flag as the upload/execute calls.  When
- * the gate is off the ARM7 reports RTCOM_TEST_ROUNDTRIP_SKIPPED and sends no
- * ECHO traffic.  When the gate is on it uses RTCOM_OP_ECHO with the single-ack
- * contract documented in rtcom_driver.h: the status byte read back for the
- * ECHO request is the bitwise complement of the parameter byte. */
+ * The real protocol does not have a dedicated ECHO opcode.  Per the reference
+ * handleCommand1 contract the round-trip value is retrieved with an
+ * EXECUTE_UCODE(param) exchange followed by a NEXT exchange and a read of
+ * register 112.  That design is not wired up here, so the test is deliberately
+ * skipped in both the gate-off and gate-on configurations pending further
+ * protocol work. */
 static RtcomStatus rtcom_test_roundtrip(void) {
-    RtcomTestMsg msg = { RTCOM_TEST_MAGIC, { 0xAA, 0xBB, 0xCC, 0xDD } };
-    const u8 *raw = (const u8 *)&msg;
-    u32 i;
-
-#if !TWLHD_RTCOM_UCODE_ENABLED
-    (void)raw;
-    (void)i;
     return (RtcomStatus)RTCOM_TEST_ROUNDTRIP_SKIPPED;
-#else
-    for (i = 0; i < sizeof(msg); i++) {
-        RtcomStatus st = RTCOM_ERR_UPLOAD_FAILED;
-        u32 attempt;
-
-        for (attempt = 0; attempt < RTCOM_TEST_RETRIES; attempt++) {
-            u8 echo = 0;
-
-            st = rtcom_send_request_status(RTCOM_OP_ECHO, raw[i], &echo);
-            if (st == RTCOM_OK && echo == (u8)~raw[i]) {
-                break;
-            }
-        }
-
-        if (attempt == RTCOM_TEST_RETRIES) {
-            if (st != RTCOM_OK) {
-                return st;
-            }
-            return (RtcomStatus)RTCOM_TEST_DATA_MISMATCH;
-        }
-    }
-
-    return RTCOM_OK;
-#endif
 }
 
 int main(void) {
@@ -80,13 +54,20 @@ int main(void) {
     rtcom_report((u32)st);
 
 #if TWLHD_RTCOM_UCODE_ENABLED
+    /* HARDWARE UNVERIFIED: the reference keeps the probe and the upload in one
+     * continuous bus-lock / IRQ session.  This codebase ends the session inside
+     * rtcom_init() and starts a new one in rtcom_upload_ucode(), briefly
+     * re-enabling interrupts between the two.  That creates a small window in
+     * which an in-progress exchange could in principle be disturbed.  The
+     * default gate-off run is unaffected because the upload is never called.
+     * See docs/RTCOM_AUDIT.md §Command Exchange Model. */
     if (st == RTCOM_OK) {
         st = rtcom_upload_ucode(_arm11_ucode_start, _arm11_ucode_size);
         rtcom_report((u32)st);
     }
 
     if (st == RTCOM_OK) {
-        st = rtcom_execute_ucode();
+        st = rtcom_execute_ucode(0);
         rtcom_report((u32)st);
     }
 #else

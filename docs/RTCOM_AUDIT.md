@@ -84,47 +84,78 @@ reimplementation must satisfy.
 
 ### Step 1 — Service discovery
 
-1. The driver writes the parameter byte (zero for the initial probe) to RTC
-   register 112. Register 112 lives at RTC address `0x70`; on the 3-wire bus, a
-   write is selected with command byte `0x6C` and a read with `0x6D`.
-2. It writes the request/opcode byte (`RTCOM_OP_COMM`, `0x41`) to register 113.
-   Register 113 corresponds to RTC address `0x71`, with write command `0x6E`
-   and read command `0x6F`. Register 113 is written last and acts as the
-   trigger; the service latches both bytes before acting.
-3. It polls `REG_IF` for the `IRQ_NETWORK` bit. Each poll is bounded by
+1. Before any bus traffic the driver enters a critical section and saves
+   `REG_RCNT`.
+2. It clears any stale `IRQ_NETWORK` bit in `REG_IF`, then writes the exact
+   reference value `0x8100` to `REG_RCNT` (`RCNT_MODE_GPIO | RCNT_SI_IRQ_ENABLE`),
+   then clears `IRQ_NETWORK` in `REG_IF` a second time.  The second clear is
+   required because enabling the SI/RTC IRQ path can itself raise
+   `IRQ_NETWORK` as a side effect of turning the mode on.
+3. The probe is a single-argument request: it writes ONLY the raw probe
+   literal (`RTCOM_REQ_PROBE`, `0x01`) to register 113.  No register-112 write
+   is performed for the probe, matching the reference's one-argument
+   `request(request)` overload. Register 113 corresponds to RTC address `0x71`,
+   with write command `0x6E` and read command `0x6F`.
+4. Register 113 is written last and acts as the trigger; for single-argument
+   requests the service latches only that byte. The probe value is the
+   reference's `beginComm` probe byte; it is intentionally **not** one of the
+   named service opcodes.
+5. It polls `REG_IF` for the `IRQ_NETWORK` bit. Each poll is bounded by
    `RTCOM_ACK_TIMEOUT = 2,062,500` iterations, so the driver cannot spin
    forever on a missing service.
-4. On an interrupt hit it acknowledges the interrupt and reads the status byte
+6. On an interrupt hit it acknowledges the interrupt and reads the status byte
    from register 113 using command byte `0x6F`.
-5. A status of `RTCOM_STATUS_DONE` (`0x80`) means the service accepted the
-   command. A bus value is not itself proof of success; the status byte is.
+7. A status of `RTCOM_STATUS_DONE` (`0x82`) means the service accepted the
+   probe. A bus value is not itself proof of success; the status byte is.
+8. On exit any pending `IRQ_NETWORK` bit is cleared, `REG_RCNT` is restored to
+   the value saved at the start of the exchange, and the critical section is
+   left.
 
 ### Step 2 — Retry policy
 
 `rtcom_init()` allows `RTCOM_INIT_RETRIES = 10` complete attempts. The first
-successful `RTCOM_OP_COMM` exchange returns `RTCOM_OK`. If all ten attempts
-time out or return a non-`DONE` status, the function returns
-`RTCOM_ERR_NOT_READY`. This is a terminal result: the ARM7 side reports it to
-the ARM9 and does not continue to the upload stage.
+successful probe exchange returns `RTCOM_OK`. If all ten attempts time out or
+return a non-`DONE` status, the function returns `RTCOM_ERR_NOT_READY`. This is
+a terminal result: the ARM7 side reports it to the ARM9 and does not continue
+to the upload stage.
 
 ### Step 3 — Payload upload
 
-Once the service is discovered, the ARM11 payload is uploaded byte by byte:
+Once the service is discovered, the ARM11 payload is uploaded with the real
+multi-step length-then-data protocol:
 
-1. For each byte, send `RTCOM_OP_SEND_BYTE` (`0x42`) with the byte as the
-   parameter.
-2. Each byte gets its own acknowledge poll. There is no streaming mode and no
-   block transfer.
-3. Each byte gets `RTCOM_UPLOAD_RETRIES = 10` attempts. Exhausting those
-   attempts aborts the upload with `RTCOM_ERR_UPLOAD_FAILED`.
-4. After the final byte, send `RTCOM_OP_FINISH_UPLOAD` (`0x44`). A failed
-   finish exchange also returns `RTCOM_ERR_UPLOAD_FAILED`.
+1. Reject `len == 0` or `len > 60 KiB` up front with `RTCOM_ERR_BAD_ARG`.
+2. Enter the same critical-section / `REG_RCNT` save / double `REG_IF` clear
+   wrapper used by `rtcom_init()`.
+3. Send `RTCOM_OP_UPLOAD_UCODE` (`0x41`) with length byte 0 (`len & 0xFF`) as
+   the parameter; wait for status `ACK` (`0x80`).
+4. Send `RTCOM_OP_NEXT` (`0x81`) with length byte 1; wait for `ACK`.
+5. Send `RTCOM_OP_NEXT` (`0x81`) with length byte 2; wait for `ACK`.
+6. Send `RTCOM_OP_NEXT` (`0x81`) with length byte 3; wait for `ACK`.
+7. For each payload byte, send `RTCOM_OP_NEXT` (`0x81`) with that byte as the
+   parameter; wait for `ACK`. There is **no per-step retry**: a single failed
+   step aborts this entire upload attempt.
+8. After the last payload byte, send `RTCOM_OP_KEEPALIVE` (`0x83`) as a
+   single-argument request (no register-112 write) without waiting for its
+   acknowledge, then wait for status `DONE` (`0x82`) with a bounded timeout.
+   This is the only upload step that expects `DONE`.
+9. Send `RTCOM_OP_FINISH_UCODE` (`0x42`) as a single-argument request; wait for
+   `ACK`. A failed finish exchange also aborts the attempt.
+10. If any step in the attempt fails, the entire attempt is aborted, the bus
+    state is restored, and the driver retries from step 2 up to
+    `RTCOM_UPLOAD_RETRIES` times.  Only whole-attempt retries are permitted;
+    resending a single step after the service has already advanced its receive
+    cursor would shift every subsequent byte and corrupt the blob.
+11. Clear any pending `IRQ_NETWORK` bit, restore `REG_RCNT`, and leave the
+    critical section.
 
 ### Step 4 — Execution
 
-`rtcom_execute_ucode()` sends `RTCOM_OP_EXEC` (`0x81`) with a zero parameter and
-waits for `RTCOM_STATUS_DONE`. From that point the ARM11 blob owns its own
-execution loop; the ARM7 driver only exchanges further commands when asked.
+`rtcom_execute_ucode(param)` sends `RTCOM_OP_EXECUTE_UCODE` (`0x44`) with the
+supplied parameter and waits for `RTCOM_STATUS_ACK` (`0x80`). The parameter is
+passed through to the uploaded blob. From that point the ARM11 blob owns its
+own execution context; the ARM7 driver only exchanges further commands when the
+blob's command handler is re-entered by the service.
 
 ### Step 5 — Timer gates
 
@@ -157,38 +188,87 @@ handler. The contract is documented in the
 
 | Constant | Value | Direction | Purpose |
 |----------|-------|-----------|---------|
-| `RTCOM_OP_COMM` | `0x41` | ARM7 → ARM11 | Probe/initialise the service |
-| `RTCOM_OP_SEND_BYTE` | `0x42` | ARM7 → ARM11 | Upload one payload byte |
-| `RTCOM_OP_ECHO` | `0x43` | ARM7 → ARM11 | Round-trip echo test (single-ack reply) |
-| `RTCOM_OP_FINISH_UPLOAD` | `0x44` | ARM7 → ARM11 | Close the upload stream |
-| `RTCOM_OP_EXEC` | `0x81` | ARM7 → ARM11 | Start the uploaded blob |
-| `RTCOM_OP_STATUS` | `0x83` | ARM7 → ARM11 | Read service state |
-| `RTCOM_OP_DONE` | `0xFE` | ARM11 → ARM7 | Terminal marker in the reply stream |
+| `RTCOM_REQ_PROBE` | `0x01` | ARM7 → ARM11 / service | Raw probe literal used only by `rtcom_init()`; **not** a named service opcode |
+| `RTCOM_OP_KIL` | `0x00` | ARM7 → service | Kill/reset the RTCom service |
+| `RTCOM_OP_UPLOAD_UCODE` | `0x41` | ARM7 → service | Begin ucode upload (param = first length byte) |
+| `RTCOM_OP_FINISH_UCODE` | `0x42` | ARM7 → service | Make the uploaded blob executable |
+| `RTCOM_OP_EXECUTE_UCODE` | `0x44` | ARM7 → service | Execute the uploaded blob (param passed through) |
+| `RTCOM_OP_NEXT` | `0x81` | ARM7 → service | Continue a multi-step exchange |
+| `RTCOM_OP_KEEPALIVE` | `0x83` | ARM7 → service | Sent once after the last upload `NEXT`, before waiting for `DONE` |
+| `RTCOM_OP_SYNC_KIL` | `0xFE` | ARM7 → service | Synchronous kill; waits for `READY` |
 
 ### Status bytes
 
 | Constant | Value | Meaning |
 |----------|-------|---------|
-| `RTCOM_STATUS_IDLE` | `0x00` | Service present, no command pending |
-| `RTCOM_STATUS_DONE` | `0x80` | Previous command completed successfully |
-| `RTCOM_STATUS_BUSY` | `0x82` | Previous command still in progress |
+| `RTCOM_STATUS_READY` | `0x00` | Service present / ready |
+| `RTCOM_STATUS_ACK` | `0x80` | Previous command acknowledged |
+| `RTCOM_STATUS_DONE` | `0x82` | Multi-step exchange completed |
 
-The driver treats only `DONE` as success for normal service requests. `IDLE`
-and `BUSY` are surfaced as `RTCOM_ERR_NOT_READY` so the caller can retry at a
+The driver treats `ACK` (`0x80`) as the success byte for every normal single
+request (`UPLOAD_UCODE`, each `NEXT`, `FINISH_UCODE`, and `EXECUTE_UCODE`).
+`DONE` (`0x82`) is expected only as the immediate reply to the `rtcom_init()`
+probe and as the reply that follows `KEEPALIVE` at the end of an upload. Any
+other status is surfaced as `RTCOM_ERR_NOT_READY` so the caller can retry at a
 higher level.
 
-### Echo request contract
+### Session scope and post-execute state
 
-`RTCOM_OP_ECHO` (`0x43`) is a single-ack echo request used only when
-`TWLHD_RTCOM_UCODE_ENABLED` is non-zero.  The ARM7 sends parameter byte `B`
-in register 112 and `RTCOM_OP_ECHO` in register 113.  The TwlBg RTCom service
-passes `r0 = B` and `r1 = RTCOM_OP_ECHO` to the uploaded ucode, and the value
-returned in `r0` is written back as the status byte in register 113.  The ucode
-therefore returns `~B` for this opcode and `0` for every other input.  The ARM7
-reads that status byte during the same single acknowledge poll; there is no
-second IRQ wait and no separate "retrieve echo" phase.
+**`HARDWARE UNVERIFIED`** — session boundary between probe and upload.
 
-The Phase 3B test message is deliberately not a `TwlhdFrame`:
+The reference implementation keeps the probe (`beginComm`) and the upload in a
+single continuous bus-lock / IRQ session.  This codebase currently ends the
+session at the conclusion of `rtcom_init()` and starts a fresh session at the
+start of `rtcom_upload_ucode()`.  That briefly re-enables interrupts between the
+two calls, opening a window in which an ongoing service exchange could in
+principle be disturbed.  The default gate-off configuration is unaffected
+because `rtcom_upload_ucode()` is never called.  Future work should either
+combine the two into one session or confirm on hardware that the gap is
+harmless.
+
+**`HARDWARE UNVERIFIED`** — post-`EXECUTE_UCODE` teardown.
+
+`rtcom_execute_ucode()` waits for `ACK` and returns without performing the
+reference's post-execute teardown sequence (`SYNC_KIL` + a done signal).  This
+is only reachable when `TWLHD_RTCOM_UCODE_ENABLED` is 1, which is off by
+default.  Calling it leaves the RTCom service in an undefined state from the
+ARM7's perspective; it should not be considered safe for real hardware until
+that teardown is implemented and verified.
+
+**`HARDWARE UNVERIFIED`** — gate-off probe leaves the service open.
+
+With the gate off, `rtcom_init()` performs the probe and, on success, restores
+`REG_RCNT` without sending `SYNC_KIL` or any other RTCom traffic.  The service
+may therefore remain in a "communicating" state after the probe-only default
+run.  The consequences on real hardware are unknown; this invariant is
+deliberately maintained because the gate-off path is required to emit only the
+probe.
+
+### Round-trip echo contract
+
+The previous `RTCOM_OP_ECHO` / single-ack echo model is **not** reference-backed
+and has been removed. The reference's `handleCommand1(u8 param, u32 stage)` uses
+`stage` as a call-sequence index within one logical exchange, not as an opcode:
+stage 0 is the first call after `EXECUTE_UCODE` dispatches to the blob, stage 1
+is the second call, and so on. Data returned by the blob flows back through
+register 112, not as the status byte in register 113.
+
+A correct round-trip would therefore be:
+
+1. `EXECUTE_UCODE(param)` and wait for `ACK` (stage 0 from the blob's point of
+   view).
+2. `NEXT(0)` (or another appropriate parameter) and wait for `ACK` (stage 1).
+3. Read the returned byte from register 112 with a `rtcom_read_data()`-style
+   helper.
+
+This redesign is `REFERENCE VERIFIED` in shape but `HARDWARE UNVERIFIED`. To
+avoid forcing a fragile implementation together, the round-trip test in
+`arm7/source/main.c` currently reports `RTCOM_TEST_ROUNDTRIP_SKIPPED` in both
+the gate-off and gate-on configurations. The ARM11 ucode stub therefore returns
+a safe default (`0`) for every `param`/`stage` input rather than implementing a
+stage-dependent payload.
+
+The Phase 3B test message structure remains available for a future round-trip:
 
 ```c
 typedef struct {
@@ -196,9 +276,6 @@ typedef struct {
     u8 payload[4]; /* arbitrary test bytes */
 } RtcomTestMsg;
 ```
-
-Eight bytes are enough to exercise ordering, acknowledgement, and bit
-integrity without pretending the channel can carry a frame.
 
 ## ARM11 ucode calling convention
 
@@ -240,12 +317,14 @@ entry stub does not set up a stack itself, but it does not need one beyond
 what the caller already provides.
 
 The reference's `handleCommand1` uses `param` and `stage` to drive a small
-state machine (e.g. `stage == 0` selects the opcode, `stage == 1` provides the
-first data byte). TWL-HD's current stub ignores both arguments and returns 0
-for all inputs, because ucode injection is gated off by default (see
-`TWLHD_RTCOM_UCODE_ENABLED` in `arm7/source/main.c`). This makes unexpected
-`param`/`stage` values harmless: the function always returns a safe default
-and never branches to undefined memory.
+state machine (`stage == 0` is the first call after `EXECUTE_UCODE`,
+`stage == 1` is the first `NEXT` follow-up, etc.). TWL-HD's current stub
+ignores both arguments and returns 0 for all inputs, because ucode injection
+is gated off by default and the round-trip echo test is deliberately skipped
+even when the gate is on (see `TWLHD_RTCOM_UCODE_ENABLED` in
+`arm7/source/main.c`). This makes unexpected `param`/`stage` values harmless:
+the function always returns a safe default and never branches to undefined
+memory.
 
 ## Register Usage
 
@@ -347,16 +426,26 @@ RTCom synchronization is intentionally primitive:
   2,062,500 iterations. Exceeding it returns `RTCOM_ERR_TIMEOUT`; the caller
   decides whether to retry.
 - **Deliberate delay asymmetry.** Bit timing uses
-  `RTCOM_BIT_DELAY_SLOW = 48` iterations during the one-time upload and
-  `RTCOM_BIT_DELAY_FAST = 14` iterations for steady-state traffic. Slower
-  edges during upload tolerate the service's own setup work; the faster rate
-  keeps ordinary command latency tolerable.
-- **Critical-section requirement.** The upload is a multi-second sequence of
-  dependent byte transfers. Any other code that bit-bangs the RTC bus during
-  that window would corrupt the stream. The driver assumes exclusive access to
-  `REG_RTC`, `REG_RCNT`, and the `IRQ_NETWORK` bit for the duration of
-  `rtcom_init()`, `rtcom_upload_ucode()`, and `rtcom_execute_ucode()`. Firmware
-  RTC users (clock reads) must not run concurrently.
+  `RTCOM_BIT_DELAY_SLOW = 48` iterations during the one-time upload.
+  `RTCOM_BIT_DELAY_FAST = 14` is defined for future steady-state traffic but is
+  not currently used.
+- **Critical section.** Every top-level exchange (`rtcom_init()`,
+  `rtcom_upload_ucode()`, `rtcom_execute_ucode()`) wraps the entire sequence in
+  `enterCriticalSection()` / `leaveCriticalSection()` so no other code can
+  observe a partial RTCom state or bit-bang the RTC bus concurrently.
+- **REG_RCNT save/restore.** The value of `REG_RCNT` is saved before the
+  exchange and restored after it. The driver only enables GPIO mode and the
+  SI/RTC IRQ path for the duration of the exchange.
+- **REG_IF clear-before-and-after-RCNT.** Any stale `IRQ_NETWORK` bit in
+  `REG_IF` is acknowledged before configuring `REG_RCNT`, and acknowledged
+  again immediately after writing `REG_RCNT`, before the first request is sent.
+  The second clear is required because enabling the SI/RTC IRQ path can itself
+  raise `IRQ_NETWORK` as a side effect of turning the mode on.
+- **REG_IF clear on teardown and timeout.** `rtcom_bus_unlock()` clears any
+  pending `IRQ_NETWORK` bit before restoring `REG_RCNT`, so it cannot fire once
+  interrupts are re-enabled.  `rtcom_poll_ack()` also clears the bit on its
+  timeout path, so a leftover flag from one timed-out exchange is not mistaken
+  for the acknowledgement of a later exchange.
 - **Single outstanding command.** The protocol has no command queue. A second
   opcode written before the first is acknowledged overwrites register 112. The
   driver therefore performs one request at a time and does not pipeline.
@@ -367,21 +456,26 @@ commands: the added complexity is not justified by a two-byte exchange.
 
 ## Error Handling
 
-Errors are values, not resets. `RtcomStatus` has four members:
+Errors are values, not resets. `RtcomStatus` has five members:
 
 | Value | Condition | Caller action |
 |-------|-----------|---------------|
-| `RTCOM_OK` | Exchange completed and status was `DONE` | Continue |
+| `RTCOM_OK` | Exchange completed and the expected status byte was received (`DONE` for the probe and post-upload wait, `ACK` for all other requests) | Continue |
 | `RTCOM_ERR_TIMEOUT` | Acknowledge poll exhausted `RTCOM_ACK_TIMEOUT` | Retry or report |
-| `RTCOM_ERR_NOT_READY` | Reply was `IDLE`/`BUSY`, or init retries exhausted | Retry or report |
-| `RTCOM_ERR_UPLOAD_FAILED` | A byte exhausted its ten retries, or finish failed | Abort upload |
+| `RTCOM_ERR_NOT_READY` | Reply was not the expected status byte, or init retries exhausted | Retry or report |
+| `RTCOM_ERR_UPLOAD_FAILED` | A byte exhausted its ten retries, the post-upload `DONE` wait failed, or finish failed | Abort upload |
+| `RTCOM_ERR_BAD_ARG` | `rtcom_upload_ucode()` was called with `len == 0` or `len > 60 KiB` | Abort upload |
 
 Rules enforced by the implementation:
 
 - Every function returns a status. No function returns `void` and no function
   loops without a bound.
-- Retries are fixed at ten for both initialisation and per-byte upload. There is
-  no exponential backoff and no infinite retry.
+- `rtcom_init()` retries the whole probe exchange up to ten times.
+- `rtcom_upload_ucode()` retries the whole upload attempt (from
+  `UPLOAD_UCODE` through `FINISH_UCODE`) up to ten times.  Individual steps are
+  **not** retried; resending a single step after the service has already
+  advanced its receive cursor would corrupt the blob position.
+- There is no exponential backoff and no infinite retry.
 - A failed initialization does not attempt an upload. A failed upload does not
   attempt execution.
 - The ARM7 reports each stage result to the ARM9 over the PXI user channel so a
@@ -413,9 +507,10 @@ The window is fixed:
 - **Size:** 60 KiB (`0xF000` bytes)
 - **Owner:** the running `TwlBg.cxi` process, not the DS title
 
-The ARM7 driver uploads bytes into that window one at a time, sends
-`RTCOM_OP_FINISH_UPLOAD`, then sends `RTCOM_OP_EXEC`. From that moment the blob
-executes on the ARM11 inside TwlBg's address space.
+The ARM7 driver uploads the blob with the `UPLOAD_UCODE` / `NEXT` /
+`KEEPALIVE` / `FINISH_UCODE` sequence described in the upload section, then
+sends `RTCOM_OP_EXECUTE_UCODE`. From that moment the blob executes on the ARM11
+inside TwlBg's address space.
 
 This has a direct consequence for repository layout. The existing `arm11/`
 directory is a libctru `.3dsx` application. It is launched independently from
@@ -436,14 +531,20 @@ say so.
 ### Ucode injection safety gate
 
 `arm7/source/main.c` gates the actual `rtcom_upload_ucode()` /
-`rtcom_execute_ucode()` calls and the `RTCOM_OP_ECHO` round-trip test behind
-`#define TWLHD_RTCOM_UCODE_ENABLED 0`. The default is off because the
-entry/return contract, while verified against the reference sources, has not
-been independently reviewed and exercised on hardware. When the gate is off the
-driver still performs `rtcom_init()`, reports `RTCOM_TEST_UCODE_DISABLED`
-(code 5) for the upload/execute stage and `RTCOM_TEST_ROUNDTRIP_SKIPPED`
-(code 6) for the echo stage to the ARM9, and continues with the diagnostics
-path. This is a deliberate safety precondition, not a bug.
+`rtcom_execute_ucode()` calls behind `#define TWLHD_RTCOM_UCODE_ENABLED 0`.
+The default is off because the entry/return contract, while verified against
+the reference sources, has not been independently reviewed and exercised on
+hardware. When the gate is off the driver still performs `rtcom_init()`,
+reports `RTCOM_TEST_UCODE_DISABLED` (code 5) for the upload/execute stage and
+`RTCOM_TEST_ROUNDTRIP_SKIPPED` (code 6) for the echo stage to the ARM9, and
+continues with the diagnostics path.
+
+**Safety invariant.** With `TWLHD_RTCOM_UCODE_ENABLED` at 0, the only RTCom
+request emitted by a full `main()` run is the `rtcom_init()` probe
+(`RTCOM_REQ_PROBE`, `0x01`). No `UPLOAD_UCODE`, `FINISH_UCODE`,
+`EXECUTE_UCODE`, `NEXT`, or `KEEPALIVE` request is ever sent. The ARM9 status
+report uses the PXI user channel and sends nothing to RTCom. This invariant is
+enforced by the `#if TWLHD_RTCOM_UCODE_ENABLED` blocks in `arm7/source/main.c`.
 
 The upload mechanism is `REFERENCE VERIFIED` (architectural analysis) because it
 follows from the address space and process model. The byte-level protocol inside
@@ -531,10 +632,20 @@ so the provenance is visible at the point of use.
 | ARM11 ucode entry preserves r1-r12,lr and returns | `REFERENCE VERIFIED` | Reference `ucode_entry.s` in both reference repos |
 | `arm11/` cannot receive RTCom traffic | `REFERENCE VERIFIED` (architectural analysis) | Separate process, not running under TWL_FIRM |
 | Initialization/upload control flow is bounded | `BUILD VERIFIED` / `UNIT VERIFIED` | Successful ARM7 build; host protocol tests pass |
-| Custom ARM7 binary is packaged into `twlhd-rtcom.nds` | `BUILD VERIFIED` | `ndstool -i` shows ARM7 size 0x155C; default `.nds` has 0xB374 |
+| Critical section around each top-level exchange | `BUILD VERIFIED` / `REFERENCE VERIFIED` | `enterCriticalSection()` / `leaveCriticalSection()` from libnds/Calico |
+| REG_RCNT saved/restored around each exchange | `BUILD VERIFIED` | Implemented in `rtcom_bus_lock()` / `rtcom_bus_unlock()` |
+| Stale REG_IF IRQ_NETWORK cleared before probe | `BUILD VERIFIED` | Implemented in `rtcom_bus_lock()` |
+| REG_RCNT written as exact reference value `0x8100` | `BUILD VERIFIED` / `REFERENCE VERIFIED` | `rtcom_configure_rcnt()` writes `RCNT_MODE_GPIO | RCNT_SI_IRQ_ENABLE` |
+| REG_IF IRQ_NETWORK cleared before and after RCNT write | `BUILD VERIFIED` / `UNIT VERIFIED` | Implemented in `rtcom_bus_lock()`; tested in `tools/test_rtcom_protocol.py` |
+| REG_IF IRQ_NETWORK cleared on unlock and on poll timeout | `BUILD VERIFIED` | Implemented in `rtcom_bus_unlock()` / `rtcom_poll_ack()` |
+| Upload retries whole attempts, not individual steps | `UNIT VERIFIED` | `tools/test_rtcom_protocol.py` upload retry policy test |
+| Single-argument probe/finish/keepalive (no register-112 write) | `BUILD VERIFIED` / `REFERENCE VERIFIED` | Implemented via `rtcom_send_request_113_*` helpers |
+| Opcode/status constants pinned to reference values | `UNIT VERIFIED` | `tools/test_rtcom_protocol.py` `ReferencePinningTest` |
+| Custom ARM7 binary is packaged into `twlhd-rtcom.nds` | `BUILD VERIFIED` | `ndstool -i` shows ARM7 size 0x15D0; default `.nds` has 0xB374 |
 | Full `TwlhdFrame` transport is not feasible | `HARDWARE UNVERIFIED` — analytical | Per-byte acknowledge model versus 72 KiB frame |
 | Handshake succeeds on a real console | `HARDWARE UNVERIFIED` | No hardware available |
-| Echo test returns correct complements | `HARDWARE UNVERIFIED` | No hardware available |
+| Multi-step upload sequence on real hardware | `HARDWARE UNVERIFIED` | Protocol shape is `REFERENCE VERIFIED`; no hardware run |
+| Round-trip echo (EXECUTE+NEXT+read-112) | `REFERENCE VERIFIED` shape / `HARDWARE UNVERIFIED` | Design documented; test skipped pending implementation |
 | Bit-bang timing (48/14 iterations) is correct | `HARDWARE UNVERIFIED` | Constants recorded; not measured |
 
 ## Verification
@@ -549,13 +660,19 @@ Labels follow the definitions at the top of this document.
 | 3 | `make -C arm7` (clean) | `BUILD VERIFIED` — exit 0; `twlhd_arm7.elf` produced |
 | 4 | `make -C arm11_ucode` (clean) | `BUILD VERIFIED` — exit 0; `twlhd_ucode.elf` and `.uc11` produced |
 | 5 | `make rtcom_rom` | `BUILD VERIFIED` — exit 0; `twlhd-rtcom.nds` produced |
-| 6 | `ndstool -i twlhd-rtcom.nds` ARM7 size | `BUILD VERIFIED` — 0x155C (5468 bytes); default `.nds` ARM7 is 0xB374 (45940 bytes) |
-| 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 12 tests pass |
+| 6 | `ndstool -i twlhd-rtcom.nds` ARM7 size | `BUILD VERIFIED` — 0x15D0 (5584 bytes); default `.nds` ARM7 is 0xB374 (45940 bytes) |
+| 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 13 tests pass |
 | 8 | `arm11_ucode/source/ucode_entry.s` compiles | `BUILD VERIFIED` — assembled and linked into `.elf`/`uc11` |
 | 9 | `arm11_ucode/Makefile` entry-point check | `BUILD VERIFIED` — check runs and passes; `.uc11` disassembly starts with `push {r1-r12,lr}` / `bl` / `pop {r1-r12,pc}` |
 | 10 | Negative control (broken linker order) | `BUILD VERIFIED` — check fails with "_start is not at base address 0x00201000"; restored to fixed order |
-| 11 | Round-trip test gated with `TWLHD_RTCOM_UCODE_ENABLED` | `BUILD VERIFIED` — default-off path reports `RTCOM_TEST_ROUNDTRIP_SKIPPED`; ON path uses `RTCOM_OP_ECHO` single-ack contract |
+| 11 | Round-trip test skipped pending EXECUTE+NEXT+read-112 implementation | `BUILD VERIFIED` — `arm7/source/main.c` reports `RTCOM_TEST_ROUNDTRIP_SKIPPED` for both gate-off and gate-on paths |
+| 12 | Opcode/status reference-pinning test | `UNIT VERIFIED` — `ReferencePinningTest` in `tools/test_rtcom_protocol.py` passes |
+| 13 | Clean build (`make clean && make && make rtcom_rom`) | `BUILD VERIFIED` — exit 0, no warnings |
+| 14 | Upload retry policy (whole-attempt, no per-step resend) | `UNIT VERIFIED` — `UploadRetryPolicyTest` in `tools/test_rtcom_protocol.py` passes |
+| 15 | `REG_IF` cleared before and after `REG_RCNT` write | `UNIT VERIFIED` — `BusLockIrqOrderingTest` in `tools/test_rtcom_protocol.py` passes |
+| 16 | Gate-off probe-only invariant | `BUILD VERIFIED` — with `TWLHD_RTCOM_UCODE_ENABLED` 0, `arm7/source/main.c` calls only `rtcom_init()`; upload/execute/round-trip are gated off |
 
 Nothing in this document is claimed as working on real hardware. The ARM7
-driver, the upload path, and the echo test are all `HARDWARE UNVERIFIED` until a
-New 3DS run is recorded in `docs/RTCOM_HARDWARE_TEST.md`.
+driver, the multi-step upload path, and the round-trip echo design are all
+`HARDWARE UNVERIFIED` until a New 3DS run is recorded in
+`docs/RTCOM_HARDWARE_TEST.md`.

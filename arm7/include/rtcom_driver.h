@@ -15,35 +15,38 @@
  * trigger.  The TwlBg RTCom service acknowledges by raising IRQ_NETWORK; the
  * ARM7 then reads the status byte from register 113.
  *
- * For normal service requests (COMM, SEND_BYTE, FINISH_UPLOAD, EXEC) the
- * expected status byte is RTCOM_STATUS_DONE (0x80).  The round-trip echo
- * request uses RTCOM_OP_ECHO: the service calls the ARM11 ucode with
- *   r0 = parameter byte from register 112
- *   r1 = request opcode from register 113
- * and the value the ucode returns in r0 is written back as the status byte.
- * Therefore an ECHO exchange with parameter B returns ~B as its status byte in
- * the SAME single-ack read; there is no second IRQ wait.
+ * The opcode and status values below are hardware/protocol facts cited from
+ * the reference implementation at
+ *   /home/one/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
+ * (GPLv3).  Only the numeric values are reused; the names, comments, and
+ * control flow are original to TWL-HD.
  */
 
+/* Raw probe literal used only by rtcom_init().  This is the value the
+ * reference sends during beginComm; it is intentionally NOT one of the named
+ * service opcodes below. */
+#define RTCOM_REQ_PROBE 0x01u
+
 /* RTC command opcodes exchanged with the TwlBg RTCom service. */
-#define RTCOM_OP_COMM          0x41u
-#define RTCOM_OP_SEND_BYTE     0x42u
-#define RTCOM_OP_ECHO          0x43u
-#define RTCOM_OP_FINISH_UPLOAD 0x44u
-#define RTCOM_OP_EXEC          0x81u
-#define RTCOM_OP_STATUS        0x83u
-#define RTCOM_OP_DONE          0xFEu
+#define RTCOM_OP_KIL            0x00u
+#define RTCOM_OP_UPLOAD_UCODE   0x41u
+#define RTCOM_OP_FINISH_UCODE   0x42u
+#define RTCOM_OP_EXECUTE_UCODE  0x44u
+#define RTCOM_OP_NEXT           0x81u
+#define RTCOM_OP_KEEPALIVE      0x83u
+#define RTCOM_OP_SYNC_KIL       0xFEu
 
 /* Status byte values returned by the RTCom service. */
-#define RTCOM_STATUS_IDLE 0x00u
-#define RTCOM_STATUS_DONE 0x80u
-#define RTCOM_STATUS_BUSY 0x82u
+#define RTCOM_STATUS_READY 0x00u
+#define RTCOM_STATUS_ACK   0x80u
+#define RTCOM_STATUS_DONE  0x82u
 
 typedef enum {
     RTCOM_OK                 = 0,
     RTCOM_ERR_TIMEOUT        = 1,
     RTCOM_ERR_NOT_READY      = 2,
     RTCOM_ERR_UPLOAD_FAILED  = 3,
+    RTCOM_ERR_BAD_ARG        = 4,
 } RtcomStatus;
 
 /* Test message for Phase 3B round-trip (8 bytes; NOT TwlhdFrame). */
@@ -54,10 +57,7 @@ typedef struct {
 #define RTCOM_TEST_MAGIC  { 'T', 'W', 'L', 'H' }
 
 RtcomStatus rtcom_init(void);
-RtcomStatus rtcom_send_request(u8 request, u8 param);
-RtcomStatus rtcom_send_request_status(u8 request, u8 param, u8 *out_status);
-RtcomStatus rtcom_poll_ack(u32 timeout_iters, u8 *out_status);
 RtcomStatus rtcom_upload_ucode(const u8 *blob, u32 len);
-RtcomStatus rtcom_execute_ucode(void);
+RtcomStatus rtcom_execute_ucode(u8 param);
 
 #endif /* RTCOM_DRIVER_H */
