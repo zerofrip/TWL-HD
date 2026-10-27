@@ -173,16 +173,20 @@ RtcomStatus rtcom_poll_ack(u32 timeout_iters, u8 *out_status) {
     return RTCOM_ERR_TIMEOUT;
 }
 
-RtcomStatus rtcom_send_request(u8 request, u8 param) {
-    u8 status = 0;
-    RtcomStatus st;
-
+RtcomStatus rtcom_send_request_status(u8 request, u8 param, u8 *out_status) {
     /* Register 112 receives the parameter byte; register 113 receives the
      * request/trigger byte and is written last so the service latches both. */
     rtcom_write_byte(RTCOM_RTC_WRITE_112, param);
     rtcom_write_byte(RTCOM_RTC_WRITE_113, request);
 
-    st = rtcom_poll_ack(RTCOM_ACK_TIMEOUT, &status);
+    return rtcom_poll_ack(RTCOM_ACK_TIMEOUT, out_status);
+}
+
+RtcomStatus rtcom_send_request(u8 request, u8 param) {
+    u8 status = 0;
+    RtcomStatus st;
+
+    st = rtcom_send_request_status(request, param, &status);
     if (st != RTCOM_OK) {
         return st;
     }

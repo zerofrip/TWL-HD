@@ -84,12 +84,13 @@ reimplementation must satisfy.
 
 ### Step 1 — Service discovery
 
-1. The driver writes `RTCOM_OP_COMM` (`0x41`) to RTC register 112. Register 112
-   lives at RTC address `0x70`; on the 3-wire bus, a write is selected with
-   command byte `0x6C` and a read with `0x6D`.
-2. It writes the parameter byte (zero for the initial probe) to register 113.
+1. The driver writes the parameter byte (zero for the initial probe) to RTC
+   register 112. Register 112 lives at RTC address `0x70`; on the 3-wire bus, a
+   write is selected with command byte `0x6C` and a read with `0x6D`.
+2. It writes the request/opcode byte (`RTCOM_OP_COMM`, `0x41`) to register 113.
    Register 113 corresponds to RTC address `0x71`, with write command `0x6E`
-   and read command `0x6F`.
+   and read command `0x6F`. Register 113 is written last and acts as the
+   trigger; the service latches both bytes before acting.
 3. It polls `REG_IF` for the `IRQ_NETWORK` bit. Each poll is bounded by
    `RTCOM_ACK_TIMEOUT = 2,062,500` iterations, so the driver cannot spin
    forever on a missing service.
@@ -157,7 +158,8 @@ handler. The contract is documented in the
 | Constant | Value | Direction | Purpose |
 |----------|-------|-----------|---------|
 | `RTCOM_OP_COMM` | `0x41` | ARM7 → ARM11 | Probe/initialise the service |
-| `RTCOM_OP_SEND_BYTE` | `0x42` | ARM7 → ARM11 | Upload one payload byte; also used by the echo test |
+| `RTCOM_OP_SEND_BYTE` | `0x42` | ARM7 → ARM11 | Upload one payload byte |
+| `RTCOM_OP_ECHO` | `0x43` | ARM7 → ARM11 | Round-trip echo test (single-ack reply) |
 | `RTCOM_OP_FINISH_UPLOAD` | `0x44` | ARM7 → ARM11 | Close the upload stream |
 | `RTCOM_OP_EXEC` | `0x81` | ARM7 → ARM11 | Start the uploaded blob |
 | `RTCOM_OP_STATUS` | `0x83` | ARM7 → ARM11 | Read service state |
@@ -171,8 +173,20 @@ handler. The contract is documented in the
 | `RTCOM_STATUS_DONE` | `0x80` | Previous command completed successfully |
 | `RTCOM_STATUS_BUSY` | `0x82` | Previous command still in progress |
 
-The driver treats only `DONE` as success. `IDLE` and `BUSY` are surfaced as
-`RTCOM_ERR_NOT_READY` so the caller can retry at a higher level.
+The driver treats only `DONE` as success for normal service requests. `IDLE`
+and `BUSY` are surfaced as `RTCOM_ERR_NOT_READY` so the caller can retry at a
+higher level.
+
+### Echo request contract
+
+`RTCOM_OP_ECHO` (`0x43`) is a single-ack echo request used only when
+`TWLHD_RTCOM_UCODE_ENABLED` is non-zero.  The ARM7 sends parameter byte `B`
+in register 112 and `RTCOM_OP_ECHO` in register 113.  The TwlBg RTCom service
+passes `r0 = B` and `r1 = RTCOM_OP_ECHO` to the uploaded ucode, and the value
+returned in `r0` is written back as the status byte in register 113.  The ucode
+therefore returns `~B` for this opcode and `0` for every other input.  The ARM7
+reads that status byte during the same single acknowledge poll; there is no
+second IRQ wait and no separate "retrieve echo" phase.
 
 The Phase 3B test message is deliberately not a `TwlhdFrame`:
 
@@ -190,7 +204,10 @@ integrity without pretending the channel can carry a frame.
 
 **REFERENCE VERIFIED** against `arm11_ucode/source/ucode_entry.s` in both
 reference repos (`RtcPwalker` and `Analog-Controls-for-NDS-Games-on-3DS`);
-both files are byte-for-byte identical.
+both files contain the same functional entry sequence.  TWL-HD's stub was
+independently written from the documented functional contract
+(`push`/`bl`/`pop`, `r0=param`, `r1=stage`, `r0=return`) and is not claimed to
+be byte-for-byte identical to either reference.
 
 The entry stub is:
 
@@ -200,7 +217,7 @@ bl   handleCommand
 pop  {r1-r12, pc}
 ```
 
-From this and the matching C prototype in the reference `main.cpp`:
+The matching C prototype used by the handler is:
 
 ```c
 extern "C" int handleCommand(u8 param, u32 stage);
@@ -309,8 +326,9 @@ SI/RTC IRQ path (`RCNT_SI_IRQ_ENABLE`, bit 8). The reference sets
 `calico/nds/irq.h`.
 
 `IRQ_NETWORK` is defined as `IRQ_RTC` in libnds; Calico defines
-`IRQ_RTC = (1U << 7)`. The prior draft used bit 24, which was the legacy
-libnds value and is incorrect for the installed libnds 2.0/Calico toolchain.
+`IRQ_RTC = (1U << 7)`. The prior draft used bit 24, which is `IRQ_WIFI` in
+legacy libnds, not `IRQ_NETWORK`. `IRQ_NETWORK` has always been `IRQ_RTC`
+(bit 7) in the installed libnds 2.0/Calico toolchain.
 `rtcom_poll_ack()` waits for that bit, then writes it back to acknowledge the
 interrupt. Polling is used rather than an interrupt handler because the
 handshake is synchronous and short-lived; an ISR would add state without
@@ -418,12 +436,14 @@ say so.
 ### Ucode injection safety gate
 
 `arm7/source/main.c` gates the actual `rtcom_upload_ucode()` /
-`rtcom_execute_ucode()` calls behind `#define TWLHD_RTCOM_UCODE_ENABLED 0`.
-The default is off because the entry/return contract, while verified against
-the reference sources, has not been independently reviewed and exercised on
-hardware. When the gate is off the driver still performs `rtcom_init()`, reports
-`RTCOM_TEST_UCODE_DISABLED` (code 5) to the ARM9, and continues with the
-diagnostics path. This is a deliberate safety precondition, not a bug.
+`rtcom_execute_ucode()` calls and the `RTCOM_OP_ECHO` round-trip test behind
+`#define TWLHD_RTCOM_UCODE_ENABLED 0`. The default is off because the
+entry/return contract, while verified against the reference sources, has not
+been independently reviewed and exercised on hardware. When the gate is off the
+driver still performs `rtcom_init()`, reports `RTCOM_TEST_UCODE_DISABLED`
+(code 5) for the upload/execute stage and `RTCOM_TEST_ROUNDTRIP_SKIPPED`
+(code 6) for the echo stage to the ARM9, and continues with the diagnostics
+path. This is a deliberate safety precondition, not a bug.
 
 The upload mechanism is `REFERENCE VERIFIED` (architectural analysis) because it
 follows from the address space and process model. The byte-level protocol inside
@@ -507,7 +527,7 @@ so the provenance is visible at the point of use.
 | Command and data bytes are MSB-first | `REFERENCE VERIFIED` | Reference `rtcom.cpp` `rtcTransferReversed()` comments/loop |
 | SIO_OUT is clear during read data sampling (SIO input mode) | `REFERENCE VERIFIED` / `UNIT VERIFIED` | Calico GPIO direction-bit semantics; `tools/test_rtcom_protocol.py` `ReadPathDirectionTest` |
 | Register 112 = parameter, register 113 = request/trigger | `REFERENCE VERIFIED` | Reference `rtcom_requestAsync(u8 request, u8 param)` |
-| TwlBg reserves 60 KiB at `0x00201000` for ucode | `REFERENCE VERIFIED` | Process/address-space analysis |
+| TwlBg reserves 60 KiB at `0x00201000` for ucode | `REFERENCE VERIFIED` | Reference `a11ucode.ld` linker scripts in `RtcPwalker/arm7_rtcom_patch/arm11_ucode/a11ucode.ld` and `Analog-Controls-for-NDS-Games-on-3DS` both set `ORIGIN = 0x00201000` |
 | ARM11 ucode entry preserves r1-r12,lr and returns | `REFERENCE VERIFIED` | Reference `ucode_entry.s` in both reference repos |
 | `arm11/` cannot receive RTCom traffic | `REFERENCE VERIFIED` (architectural analysis) | Separate process, not running under TWL_FIRM |
 | Initialization/upload control flow is bounded | `BUILD VERIFIED` / `UNIT VERIFIED` | Successful ARM7 build; host protocol tests pass |
@@ -532,6 +552,9 @@ Labels follow the definitions at the top of this document.
 | 6 | `ndstool -i twlhd-rtcom.nds` ARM7 size | `BUILD VERIFIED` — 0x155C (5468 bytes); default `.nds` ARM7 is 0xB374 (45940 bytes) |
 | 7 | `python3 -I -m unittest discover -s tools` | `UNIT VERIFIED` — 12 tests pass |
 | 8 | `arm11_ucode/source/ucode_entry.s` compiles | `BUILD VERIFIED` — assembled and linked into `.elf`/`uc11` |
+| 9 | `arm11_ucode/Makefile` entry-point check | `BUILD VERIFIED` — check runs and passes; `.uc11` disassembly starts with `push {r1-r12,lr}` / `bl` / `pop {r1-r12,pc}` |
+| 10 | Negative control (broken linker order) | `BUILD VERIFIED` — check fails with "_start is not at base address 0x00201000"; restored to fixed order |
+| 11 | Round-trip test gated with `TWLHD_RTCOM_UCODE_ENABLED` | `BUILD VERIFIED` — default-off path reports `RTCOM_TEST_ROUNDTRIP_SKIPPED`; ON path uses `RTCOM_OP_ECHO` single-ack contract |
 
 Nothing in this document is claimed as working on real hardware. The ARM7
 driver, the upload path, and the echo test are all `HARDWARE UNVERIFIED` until a

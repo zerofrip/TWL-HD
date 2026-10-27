@@ -14,7 +14,7 @@
  * context; push/pop are used only to save/restore caller state.
  */
 
-.section ".text", "ax"
+.section ".text.entry", "ax"
 .global _start
 .align 4
 .arm

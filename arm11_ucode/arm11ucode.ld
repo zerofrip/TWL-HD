@@ -13,7 +13,10 @@ MEMORY {
 }
 
 SECTIONS {
-    .text   : { *(.text*)   } > UCODE
+    .text   : {
+        KEEP(*(.text.entry))
+        *(.text*)
+    } > UCODE
     .rodata : { *(.rodata*) } > UCODE
     .data   : { *(.data*)   } > UCODE
     .bss    : { *(.bss*)    } > UCODE

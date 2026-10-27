@@ -2,6 +2,7 @@ TARGET  := twlhd_ucode
 CC      := arm-none-eabi-gcc
 AS      := arm-none-eabi-as
 OBJCOPY := arm-none-eabi-objcopy
+NM      := arm-none-eabi-nm
 CFLAGS  := -mcpu=mpcore -mfloat-abi=soft -nostartfiles -nostdlib \
             -fno-builtin -Wall -O2
 ASFLAGS := -mcpu=mpcore
@@ -25,6 +26,9 @@ build/ucode_entry.o: source/ucode_entry.s
 
 $(TARGET).elf: $(OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
+	@echo "Checking that _start is at the blob base..."
+	@$(NM) -n $(TARGET).elf | awk '$$NF == "_start" {addr=$$1} END { if (addr != "00201000") { print "Error: _start is not at base address 0x00201000 (saw 0x" addr ")"; exit 1 } }'
+	@echo "Entry-point check passed."
 
 $(TARGET).uc11: $(TARGET).elf
 	$(OBJCOPY) -O binary $< $@
