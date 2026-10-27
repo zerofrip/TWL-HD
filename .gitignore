@@ -7,3 +7,5 @@
 *.elf
 *.map
 *.smdh
+__pycache__/
+*.pyc

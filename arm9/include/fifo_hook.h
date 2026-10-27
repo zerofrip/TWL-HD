@@ -19,6 +19,12 @@ void fifo_hook_stop_capture(void);
 /* Last captured frame (owned by the hook, do not free). */
 const TwlhdFrame *fifo_hook_get_frame(void);
 
+/*
+ * Write the raw captured frame to `path` (SD card via libfat). Returns the
+ * number of bytes written, or -1 on any failure.
+ */
+int fifo_hook_dump_to_file(const char *path);
+
 /* Start a new frame: bumps frame_index and clears cmd_count. */
 void fifo_hook_reset_frame(void);
 

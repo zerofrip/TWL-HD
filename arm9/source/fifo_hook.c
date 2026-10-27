@@ -8,12 +8,15 @@
  * function, and replay the same command + parameters into a ring buffer.
  */
 
+#include <fat.h>
 #include <nds.h>
+#include <stdio.h>
 
 #include "fifo_hook.h"
 
 static TwlhdFrame g_frame;
 static int g_capturing;
+static int g_fat_ready;
 
 /* GXFIFO parameter word count per command byte (GBATEK 3D I/O ports). */
 static const uint8_t g_param_count[256] = {
@@ -169,4 +172,25 @@ void fifo_hook_glViewport(uint8_t x1, uint8_t y1, uint8_t x2, uint8_t y2) {
                 ((uint32_t)x2 << 16) | ((uint32_t)y2 << 24);
     glViewport(x1, y1, x2, y2);
     fifo_hook_record(TWLHD_CMD_VIEWPORT, params);
+}
+
+/* libfat is initialised on the first dump so boot stays unaffected. */
+int fifo_hook_dump_to_file(const char *path) {
+    FILE *fp;
+    size_t written;
+
+    if (!g_fat_ready) {
+        if (!fatInitDefault()) return -1;
+        g_fat_ready = 1;
+    }
+
+    fp = fopen(path, "wb");
+    if (!fp) return -1;
+
+    written = fwrite(&g_frame, sizeof g_frame, 1, fp);
+    fclose(fp);
+
+    if (written != 1) return -1;
+
+    return (int)sizeof g_frame;
 }

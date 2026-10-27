@@ -15,6 +15,7 @@ component is only a status screen.
 | `arm9/` | NDS application (`twlhd-arm9.nds`): GXFIFO hook + demo |
 | `arm11/` | 3DS application (`twlhd-arm11.3dsx`): status screen + transport stub |
 | `docs/` | Architecture roadmap and GXFIFO reference notes |
+| `tools/` | Host-side dump analysis (`twlhd_dump.py`, Python 3, stdlib only) |
 
 ## Prerequisites
 

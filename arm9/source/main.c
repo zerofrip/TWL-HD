@@ -130,6 +130,17 @@ int main(void) {
         glFlush(0);
         swiWaitForVBlank();
 
+        scanKeys();
+        if (keysDown() & KEY_A) {
+            int dumped = fifo_hook_dump_to_file("/twlhd_frame.bin");
+
+            if (dumped < 0) {
+                iprintf("dump failed\n");
+            } else {
+                iprintf("dumped %d bytes to /twlhd_frame.bin\n", dumped);
+            }
+        }
+
         /* binary angle: 32768 == 360 degrees */
         angle += 256;
 
