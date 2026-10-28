@@ -65,6 +65,14 @@ plumbing works is possible without that extension; a faithful
 reconstruction is not. Any Phase 4 renderer reads a file dumped to the SD
 card — it does not use RTCom, per Phase 3's bandwidth conclusion.
 
+Phase 4B implements that prototype: `common/twlhd_frame_parse.{h,c}` and
+`common/twlhd_vertex_convert.{h,c}` are allocation-free, platform-independent
+modules (host-tested), and `arm11/source/renderer.c` draws the converted
+triangle list with citro3d and a fixed DEBUG camera. Phase 4C adds SD-card
+playback of `sdmc:/twlhd_frame.bin` from the ARM11 application. See
+`docs/PHASE4_RENDERER.md`. Everything is BUILD VERIFIED / UNIT VERIFIED /
+HARDWARE UNVERIFIED — the debug view is not a DS reconstruction.
+
 ### Phase 5 - Compositing
 
 Blend the high-resolution render into the frame the system displays, preserving

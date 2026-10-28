@@ -1,5 +1,6 @@
 # build output
 */build/
+tests/host/build/
 
 # binaries
 *.nds
