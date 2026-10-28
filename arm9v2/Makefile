@@ -109,7 +109,7 @@ $(BUILD):
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).arm9
+	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).arm9 $(TARGET).guard $(TARGET).guard.nm
 
 #---------------------------------------------------------------------------------
 else
@@ -120,18 +120,29 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-$(OUTPUT).nds	:	$(OUTPUT).elf guard_check
+$(OUTPUT).nds	:	$(OUTPUT).elf $(OUTPUT).guard
 
 $(OUTPUT).elf	:	$(OFILES)
 
 # Post-link check: function-local static proxies would emit __cxa_guard_acquire
 # and a guard variable. The proxies are stateless, so these must be absent.
-guard_check: $(OUTPUT).elf
+# The stamp file prevents ndstool from re-running on every make invocation.
+$(OUTPUT).guard: $(OUTPUT).elf
 	@echo "Checking for guard variables..."
-	@if $(NM) -C $< | grep -qE '__cxa_guard_acquire|guard variable for twlhd_shim::'; then \
-		echo "Error: $< contains guard variables (reintroduced a function-local static?)"; \
+	@$(NM) -C $< > $@.nm 2>&1; \
+	nm_exit=$$?; \
+	if [ $$nm_exit -ne 0 ]; then \
+		echo "Error: $(NM) failed on $< (exit $$nm_exit)"; \
+		rm -f $@.nm; \
 		exit 1; \
-	fi
+	fi; \
+	if grep -qE '__cxa_guard_acquire|guard variable for twlhd_shim::' $@.nm; then \
+		echo "Error: $< contains guard variables (reintroduced a function-local static?)"; \
+		rm -f $@.nm; \
+		exit 1; \
+	fi; \
+	rm -f $@.nm; \
+	touch $@
 	@echo "Guard-variable check passed."
 
 #---------------------------------------------------------------------------------

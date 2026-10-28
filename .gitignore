@@ -16,3 +16,7 @@ __pycache__/
 arm11_ucode/build/
 arm7/build/
 
+# Phase 4D build stamps
+arm9v2/*.guard
+*.guard.nm
+

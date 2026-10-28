@@ -125,6 +125,8 @@ public:
 template <uint32_t ADDR, uint32_t WIDTH>
 class ArrayPort {
 public:
+    /* Holds a reference to the temporary ArrayPort that created it; use within
+     * a single statement and do not store it in a variable. */
     class Element {
     public:
         Element(ArrayPort &owner, uint32_t index)
