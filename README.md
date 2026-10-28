@@ -2,10 +2,12 @@
 
 TWL-HD is a research project investigating whether Nintendo DS 3D content can be
 captured on the ARM9 and re-rendered at higher resolution on the DSi's ARM11
-PICA200. **This repository is Phase 1 only**: it contains an ARM9 GXFIFO capture
-hook plus a rotating-cube demo that proves the capture path works inside a
-regular DS title. There is no re-rendering, no compositing, and the ARM11
-component is only a status screen.
+PICA200. It contains an ARM9 GXFIFO capture hook plus a rotating-cube demo that
+proves the capture path works inside a regular DS title, and a Phase 4B/4C
+ARM11 debug renderer that reads a dumped frame from the SD card and draws it
+with citro3d using a fixed DEBUG camera. There is still no faithful
+reconstruction (the capture contains no matrices or textures) and no
+compositing; see `docs/PHASE4_RENDERER.md`.
 
 ## Repository layout
 
@@ -13,7 +15,7 @@ component is only a status screen.
 |------|-------------|
 | `common/twlhd_frame_format.h` | Shared capture frame wire format (ARM9 and ARM11) |
 | `arm9/` | NDS application (`twlhd-arm9.nds`): GXFIFO hook + demo |
-| `arm11/` | 3DS application (`twlhd-arm11.3dsx`): status screen + transport stub |
+| `arm11/` | 3DS application (`twlhd-arm11.3dsx`): Phase 4B/4C debug renderer + transport stub |
 | `docs/` | Architecture roadmap and GXFIFO reference notes |
 | `tools/` | Host-side dump analysis (`twlhd_dump.py`, Python 3, stdlib only) |
 
@@ -42,6 +44,7 @@ output file.
 make            # both targets
 make -C arm9    # NDS only   -> arm9/twlhd-arm9.nds
 make -C arm11   # 3DS only   -> arm11/twlhd-arm11.3dsx
+make test       # host C tests + Python tests (no devkitPro needed)
 make clean
 ```
 
@@ -68,8 +71,17 @@ last frame; they update once every 60 frames. One-shot setup commands
 (`VIEWPORT`, the projection matrix) are issued once and are therefore not part
 of the steady-state counts.
 
-`arm11/twlhd-arm11.3dsx` can be launched with a 3DS homebrew launcher for
-testing. It only prints the build status.
+`arm11/twlhd-arm11.3dsx` can be launched with a 3DS homebrew launcher. It
+starts with a deterministic built-in triangle; copy a `twlhd_frame.bin` dump to
+`sdmc:/twlhd_frame.bin`, press A to load it, Y to restore the built-in
+triangle, and START to exit. The bottom screen lists parse/conversion counts
+and always labels the view `DEBUG CAMERA` / `HARDWARE UNVERIFIED (build-only)`.
+This debug playback is not a faithful DS reconstruction; see
+`docs/PHASE4_RENDERER.md`.
+
+`make test` runs the host-side parser/converter/round-trip C tests (ASan/UBSan
+when the host compiler supports them) and the Python tooling suite, including a
+C-to-Python parser consistency check.
 
 ## Known limitations
 

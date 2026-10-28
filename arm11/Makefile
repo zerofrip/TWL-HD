@@ -29,9 +29,10 @@ include $(DEVKITARM)/3ds_rules
 #---------------------------------------------------------------------------------
 TARGET		:=	twlhd-arm11
 BUILD		:=	build
-SOURCES		:=	source
+SOURCES		:=	source ../common
 DATA		:=	data
-INCLUDES	:=	include ../../common
+SHADERS		:=	shaders
+INCLUDES	:=	include ../common
 GRAPHICS	:=	gfx
 
 APP_TITLE	:=	TWL-HD
@@ -54,7 +55,7 @@ CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 ASFLAGS		:=	-g $(ARCH)
 LDFLAGS		=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS		:=	-lctru -lm
+LIBS		:=	-lcitro3d -lctru -lm
 LIBDIRS		:=	$(CTRULIB)
 
 #---------------------------------------------------------------------------------
@@ -66,7 +67,8 @@ export TOPDIR	:=	$(CURDIR)
 
 export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 			$(foreach dir,$(DATA),$(CURDIR)/$(dir)) \
-			$(foreach dir,$(GRAPHICS),$(CURDIR)/$(dir))
+			$(foreach dir,$(GRAPHICS),$(CURDIR)/$(dir)) \
+			$(foreach dir,$(SHADERS),$(CURDIR)/$(dir))
 
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
@@ -75,6 +77,7 @@ CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
 PNGFILES	:=	$(foreach dir,$(GRAPHICS),$(notdir $(wildcard $(dir)/*.png)))
+PICAFILES	:=	$(foreach dir,$(SHADERS),$(notdir $(wildcard $(dir)/*.v.pica)))
 
 #---------------------------------------------------------------------------------
 # use CXX for linking C++ projects, CC for standard C
@@ -90,13 +93,15 @@ else
 endif
 #---------------------------------------------------------------------------------
 
-export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES))
+export OFILES_BIN	:=	$(addsuffix .o,$(BINFILES)) \
+			$(PICAFILES:.v.pica=.shbin.o)
 
 export OFILES_SRC	:=	$(CPPFILES:.cpp=.o) $(CFILES:.c=.o) $(SFILES:.s=.o)
 
 export OFILES		:=	$(OFILES_BIN) $(OFILES_SRC)
 
-export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES)))
+export HFILES_BIN	:=	$(addsuffix .h,$(subst .,_,$(BINFILES))) \
+			$(PICAFILES:.v.pica=_shbin.h)
 
 export INCLUDE		:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 			$(foreach dir,$(LIBDIRS),-I$(dir)/include) \
@@ -130,10 +135,20 @@ DEPENDS	:=	$(OFILES:.o=.d)
 $(OUTPUT).3dsx	:	$(OUTPUT).elf
 $(OUTPUT).elf	:	$(OFILES)
 
+$(OFILES_SRC)	:	$(HFILES_BIN)
+
 #---------------------------------------------------------------------------------
 # you need a rule like this for each extension you use as binary data
 #---------------------------------------------------------------------------------
 %.bin.o	%_bin.h	:	%.bin
+#---------------------------------------------------------------------------------
+	@echo $(notdir $<)
+	@$(bin2o)
+
+#---------------------------------------------------------------------------------
+.PRECIOUS	:	%.shbin
+#---------------------------------------------------------------------------------
+%.shbin.o %_shbin.h : %.shbin
 #---------------------------------------------------------------------------------
 	@echo $(notdir $<)
 	@$(bin2o)
