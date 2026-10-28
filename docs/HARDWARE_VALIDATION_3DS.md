@@ -42,7 +42,7 @@ expected state while the loader is not running; it is not an error.
 From `devkitPro/3dslink` `host/src/main.c` (fetched this session):
 
 - `#define NETLOADER_COMM_PORT 17491` (line 39).
-- **Discovery is a LAN-wide broadcast.** `find3DS()` (lines 180–236) sends the UDP datagram
+- **Discovery is a LAN-wide broadcast.** `find3DS()` (lines 180–239) sends the UDP datagram
   `"3dsboot"` to `INADDR_BROADCAST:17491` repeatedly and waits for `"boot3ds"`.
 - It is only called when no address was given: `if (address == NULL) { dsaddr = find3DS(retries); … }`
   (line 625). `--address, -a` takes a hostname or IPv4 address (line 492).
@@ -65,6 +65,10 @@ Copy `twlhd-arm11.3dsx` to `/3ds/` on the SD card with a card reader (or any fil
 the owner already uses) and launch it from the Homebrew Launcher. No network code, no
 protocol, no tool I control touches the device. **This is the lowest-risk method.**
 
+**Owner decision (recorded 2026-10-29): SD-card copy is the preferred method. The
+authorization given covers PREPARATION ONLY — not deployment, not execution.** The exact
+procedure is in `docs/HARDWARE_TEST_PROCEDURE_3DS.md` and awaits explicit approval.
+
 ### 3.3 Not suitable
 
 | Method | Why not |
@@ -73,19 +77,50 @@ protocol, no tool I control touches the device. **This is the lowest-risk method
 | CIA / FBI install | Installs a title into the system: far more invasive than a `.3dsx`, and unnecessary |
 | Artic Base / Arctic Setup Tool (port 5543) | As far as I know (**UNVERIFIED**) this streams a real console's services to the Azahar emulator; it is not a way to run homebrew, and the port was not touched |
 
-## 4. What the renderer does on the device — LOCAL
+## 4. What the renderer does on the device
 
-From `arm11/source/main.c` and `renderer.c`:
+Two different things are listed on purpose: what **this project's code** does (read from the
+source) and what the **linked binary contains** (measured on `arm11/twlhd-arm11.elf` with
+`nm` and `objdump`, build at commit `c540fe2`). The first does not imply the second.
 
-- **System services used:** `gfxInitDefault`, citro3d (`C3D_Init`, render target, shader),
-  `fsInit`, HID input and APT (`aptMainLoop`). A console on the bottom screen.
-- **Services not used:** AM, CFG, NS, PTM, SOC/HTTPC (no networking at all), NDSP, CSND, MCU.
-- **File operations:** exactly one, `fopen("sdmc:/twlhd_frame.bin", "rb")` — **read-only**.
-  There is no write, delete, rename or directory change anywhere in the app.
+### 4.1 This project's own code — LOCAL (source)
+
+- Calls `gfxInitDefault`, `gfxSet3D(false)`, `consoleInit` (bottom screen), `fsInit`, citro3d
+  (`C3D_Init`, render target, shader), and uses HID input and `aptMainLoop`.
+- **File operations:** exactly one, `fopen("sdmc:/twlhd_frame.bin", "rb")` — read-only — and
+  only when `A` is pressed. No write, delete, rename or directory call anywhere in the code.
 - **RTCom:** `rtcom_transport_init()` is a stub that returns `NOT_IMPLEMENTED`; it touches no
   hardware.
-- **Persistent effects:** none by design. Nothing is written to the SD card or system
-  storage.
+- **Network:** no networking code.
+
+### 4.2 What the linked image contains — LOCAL (measured)
+
+- **Service initialisers present (not an exhaustive list of every libctru stub):** `srvInit`, `aptInit`,
+  `hidInit` (which also initialises the infrared-rst service: `irrstInit` is defined and the
+  string `ir:rst` is in the image), `gspInit`, `fsInit`, `gfxInit`/`gfxInitDefault`, `C3D_Init`. **Not present** (no defined symbol): AM, CFG, NS,
+  SOC, HTTPC, SSL, NDSP, CSND, MCU, PM, camera, microphone, Y2R, `svcBackdoor`.
+- **libctru's runtime calls `ptm:sysm`.** `__ctru_speedup_config`, called from
+  `aptWaitForWakeUp`, calls `ptmSysmInit`, `PTMSYSM_ConfigureNew3DSCPU(x)` and `ptmSysmExit`,
+  where `x` is `3` if the byte at `0x001641f0` is non-zero and `0` otherwise; that byte is
+  the libctru speed-up flag and this project never sets it, so the call is expected to pass
+  `0`. This is standard libctru runtime behaviour present in homebrew generally. What it does
+  on a console (it concerns the New 3DS CPU speed/cache mode) and that it is not persistent
+  are **UNVERIFIED**.
+- **The libctru SD driver is linked in with its write paths.** `FSFILE_Write`,
+  `FSUSER_CreateFile`, `FSUSER_DeleteFile`, `FSUSER_RenameFile`, `FSUSER_CreateDirectory`,
+  `FSUSER_DeleteDirectory` and `FSUSER_RenameDirectory` are defined in the image. Their only
+  callers are libctru's `archive_write`, `archive_open`, `archive_unlink`, `archive_rename`,
+  `archive_mkdir` and `archive_rmdir` (call-site analysis with `objdump`). General libc entry
+  points **are** linked and this project uses some of them: `fopen`, `_open_r`, `_write_r`
+  (the path `printf` takes to the console device) and `__swrite` are defined.
+  The argument that the SD is not written is therefore **not** "those functions are
+  unreachable"; it is: the only `sdmc` open in this project's code is
+  `fopen(FRAME_PATH, "rb")` (`arm11/source/main.c:77`), which selects the read-only branch of
+  `archive_open`, so the create/write/delete/rename/mkdir branches are never selected by this
+  project's code. The write-capable driver code is nevertheless present in the binary and is
+  reachable in principle (for example by a memory-corruption bug).
+- **Persistent effects:** none intended. Nothing is written to the SD card or system storage
+  by this project's code.
 
 ## 5. Risks (honest list)
 
@@ -95,10 +130,11 @@ From `arm11/source/main.c` and `renderer.c`:
    frozen; recovery is holding the power button, not a repair.
 2. **Vertex layout.** A 48-byte stride with 28 bytes of attributes loaded is expected to be
    valid but is unconfirmed on hardware.
-3. **Homebrew runs with the Homebrew Launcher's privileges.** The app is small and
-   read-only, but any bug in homebrew code is a bug with that environment's access. It is
-   built from reviewed code with host unit tests and a sanitizer run, which lowers but does
-   not remove this risk.
+3. **Homebrew runs with the Homebrew Launcher's privileges.** This project's code only
+   reads one file, but the linked binary also contains libctru's write-capable SD driver
+   (section 4.2) and libctru's runtime calls `ptm:sysm` at start-up and on resume. Any bug in
+   homebrew code is a bug with that environment's access. The code is reviewed, has host unit
+   tests and sanitizer runs, which lowers but does not remove this risk.
 4. **3dslink without `-a`** would broadcast on the LAN (section 3.1). Prevented by rule.
 5. **The renderer reads a v1 capture**, not v2. The test input is therefore a synthetic v1
    file produced on the host (section 6), **not** output from the DS-side demo.
@@ -141,12 +177,11 @@ there, and only on this one console and firmware.
 
 ## 8. What I need before T2
 
-1. **Method:** SD-card copy (recommended) or `3dslink -a 192.168.1.32 arm11/twlhd-arm11.3dsx`.
-2. **If `3dslink`:** explicit approval to run that exact command (I would then allow the
-   tool for that one invocation), and confirmation that you will start the network loader on
-   the device first.
+1. **Method:** decided — SD-card copy, performed by the owner. `3dslink` is not planned.
+2. **Explicit approval of the final procedure** in `docs/HARDWARE_TEST_PROCEDURE_3DS.md`
+   (artifact hash, SD path, the triangle-only test, expected output, recovery procedure).
 3. **Acknowledgement of risk 1**: a hang requiring a hard power-off is possible.
-4. **Whether to add the synthetic-frame generator** to the repository (via the normal
-   pipeline) so the test input is reproducible by anyone.
+4. The synthetic-frame stages (T4, T5) are **not** part of the first run and need their own
+   approval later.
 
 Until then nothing is sent to, or run on, the device.

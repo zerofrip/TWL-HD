@@ -347,3 +347,12 @@ The five decisions, recorded verbatim:
 | `make` (arm7, arm9, arm9v2, arm11, arm11_ucode) and `make rtcom_rom` | BUILD VERIFIED |
 | `make test` (C under ASan/UBSan, C++ shim against real libnds headers, Python agreement corpus) | UNIT VERIFIED |
 | Demo shim runtime on a DS, libfat `/twlhd_frame_v2.bin` write, real capture contents | HARDWARE UNVERIFIED |
+
+### Update (2026-10-29): decision 5 superseded
+
+Decision 5 above said no DS emulator or hardware was available. Since then the project
+owner supplied DS/3DS emulator source trees; DeSmuME's CLI was built out of tree and our
+`arm9v2` demo was run in it (see `docs/EMULATOR_VALIDATION.md`). Real DS/3DS **hardware is
+still unavailable for the capture work**; a New 3DS exists on the owner's network and is the
+subject of the staged plan in `docs/HARDWARE_VALIDATION_3DS.md` and
+`docs/HARDWARE_TEST_PROCEDURE_3DS.md` (preparation only; nothing deployed).

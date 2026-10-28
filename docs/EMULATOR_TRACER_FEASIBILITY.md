@@ -10,10 +10,21 @@ can an instrumented open-source DS emulator emit TWL-HD v2 traces
 that the homebrew register-proxy shim (backend B) cannot see?
 
 Evidence labels: **SOURCE-READ** = read in the emulator source in this session
-(file:line given); **MECHANICAL** = compared by a script, not by eye;
-**EMULATOR VERIFIED** = observed by running our ROM in DeSmuME;
+(file:line given; paths are relative to the emulator checkout root, e.g.
+`/home/one/3ds/desmume`); **MECHANICAL** = compared by a script, not by eye;
+**BUILD VERIFIED** = a build or command actually ran here and its output was observed;
+**EMULATOR VERIFIED** = observed by running our ROM in DeSmuME (never hardware);
 **UNVERIFIED** = reasoning or recollection, not checked here.
 Nothing in this document is HARDWARE VERIFIED.
+
+**Where the BUILD/EMULATOR evidence lives:** the DeSmuME out-of-tree build, the run of the
+`arm9v2` demo and its parse/comparison results are recorded in `docs/EMULATOR_VALIDATION.md`
+(added by the emulator-validation harness change, which must be merged for that reference to
+resolve), including the SHA-256 of the captured frame and the exact commands.
+
+**Supersedes one earlier statement:** `docs/PHASE4D_CAPTURE_EXPANSION_PROPOSAL.md` §9
+(decision 5) said no DS emulator was available. Since then emulator sources were supplied and
+DeSmuME was built; real **hardware is still not available** for this work.
 
 ## 1. Summary
 
@@ -37,11 +48,11 @@ Nothing in this document is HARDWARE VERIFIED.
 
 | Purpose | Location | Notes |
 |---|---|---|
-| Single funnel for decoded commands | `GFX_FIFOsend(cmd, param)`, called from `GXF_Hardware::receive` (`src/gfx3d.cpp:117`) and from `gfx3d_sendCommand` (`:3630`) | Sees both packed-FIFO/DMA and direct-port writes |
-| Packed GXFIFO words (incl. DMA) | `gfx3d_sendCommandToFIFO(v)` → `gxf_hardware.receive(v)` (`:3623`) | Called from the MMU for writes to `0x04000400` (`src/MMU.cpp:4685`) |
+| Single funnel for decoded commands | `GFX_FIFOsend(cmd, param)`, called from `GXF_Hardware::receive` (`desmume/src/gfx3d.cpp:117`) and from `gfx3d_sendCommand` (`:3630`) | Sees both packed-FIFO/DMA and direct-port writes |
+| Packed GXFIFO words (incl. DMA) | `gfx3d_sendCommandToFIFO(v)` → `gxf_hardware.receive(v)` (`:3623`) | Called from the MMU for writes to `0x04000400` (`desmume/src/MMU.cpp:4685`; the case covers writes to `0x04000400–0x0400043F`) |
 | Direct command ports | `gfx3d_sendCommand(adr, val)`: `cmd = (adr & 0x1FF) >> 2` (`:3632`) | Called from `MMU.cpp:4717`. The `case` list is the same id set as our table |
 | Frame boundary | `SWAP_BUFFERS` (0x50) passes through the same funnel; execution is `gfx3d_glFlush` (`:3197`) | Issue-time boundary is what a v2 file needs |
-| Rendering registers (RSTA) | `gfx3d_glClearColor<T>`, `gfx3d_glClearDepth<T,N>`, `gfx3d_glClearImageOffset<T,N>`, `gfx3d_glFogColor`, `gfx3d_glFogOffset`, `gfx3d_glAlphaFunc`, called from width-specific MMU write handlers (`MMU.cpp:3795–3830`, `4447–4479`, `5009–5032`) | The handler path gives the access width (u8/u16/u32) that RSTA entries need. Toon/edge/fog tables and `DISP3DCNT` need the same treatment (not located in this audit) |
+| Rendering registers (RSTA) | `gfx3d_glClearColor<T>`, `gfx3d_glClearDepth<T,N>`, `gfx3d_glClearImageOffset<T,N>`, `gfx3d_glFogColor`, `gfx3d_glFogOffset`, `gfx3d_glAlphaFunc`, called from width-specific MMU write handlers (`MMU.cpp:3795–3830`, `4447–4479`, `5009–5032`) | The handler path gives the access width (u8/u16/u32) that RSTA entries need. Toon, edge and fog tables go through `gfx3d_UpdateToonTable<T>` (`MMU.cpp:3397,3949,4677`), `gfx3d_UpdateEdgeMarkColorTable<T>` (`:3383,3935,4663`) and `gfx3d_UpdateFogTable<T>` (`:3389,3941,4669`); the fog setter **masks each byte to 7 bits** (`& 0x7F`), so a tracer must decide whether to record the value as written (pre-mask, matching the shim) or as applied. `DISP3DCNT` was not located in this audit |
 
 Facts that affect the writer:
 
@@ -78,7 +89,7 @@ Scripts parsed each source; nothing was compared by eye.
 | Source | Result |
 |---|---|
 | GBATEK 3D I/O map (fetched page) vs `twlhd_v2_cmd_param_count()` | 37 vs 37 commands, **0 mismatches** |
-| DeSmuME `gfx3d_commandTypes[]` (`gfx3d.cpp:82`) vs ours | 37 vs 37, ids and counts **identical**; `0xCC` = undefined, `0x00` = no-arg, `0xFF` = invalid |
+| DeSmuME `gfx3d_commandTypes[]` (`desmume/src/gfx3d.cpp:82`) vs ours | 37 vs 37, ids and counts **identical**; `0xCC` = undefined, `0x00` = no-arg, `0xFF` = invalid |
 | melonDS `CmdNumParams[256]` (`GPU3D.cpp:105`) vs ours | all 37 of ours match; melonDS lists **no parameterised command we lack** |
 
 No code was copied. The table in `common/twlhd_v2_parse.c` was derived from GBATEK before any
@@ -95,7 +106,7 @@ The tracer would emit one v2 file per frame (a frame ends at its `SWAP_BUFFERS` 
 | Zero-parameter value | DeSmuME passes 0; the shim records whatever the game wrote | **Spec follow-up:** state that consumers must ignore the value of a zero-parameter entry. Not changed in this audit |
 | NOP | melonDS emits them | Tracer must filter; entry validity rule unchanged |
 | RSTA | Hook the register setters with width | Same whitelist applies |
-| Hidden library state | Shim captures *actual values written*, e.g. libnds keeps the clear colour's polygon id in the global `glCurClearColor` | Already observed (**EMULATOR VERIFIED**): the first clear-colour write in a DS frame carried polygon id 63 from earlier frames. Not a defect; worth a spec note |
+| Hidden library state | The shim captures the *actual values written*; libnds keeps the clear colour's polygon id in the library global `glCurClearColor` (inline `glClearColor`/`glClearPolyID` do `GFX_CLEAR_COLOR = glCurClearColor = (glCurClearColor & mask) \| …`, `videoGL.h:1303,1311`; the symbol is a BSS variable in `libnds9.a`) | **Observed (EMULATOR VERIFIED):** the first clear-colour write in the captured DS frame was `0x3F1F0000`, while a fresh single-frame host run gives `0x001F0000`. **Cause (SOURCE-READ, inferred):** the polygon id left in `glCurClearColor` by earlier frames. Not a defect; worth a spec note |
 | Frame size | Real frames may exceed 65,536 `GXCM` entries or 1 MiB | **UNVERIFIED.** Hardware vertex/polygon RAM is finite, but commands beyond it are still issued. Section 8 decision |
 | Textures | Descriptors (`TEXIMAGE_PARAM`, `PLTT_BASE`) are ordinary commands; pixels live in VRAM state | Needs new chunks (`TXDS/TXDT/PLDT`, currently reserved). Out of scope here |
 
@@ -137,7 +148,7 @@ Rules for this work:
 
 | Step | Work | Verification available here | Exit criterion |
 |---|---|---|---|
-| M0 | Create the out-of-tree fork (or patch series) pinned to a recorded revision; document how to build it (the DeSmuME out-of-tree meson recipe, including the libpcap header workaround, already works) | build | clean build of the unmodified fork |
+| M0 | Create the out-of-tree fork (or patch series) pinned to a recorded revision; document how to build it (the DeSmuME out-of-tree meson recipe, including the libpcap header workaround, was built and run here (BUILD VERIFIED, using a private libpcap header prefix because the system has no `libpcap-dev`)) | build | clean build of the unmodified fork |
 | M1 | DeSmuME: hook `GFX_FIFOsend` to append `(cmd, param)`, drop NOP, close the frame at `SWAP_BUFFERS`, write a v2 file with an independent writer | emulator run | file accepted by the TWL-HD C and Python validators |
 | M2 | RSTA: hook the register setters with access width; mask to width as the spec requires | emulator run | validators accept; RSTA fields match expectations |
 | M3 | **Cross-backend equivalence test:** run our `arm9v2` demo in the tracer fork; compare the tracer's frame with the shim's own capture of the same frame (`docs/EMULATOR_VALIDATION.md`). After normalisation (shim has no `glInit` writes; zero-parameter values ignored) the streams must agree | emulator run | identical command-id sequence and values for the common subset |
