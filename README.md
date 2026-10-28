@@ -81,7 +81,16 @@ This debug playback is not a faithful DS reconstruction; see
 
 `make test` runs the host-side parser/converter/round-trip C tests (ASan/UBSan
 when the host compiler supports them) and the Python tooling suite, including a
-C-to-Python parser consistency check.
+C-to-Python parser consistency check. It now also compiles the v2 parser,
+writer, recorder and libnds-shim tests, plus a C↔Python v2 agreement corpus.
+The shim and port-coverage tests require devkitPro (`DEVKITPRO`/`DEVKITARM`);
+`make test` fails loudly if they are unset.
+
+`make` also builds `arm9v2/twlhd-arm9v2.nds`, a separate Phase 4D demo that
+captures the raw GX command stream through a register-write proxy shim and
+writes `/twlhd_frame_v2.bin`. It is homebrew-only and HARDWARE UNVERIFIED; the
+format is documented in `docs/TWLHD_V2_FORMAT.md`. The v1 demo and dumps are
+unchanged.
 
 ## Known limitations
 

@@ -264,3 +264,86 @@ Backend F is not scheduled.
 5. **Hardware availability:** whether a New 3DS/DS and test software will be
    available for the hardware-dependent steps (4D-2 behavior, any use of C
    and F).
+
+## 9. Decision record (approved scope)
+
+**Status of this section: APPROVED. The implementation is limited to the
+scope below. Builds and host tests pass (BUILD VERIFIED / UNIT VERIFIED); all
+runtime capture remains HARDWARE UNVERIFIED.**
+
+The five decisions, recorded verbatim:
+
+1. Direction: raw GX command stream (chunk GXCM) is the primary representation
+   inside a versioned, chunked v2 container. v1 is preserved.
+2. Scope: homebrew only. Capture backend = "register-write proxy shim"
+   (backend B). Backends C (clip-matrix readback) and D (display-list decoder)
+   are NOT implemented (their chunk FourCCs are only RESERVED in the spec).
+   E (emulator trace) is not started and not decided. F (commercial-game
+   interception) is out of scope.
+3. Real-time transport is out of scope; the offline pipeline is the vehicle
+   for this phase. Whether live play is ever pursued stays an OPEN question.
+4. Licensing posture for an external emulator tracer: OPEN, no work.
+5. No hardware and no DS emulator are available: everything runtime is
+   HARDWARE UNVERIFIED.
+
+### 9.1 What was implemented
+
+| Piece | Files | Verification |
+|---|---|---|
+| Normative format | `docs/TWLHD_V2_FORMAT.md` | reviewed against the implementation |
+| Constants + command table | `common/twlhd_v2_format.h` | C host tests, Python mirror |
+| Zero-copy parser | `common/twlhd_v2_parse.{h,c}` | C host tests (ASan/UBSan), C↔Python corpus |
+| Deterministic writer | `common/twlhd_v2_write.{h,c}` | golden vector, round trip, re-parse gate |
+| Recorder core | `common/twlhd_gx_record.{h,c}` | port map, overflow, SWAP resolution |
+| Backend B shim | `arm9v2/include/twlhd_gx_shim.hpp` | real libnds headers + mocked MMIO |
+| Demo target | `arm9v2/` (`twlhd-arm9v2.nds`) | BUILD VERIFIED only |
+| Host tools | `tools/twlhd_v2_dump.py`, `tools/test_twlhd_v2.py`, `tools/test_shim_coverage.py` | `make test` |
+| Compat tests | `tests/host/test_v2_compat.c` | v1↔v2 fail-closed both ways |
+
+### 9.2 Spike qualifications (backend B)
+
+- **Intercepted:** every write-capable `GFX_*` / `MATRIX_*` scalar port and the
+  `GFX_TOON_TABLE`, `GFX_EDGE_TABLE`, `GFX_FOG_TABLE` arrays. Because the
+  libnds `gl*` helpers are `GL_STATIC_INL` in `videoGL.h`, they expand the
+  redefined macros when the header is parsed. The shim must therefore be
+  included **before** `<nds.h>` in the capture translation unit.
+- **Not intercepted:** `glInit()` and any other function compiled into
+  `libnds9.a`, because those object files were built against the original
+  macros. `glCallList()` and DMA display lists bypass the proxy. This is why
+  META advertises `LIBRARY_INTERNAL_WRITES_UNCAPTURED`,
+  `DMA_DISPLAY_LISTS_UNCAPTURED` and `INITIAL_STATE_UNKNOWN`.
+- **C++ required for the capture TU:** the proxy uses `operator=` /
+  `operator|=` / `operator&=` / `operator[]`. The arm9v2 target is separate
+  from `arm9/` so the v1 demo and its C-only build stay untouched.
+- `arm-none-eabi-nm` on the demo ELF shows the recorder/hook symbols linked
+  and **no undefined references** to `glRotatef32i`, `glMaterialf`,
+  `glTexImage2D`, `glBindTexture`, `glTexParameter`, `glColorTableEXT`,
+  `glTexCoord2f32`. That checked set exists as exported symbols in
+  `libnds9.a`, so it is a meaningful negative check: those library calls are
+  not used by the demo.
+- Not supported by the shim: the packed display-list macros (`FIFO_*`,
+  `REG2ID`). The proxy deletes `operator&`, so `REG2ID(GFX_*)` fails to
+  compile instead of silently producing a host pointer value.
+- `make test` now requires devkitPro: the shim test compiles real libnds
+  headers with the host compiler, and the port-coverage test fails (not
+  skips) when `DEVKITPRO` is unset.
+
+### 9.3 What remains unimplemented
+
+- Backend C (clip-matrix readback) and its `CLPM` chunk: **not implemented**.
+- Backend D (display-list decoder) and the `TXDS`/`TXDT`/`PLDT` texture
+  chunks: **not implemented**; textures and lighting capture are out of scope.
+- Backend E (emulator trace): not started; licensing stays OPEN.
+- Backend F (commercial-game interception): out of scope.
+- Real-time transport: out of scope (decision 3).
+- No renderer or RTCom changes. v1 files, readers and behavior are untouched.
+- The demo, the shim's runtime behavior, libfat SD writes and real capture are
+  HARDWARE UNVERIFIED: no DS and no emulator were available.
+
+### 9.4 Verification labels
+
+| Check | Label |
+|---|---|
+| `make` (arm7, arm9, arm9v2, arm11, arm11_ucode) and `make rtcom_rom` | BUILD VERIFIED |
+| `make test` (C under ASan/UBSan, C++ shim against real libnds headers, Python agreement corpus) | UNIT VERIFIED |
+| Demo shim runtime on a DS, libfat `/twlhd_frame_v2.bin` write, real capture contents | HARDWARE UNVERIFIED |

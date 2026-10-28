@@ -98,3 +98,25 @@ the DS's own 2D layers and touch-screen behaviour.
   `GFX_FIFO`; the wrappers in `fifo_hook.c` are the supported interception
   point. Commands issued through unwrapped libnds helpers are invisible to the
   hook (a known Phase 1 limitation).
+
+## Phase 4D — v2 capture format (limited scope)
+
+Phase 4D adds a versioned, chunked v2 container whose primary representation is
+the raw GX command stream (`GXCM`). The normative description is
+`docs/TWLHD_V2_FORMAT.md`; the approved scope is recorded in
+`docs/PHASE4D_CAPTURE_EXPANSION_PROPOSAL.md` §9.
+
+- `common/twlhd_v2_format.h`, `twlhd_v2_parse.{h,c}`, `twlhd_v2_write.{h,c}` and
+  `twlhd_gx_record.{h,c}` are pure C11, allocation-free and host-tested.
+- Backend B is a register-write proxy shim (`arm9v2/include/twlhd_gx_shim.hpp`)
+  over libnds' `GFX_*`/`MATRIX_*` port macros. It requires recompilation, so it
+  covers homebrew only. A separate `arm9v2` target builds the demo; the v1
+  `arm9` target is unchanged.
+- Before arming, the proxy records nothing; `glInit()` and other compiled
+  library code are invisible to it, which is why META carries coverage flags.
+- v1 files, the v1 parser and `tools/twlhd_dump.py` are byte-for-byte and
+  behaviorally untouched. Each parser rejects the other format.
+- Backends C/D/E/F, textures and real-time transport are not implemented.
+
+Everything runtime is **HARDWARE UNVERIFIED**; the host suite is **UNIT
+VERIFIED** and the devkitARM builds are **BUILD VERIFIED**.
