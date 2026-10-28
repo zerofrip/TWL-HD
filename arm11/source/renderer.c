@@ -7,8 +7,9 @@
  * data, so the renderer substitutes a fixed DEBUG camera and flat per-vertex
  * color. Nothing here should be read as emulating the original DS output.
  *
- * API patterns follow the official devkitPro gpu example
- * (examples/3ds/graphics/gpu/simple_tri); no example code was pasted.
+ * API usage patterns adapted from the official devkitPro gpu examples; the
+ * display-transfer flag combination and attribute/permutation setup follow
+ * that boilerplate.
  *
  * HARDWARE UNVERIFIED: build-verified only. Never executed in the sandbox.
  */
@@ -20,6 +21,7 @@
 #include <string.h>
 
 #include "renderer.h"
+#include "twlhd_geometry_slots.h"
 
 #include "twlhd_vshader_shbin.h"
 
@@ -45,10 +47,11 @@ typedef struct {
     shaderProgram_s program;
     int u_loc_projection;
     int u_loc_modelview;
-    void *vbo;
+    TwlhdGeometrySlots slots;
     uint32_t vertex_count;
     C3D_Mtx projection;
     C3D_Mtx modelview;
+    C3D_Mtx pending_modelview;
 } RendererState;
 
 static RendererState g_renderer;
@@ -115,17 +118,17 @@ static void update_camera(const TwlhdVertex *vertices, uint32_t count) {
                     center[1] + direction.y * distance,
                     center[2] + direction.z * distance, 1.0f);
 
-    Mtx_LookAt(&g_renderer.modelview, eye,
+    Mtx_LookAt(&g_renderer.pending_modelview, eye,
                FVec4_New(center[0], center[1], center[2], 1.0f),
                FVec4_New(0.0f, 1.0f, 0.0f, 1.0f), false);
 }
 
+/* Idempotent shutdown. The caller must NOT be inside a C3D frame:
+ * C3D_RenderTargetDelete panics if C3D_FrameBegin was called without a matching
+ * C3D_FrameEnd. */
 void renderer_shutdown(void) {
-    if (g_renderer.vbo) {
-        gspWaitForP3D();
-        linearFree(g_renderer.vbo);
-        g_renderer.vbo = NULL;
-    }
+    /* Pending was never bound to a submitted frame; free it immediately. */
+    twlhd_geometry_slots_release_pending(&g_renderer.slots);
 
     if (g_renderer.program_inited) {
         shaderProgramFree(&g_renderer.program);
@@ -137,10 +140,16 @@ void renderer_shutdown(void) {
         g_renderer.dvlb = NULL;
     }
 
+    /* C3D_RenderTargetDelete drains the GPU queue, so the active buffer is
+     * safe to free only after it returns. See upstream citro3d
+     * renderqueue.c/base.c, read from the devkitPro/citro3d repository;
+     * HARDWARE UNVERIFIED (reasoned from source, never executed). */
     if (g_renderer.target) {
         C3D_RenderTargetDelete(g_renderer.target);
         g_renderer.target = NULL;
     }
+
+    twlhd_geometry_slots_release_active(&g_renderer.slots);
 
     if (g_renderer.c3d_inited) {
         C3D_Fini();
@@ -164,6 +173,7 @@ int renderer_init(void) {
     memset(&g_renderer, 0, sizeof g_renderer);
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
+    twlhd_geometry_slots_init(&g_renderer.slots, linearAlloc, linearFree);
 
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
         return TWLHD_RENDER_ERR_C3D_INIT;
@@ -245,37 +255,28 @@ fail:
 
 int renderer_set_geometry(const TwlhdVertex *vertices,
                           uint32_t vertex_count) {
-    void *new_vbo;
-    C3D_BufInfo *buf_info;
+    size_t bytes;
 
     if (!g_renderer.ready) return TWLHD_RENDER_ERR_NOT_READY;
     if (!vertices && vertex_count != 0) return TWLHD_RENDER_ERR_NULL;
 
-    if (vertex_count == 0) {
-        gspWaitForP3D();
-        if (g_renderer.vbo) linearFree(g_renderer.vbo);
-        g_renderer.vbo = NULL;
-        g_renderer.vertex_count = 0;
-        return TWLHD_RENDER_OK;
+    bytes = (size_t)vertex_count * sizeof(TwlhdVertex);
+
+    /* Stage the new geometry as pending. The active buffer is intentionally
+     * left untouched: it may still be read by the frame currently in flight.
+     * It will be promoted to active (and the old active freed) inside
+     * renderer_draw(), which runs after C3D_FrameBegin has drained the prior
+     * frame's queue. See upstream citro3d renderqueue.c/base.c, read from the
+     * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
+    if (twlhd_geometry_slots_stage(&g_renderer.slots, vertices, bytes) != 0) {
+        return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
     }
 
-    new_vbo = linearAlloc((size_t)vertex_count * sizeof(TwlhdVertex));
-    if (!new_vbo) return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
-
-    memcpy(new_vbo, vertices, (size_t)vertex_count * sizeof(TwlhdVertex));
-
-    /* The old buffer may still be consumed by the previous frame. */
-    gspWaitForP3D();
-    if (g_renderer.vbo) linearFree(g_renderer.vbo);
-
-    g_renderer.vbo = new_vbo;
     g_renderer.vertex_count = vertex_count;
 
-    buf_info = C3D_GetBufInfo();
-    BufInfo_Init(buf_info);
-    BufInfo_Add(buf_info, g_renderer.vbo, sizeof(TwlhdVertex), 2, 0x10);
-
-    update_camera(vertices, vertex_count);
+    if (vertex_count != 0) {
+        update_camera(vertices, vertex_count);
+    }
     return TWLHD_RENDER_OK;
 }
 
@@ -285,6 +286,24 @@ int renderer_use_builtin_triangle(void) {
 
 void renderer_draw(void) {
     if (!g_renderer.ready) return;
+
+    /* By documented precondition this runs between a successful
+     * C3D_FrameBegin and C3D_FrameEnd. FrameBegin drains the previous frame's
+     * queue, so the old active buffer is no longer read by the GPU and can be
+     * freed here. See upstream citro3d renderqueue.c/base.c, read from the
+     * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
+    if (g_renderer.slots.pending) {
+        C3D_BufInfo *pending_buf_info;
+
+        twlhd_geometry_slots_commit(&g_renderer.slots);
+
+        pending_buf_info = C3D_GetBufInfo();
+        BufInfo_Init(pending_buf_info);
+        BufInfo_Add(pending_buf_info, g_renderer.slots.active,
+                    sizeof(TwlhdVertex), 2, 0x10);
+
+        g_renderer.modelview = g_renderer.pending_modelview;
+    }
 
     C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
                           RENDER_CLEAR_COLOR, 0);
@@ -296,7 +315,7 @@ void renderer_draw(void) {
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_modelview,
                      &g_renderer.modelview);
 
-    if (g_renderer.vbo && g_renderer.vertex_count != 0) {
+    if (g_renderer.slots.active && g_renderer.vertex_count != 0) {
         C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
     }
 }

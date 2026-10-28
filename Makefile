@@ -31,12 +31,15 @@ HOST_SAN := $(shell printf 'int main(void){return 0;}\n' | \
 HOST_CFLAGS += $(HOST_SAN)
 HOST_LDFLAGS := $(HOST_SAN)
 
-HOST_COMMON := common/twlhd_frame_parse.c common/twlhd_vertex_convert.c
+HOST_COMMON := common/twlhd_frame_parse.c common/twlhd_vertex_convert.c \
+	common/twlhd_geometry_slots.c
 HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
-	common/twlhd_frame_format.h tests/host/tests_host.h
+	common/twlhd_geometry_slots.h common/twlhd_frame_format.h \
+	tests/host/tests_host.h
 HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_converter \
-	tests/host/build/test_roundtrip
+	tests/host/build/test_roundtrip \
+	tests/host/build/test_geometry_slots
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -53,6 +56,10 @@ tests/host/build/test_converter: tests/host/test_converter.c $(HOST_COMMON) \
 
 tests/host/build/test_roundtrip: tests/host/test_roundtrip.c $(HOST_COMMON) \
 		$(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_geometry_slots: tests/host/test_geometry_slots.c \
+		$(HOST_COMMON) $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_COMMON) $(HOST_LDFLAGS)
 
 tests/host/build:

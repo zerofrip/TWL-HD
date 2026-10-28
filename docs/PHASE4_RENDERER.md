@@ -20,9 +20,9 @@ flat per-vertex color.
 | Vertex converter | `common/twlhd_vertex_convert.h`, `.c` | Turn the decoded command stream into a non-indexed `TwlhdVertex` triangle list. |
 | Renderer / app | `arm11/source/renderer.c`, `arm11/include/renderer.h`, `arm11/source/main.c`, `arm11/shaders/twlhd_vshader.v.pica` | Upload the triangle list to the PICA200 via citro3d and draw it on the top screen. |
 
-The two `common/` modules are pure C11 with no allocation and no libctru/libnds
-headers. They compile both under host `cc` and under devkitARM, and are the
-only code exercised by the test suite.
+The `common/` modules are pure C11 with no libctru/libnds headers. They compile
+both under host `cc` and under devkitARM, and are the only code exercised by the
+test suite.
 
 ## 2. Data flow
 
@@ -34,12 +34,11 @@ twlhd_frame_parse()  → TwlhdParsedFrame (pointer views, no copies)
    │
    ▼
 twlhd_convert_frame() → TwlhdVertex[]  (12 floats: pos xyz, rgba, n xyz, uv)
-   │  only after the previous frame has finished on the GPU
    ▼
-renderer_set_geometry() → linearAlloc + BufInfo_Add
+renderer_set_geometry() → stage pending linearAlloc copy
    │
    ▼
-renderer_draw() → C3D_RenderTargetClear + uniforms + C3D_DrawArrays
+renderer_draw() → commit pending→active + BufInfo_Add + uniforms + draw
 ```
 
 `main.c` keeps the Phase 1 `rtcom_transport_init()` call and status string.
@@ -101,14 +100,32 @@ depth24/stencil8, top/left) → `DVLB_ParseFile` → `shaderProgramInit` →
 `shaderProgramSetVsh` → uniform lookup → attribute loaders (v0 = 3×float
 position, v1 = 4×float color, stride 48) → texenv pass-through of
 `GPU_PRIMARY_COLOR` → depth test (`GPU_GREATER`, write all) → cull **off** for
-debug visibility. Each failure jumps to one unwind path; `renderer_shutdown()`
+debug visibility. The 48-byte vertex stride with only 28 bytes of loaded
+attributes (position + color) is expected to be valid because `BufInfo_Add`
+lets the caller define the stride independently of the attribute loaders, but
+this is HARDWARE UNVERIFIED. Each failure jumps to one unwind path; `renderer_shutdown()`
 frees in reverse order, is idempotent and is safe after a partial init.
 `gfxExit()` stays the caller's responsibility.
 
-Geometry replacement calls `gspWaitForP3D()` before freeing the previous
-`linearAlloc` buffer, so the GPU can never read freed memory. `main.c`
-additionally performs the swap only after `C3D_FrameEnd`, not between
-`C3D_FrameBegin`/`C3D_FrameEnd`.
+Geometry replacement is deferred: `renderer_set_geometry()` only stages a new
+`linearAlloc` buffer as *pending*; it never waits on the GPU and never frees
+the *active* buffer that may still be read by the frame in flight. The pending
+buffer is promoted to active (and the old active is freed) at the start of the
+next `renderer_draw()`, which by contract runs between a successful
+`C3D_FrameBegin(C3D_FRAME_SYNCDRAW)` and `C3D_FrameEnd()`. `C3D_FrameBegin`
+calls `C3Di_WaitAndClearQueue(-1)`, which upstream citro3d
+(`renderqueue.c`/`base.c`, read from the devkitPro/citro3d repository)
+guarantees blocks until the previous frame's GX command queue has finished;
+when it returns, the GPU is no longer reading the previous frame's vertex
+buffer. `C3D_RenderTargetDelete()` and `C3D_Fini()` also drain the queue before
+returning, so `renderer_shutdown()` deletes the render target before freeing
+the active buffer. A zero-vertex `renderer_set_geometry()` clears the pending
+buffer and sets the drawn vertex count to 0, so nothing is drawn. The previous
+active buffer is not freed at that point: it stays allocated (unused) until the
+next non-empty commit or `renderer_shutdown()`. This is not a leak, and it is
+safe because the buffer is never read while the vertex count is 0.
+These synchronization semantics were reasoned from upstream source and are
+**HARDWARE UNVERIFIED** — they were never executed on a 3DS in this project.
 
 The vertex shader (`arm11/shaders/twlhd_vshader.v.pica`) is an original
 minimal MVP pass-through: `modelview` then `projection`, plus the interpolated
@@ -177,6 +194,10 @@ make host-test   # host C tests only
   bounds.
 - `tests/host/test_roundtrip.c` — the steady-state cube frame (40 commands,
   24 `VTX_16`) converts to 12 triangles.
+- `tests/host/test_geometry_slots.c` — active/pending buffer ownership:
+  stage never frees active, commit frees old active exactly once, zero-length
+  stage clears, allocation failure preserves existing buffers, idempotent
+  release, no double free or leak under ASan.
 - `tools/test_c_parser_consistency.py` — compiles `tests/host/dump_summary.c`
   and compares accept/reject decisions and per-type counts against
   `tools/twlhd_dump.py` for a valid frame, a truncated file, a wrong version
@@ -191,10 +212,10 @@ compiler supports it. The Python suite runs with `PYTHONDONTWRITEBYTECODE=1`.
 |---|---|---|
 | `make clean && make` | exit 0; arm7, arm9, arm11, arm11_ucode built | BUILD VERIFIED |
 | `make rtcom_rom` | exit 0; `twlhd-rtcom.nds` produced | BUILD VERIFIED |
-| `make test` | exit 0; 20 host C tests + 21 Python tests pass | UNIT VERIFIED |
+| `make test` | exit 0; host C tests + Python tests pass | UNIT VERIFIED |
 | `picasso` shader build | `arm11/build/twlhd_vshader.shbin` produced | BUILD VERIFIED |
 | Shader embedded | `nm arm11/twlhd-arm11.elf` shows `twlhd_vshader_shbin` | BUILD VERIFIED |
-| On-hardware rendering | not executed | HARDWARE UNVERIFIED |
+| GPU synchronization / deferred commit | reasoned from upstream citro3d source; no hardware run | HARDWARE UNVERIFIED |
 
 A runtime-only fault (for example a wrong uniform table index or a citro3d
 state assumption that differs on hardware) remains possible and is why every

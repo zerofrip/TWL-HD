@@ -2,9 +2,9 @@
 /*
  * TWL-HD Phase 4B - minimal citro3d/PICA200 debug renderer.
  *
- * HARDWARE UNVERIFIED: this code is build-verified only. The API patterns
- * follow the official devkitPro gpu example (examples/3ds/graphics/gpu/
- * simple_tri); no example code was pasted.
+ * HARDWARE UNVERIFIED: this code is build-verified only. API usage patterns
+ * are adapted from the official devkitPro gpu examples; the display-transfer
+ * flag combination and attribute/permutation setup follow that boilerplate.
  */
 #pragma once
 
@@ -32,9 +32,13 @@ int renderer_init(void);
  * gfxExit(); the caller owns gfxInitDefault()/gfxExit(). */
 void renderer_shutdown(void);
 
-/* Uploads a non-indexed triangle list (stride 48 bytes). Call only between
- * frames: it waits for P3D before freeing the previous buffer. A zero count
- * clears the scene. */
+/* Stages a non-indexed triangle list (stride 48 bytes). The upload is
+ * deferred: the new buffer becomes active inside the next renderer_draw()
+ * after C3D_FrameBegin has drained the prior frame's queue. A zero count
+ * clears the pending buffer and sets the drawn vertex count to 0, so nothing
+ * is drawn; the previous active buffer stays allocated (unused) until the
+ * next non-empty commit or renderer_shutdown().
+ * Never waits on the GPU. */
 int renderer_set_geometry(const TwlhdVertex *vertices, uint32_t vertex_count);
 
 /* Restores the deterministic built-in debug triangle. */

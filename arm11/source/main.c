@@ -251,15 +251,14 @@ int main(void) {
             update_console();
         }
 
-        C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
-        renderer_draw();
-        C3D_FrameEnd(0);
+        if (C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) {
+            renderer_draw();
+            C3D_FrameEnd(0);
+        }
 
-        /* Never swap the vertex buffer while the GPU may still read it. */
         if (pending_builtin) {
             int result = renderer_use_builtin_triangle();
 
-            gspWaitForP3D();
             if (result == TWLHD_RENDER_OK) {
                 set_builtin_scene();
                 snprintf(g_status, sizeof g_status, "built-in triangle");
@@ -272,7 +271,6 @@ int main(void) {
         } else if (pending_load) {
             int result;
 
-            gspWaitForP3D();
             result = renderer_set_geometry(g_vertices, pending_vertex_count);
             if (result == TWLHD_RENDER_OK) {
                 memset(&g_scene, 0, sizeof g_scene);
