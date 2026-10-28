@@ -54,6 +54,17 @@ citro3d/PICA200 at a higher resolution. Matrix stacks and vertex formats have to
 be re-interpreted, not merely replayed, because the two GPUs encode commands
 differently.
 
+**Phase 4A (`docs/PHASE4A_PICA200_FEASIBILITY.md`) audited this before any
+rendering code was written.** Its finding: the current `TwlhdFrame` format
+does not capture projection/view/model matrices or texture data (confirmed
+against this project's own Phase 1 demo, whose `gluPerspective`/
+`gluLookAtf32`/`glRotateXi` calls bypass every existing capture wrapper), so
+a real reconstruction needs a Phase 1 capture-format extension first. A
+minimal debug-camera prototype that only proves the PICA200 rendering
+plumbing works is possible without that extension; a faithful
+reconstruction is not. Any Phase 4 renderer reads a file dumped to the SD
+card — it does not use RTCom, per Phase 3's bandwidth conclusion.
+
 ### Phase 5 - Compositing
 
 Blend the high-resolution render into the frame the system displays, preserving
