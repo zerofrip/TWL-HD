@@ -176,3 +176,35 @@ Please approve (or amend) **this exact procedure**:
 
 Until you approve it, nothing is sent to, copied onto, or run on the console, and no
 connection to `192.168.1.32` is made.
+
+## 12. Observed results (recorded as reported; append-only)
+
+Labels in this section: **HARDWARE OBSERVED** = seen by the project owner on the console and
+supplied as a photograph. It is not independently reproducible by me, and I did not
+connect to or run anything on the console myself.
+
+### Run 1 — owner-run, photograph of the bottom screen (2026-10-29)
+
+Evidence file (kept outside the repository): `/home/one/3ds/hwtest-staging/evidence/run1_bottom_screen.jpg`
+(3,671,283 bytes, SHA-256 `1f38283bac29e470810f1bc4916dd093eb2b9bdb5dff91da31d4b1ff65fcfcc7`).
+
+**Observed (HARDWARE OBSERVED, photograph):** the bottom-screen console text is identical,
+line for line, to the expected block in section 6, including the first line
+`TWL-HD Phase 4B/4C renderer`, `mode:   BUILT-IN TRIANGLE`, `input verts: 3  tris: 1`,
+`render verts: 3`, `RTCom transport: not implemented`, and the last line `ready`.
+
+**What this establishes (observation + source reading):** the app started on the console and
+`renderer_init()` returned success — in `arm11/source/main.c` the status `ready` is printed
+only on that path, while a failure prints `mode:   RENDERER FAILED`. So citro3d
+initialisation, render-target creation, shader load, uniform lookup and the vertex-buffer
+allocation did not fail on this console.
+
+**Not established (remains HARDWARE UNVERIFIED):**
+- that the triangle was drawn on the top screen (not in the photograph);
+- that the image stayed stable (the GPU-synchronisation risk, audit risk 1);
+- that `START` returned to the launcher cleanly;
+- which build was run (the hash of the copied file was not reported);
+- any behaviour with a capture file, error paths, or longer running.
+
+Questions put to the owner: top-screen appearance, stability, exit behaviour, hash of the
+file used, which buttons were pressed.
