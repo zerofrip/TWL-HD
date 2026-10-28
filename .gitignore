@@ -9,3 +9,9 @@
 *.smdh
 __pycache__/
 *.pyc
+
+# Phase 3 RTCom generated artifacts
+*.uc11
+arm11_ucode/build/
+arm7/build/
+

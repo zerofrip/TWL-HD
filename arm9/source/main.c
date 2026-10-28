@@ -6,9 +6,27 @@
  */
 
 #include <nds.h>
+#include <nds/ipc.h>
 #include <stdio.h>
 
 #include "fifo_hook.h"
+
+/* ARM7 RTCom driver status, reported over PXI user channel 1. */
+static const char *rtcom_status_str = "RTCom: UNVERIFIED (build-only)";
+
+static void rtcom_fifo_handler(void *user, u32 code) {
+    (void)user;
+
+    switch (code) {
+    case 0:  rtcom_status_str = "RTCom: OK";                  break;
+    case 1:  rtcom_status_str = "RTCom: FAIL (1)";            break;
+    case 2:  rtcom_status_str = "RTCom: FAIL (2)";            break;
+    case 3:  rtcom_status_str = "RTCom: FAIL (3)";            break;
+    case 4:  rtcom_status_str = "RTCom: FAIL (data mismatch)"; break;
+    case 5:  rtcom_status_str = "RTCom: UCODE DISABLED";       break;
+    default: rtcom_status_str = "RTCom: FAIL (?)";            break;
+    }
+}
 
 /* 4.12 fixed point vertex for the unit cube. */
 #define V16_ONE ((int16_t)(1 << 12))
@@ -96,6 +114,7 @@ static void print_stats(const TwlhdFrame *frame) {
     iprintf("COLOR    %lu\n", (unsigned long)colors);
     iprintf("NORMAL   %lu\n", (unsigned long)normals);
     iprintf("VIEWPORT %lu\n", (unsigned long)viewports);
+    iprintf("%s\n", rtcom_status_str);
 }
 
 int main(void) {
@@ -114,6 +133,8 @@ int main(void) {
 
     fifo_hook_init();
     fifo_hook_start_capture();
+
+    pxiSetHandler(PxiChannel_User1, rtcom_fifo_handler, NULL);
 
     fifo_hook_glMatrixMode(GL_PROJECTION);
     fifo_hook_glLoadIdentity();
