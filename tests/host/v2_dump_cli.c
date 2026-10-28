@@ -23,6 +23,32 @@
 
 #include "twlhd_v2_parse.h"
 
+#define FNV1A_64_BASIS 0xcbf29ce484222325ULL
+#define FNV1A_64_PRIME 0x100000001b3ULL
+
+static uint64_t fnv1a_64(const uint8_t *data, size_t len) {
+    uint64_t hash = FNV1A_64_BASIS;
+    size_t i;
+
+    for (i = 0; i < len; i++) {
+        hash ^= data[i];
+        hash *= FNV1A_64_PRIME;
+    }
+    return hash;
+}
+
+static uint64_t fnv1a_64_u32(uint64_t hash, uint32_t value) {
+    hash ^= (uint8_t)(value & 0xFFu);
+    hash *= FNV1A_64_PRIME;
+    hash ^= (uint8_t)((value >> 8) & 0xFFu);
+    hash *= FNV1A_64_PRIME;
+    hash ^= (uint8_t)((value >> 16) & 0xFFu);
+    hash *= FNV1A_64_PRIME;
+    hash ^= (uint8_t)((value >> 24) & 0xFFu);
+    hash *= FNV1A_64_PRIME;
+    return hash;
+}
+
 int main(int argc, char **argv) {
     FILE *file;
     long length;
@@ -76,6 +102,8 @@ int main(int argc, char **argv) {
     printf("result=%s\n", twlhd_v2_result_string(result));
 
     if (result == TWLHD_V2_OK) {
+        uint64_t digest = fnv1a_64(data, TWLHD_V2_HEADER_SIZE);
+
         printf("flags=%lu\n", (unsigned long)view.flags);
         printf("frame=%lu\n", (unsigned long)view.frame_index);
         printf("chunks=%lu\n", (unsigned long)view.chunk_count);
@@ -84,6 +112,18 @@ int main(int argc, char **argv) {
         printf("rsta=%lu\n", (unsigned long)view.rsta_count);
         printf("meta_backend=%lu\n", (unsigned long)view.meta_backend_id);
         printf("meta_coverage=%lu\n", (unsigned long)view.meta_coverage_flags);
+
+        for (i = 0; i < view.gxcm_count; i++) {
+            digest = fnv1a_64_u32(digest, twlhd_v2_gxcm_cmd_word(&view, i));
+            digest = fnv1a_64_u32(digest, twlhd_v2_gxcm_value(&view, i));
+        }
+        for (i = 0; i < view.rsta_count; i++) {
+            digest = fnv1a_64_u32(digest, twlhd_v2_rsta_addr(&view, i));
+            digest = fnv1a_64_u32(digest, twlhd_v2_rsta_value(&view, i));
+            digest = fnv1a_64_u32(digest, twlhd_v2_rsta_gx_index(&view, i));
+            digest = fnv1a_64_u32(digest, twlhd_v2_rsta_width(&view, i));
+        }
+        printf("digest=%016llX\n", (unsigned long long)digest);
 
         for (i = 0; i < view.gxcm_count; i++) {
             uint32_t word = twlhd_v2_gxcm_cmd_word(&view, i);

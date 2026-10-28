@@ -12,6 +12,17 @@
 
 static TwlhdGxRecorder g_recorder;
 
+static uint32_t mask_to_width(uint32_t value, uint32_t width) {
+    switch (width) {
+    case 1u:
+        return value & 0xFFu;
+    case 2u:
+        return value & 0xFFFFu;
+    default:
+        return value;
+    }
+}
+
 static void mark_overflow(TwlhdGxRecorder *rec) {
     rec->overflow = 1;
     rec->flags |= TWLHD_V2_FLAG_OVERFLOW;
@@ -127,7 +138,7 @@ void twlhd_gx_rec_write(TwlhdGxRecorder *rec, uint32_t addr, uint32_t value,
     }
 
     if (twlhd_v2_rsta_whitelisted(addr, width)) {
-        append_rsta(rec, addr, value, width);
+        append_rsta(rec, addr, mask_to_width(value, width), width);
         return;
     }
 

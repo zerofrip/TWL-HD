@@ -41,6 +41,20 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
         return TWLHD_V2_ERR_RSTA;
     }
     if (params->rsta_count != 0u && !params->rsta) return TWLHD_V2_ERR_NULL;
+    for (i = 0; i < params->rsta_count; i++) {
+        uint32_t width = params->rsta[i].width;
+        uint32_t value = params->rsta[i].value;
+
+        if (width != 1u && width != 2u && width != 4u) {
+            return TWLHD_V2_ERR_RSTA;
+        }
+        if (width == 1u && (value & ~0xFFu) != 0u) {
+            return TWLHD_V2_ERR_RSTA;
+        }
+        if (width == 2u && (value & ~0xFFFFu) != 0u) {
+            return TWLHD_V2_ERR_RSTA;
+        }
+    }
 
     total = (uint64_t)TWLHD_V2_HEADER_SIZE +
             2u * (uint64_t)TWLHD_V2_CHUNK_HEADER_SIZE +

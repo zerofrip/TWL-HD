@@ -107,11 +107,17 @@ static void test_rsta(void) {
     CHECK_EQ_INT(g_rec.rsta[2].addr, 0x04000060u);
     CHECK_EQ_INT(g_rec.rsta[3].width, 1u);
 
+    /* Values wider than the port width are masked to the width. */
+    twlhd_gx_rec_write(&g_rec, 0x04000360u, 0x1FFu, 1u);
+    twlhd_gx_rec_write(&g_rec, 0x04000380u, 0x1FFFFu, 2u);
+    CHECK_EQ_INT(g_rec.rsta[4].value, 0xFFu);
+    CHECK_EQ_INT(g_rec.rsta[5].value, 0xFFFFu);
+
     /* Non-whitelisted / badly aligned RSTA writes are ignored. */
     twlhd_gx_rec_write(&g_rec, 0x04000300u, 1u, 4u);
     twlhd_gx_rec_write(&g_rec, 0x04000351u, 1u, 2u);
     twlhd_gx_rec_write(&g_rec, 0x04000350u, 1u, 3u);
-    CHECK_EQ_INT(twlhd_gx_rec_rsta_count(&g_rec), 4u);
+    CHECK_EQ_INT(twlhd_gx_rec_rsta_count(&g_rec), 6u);
     CHECK_EQ_INT(twlhd_gx_rec_ignored_writes(&g_rec), 3u);
 }
 

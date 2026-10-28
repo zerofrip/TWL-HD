@@ -202,6 +202,14 @@ compatibility); consumers must treat an unknown id as "unknown".
 | 2 | `INITIAL_STATE_UNKNOWN` | state set before arming is not reproduced |
 | 3..31 | reserved | must be zero |
 
+Backend notes:
+
+- The register-proxy recorder is **not interrupt-safe**. A GX write from an
+  interrupt handler while an entry is being appended can corrupt `gxcm_count`
+  or `rsta_count`. Arm, capture and disarm only from thread/task context.
+- `glCallList()` uploads a display list via DMA and does **not** route through
+  the shim. Captured files therefore set bit 1 (`DMA_DISPLAY_LISTS_UNCAPTURED`).
+
 ## 7. `RSTA` — rendering-register writes
 
 Optional, at most once. Payload: `M * 16` bytes, `M` in `0..4096`. Entry:
@@ -218,6 +226,9 @@ Rules for every entry:
 - `width` is 1, 2 or 4.
 - `addr % width == 0`.
 - `[addr, addr + width)` lies entirely inside **one** whitelist range below.
+- `value` has no bits set above the register `width` (e.g. a 1-byte write must
+  have `value & ~0xFF == 0`). The recorder and the shim both mask values to
+  the port width; a producer that emits an out-of-width value is rejected.
 - `gx_index <= GXCM entry count`.
 - `gx_index` is non-decreasing across the chunk.
 
@@ -269,7 +280,8 @@ passes.
 12. `GXCM` payload/count errors → `ERR_GXCM`; then cmd-word/id errors →
     `ERR_GXCM_CMD`; then grouping → `ERR_GXCM_GROUP`; then the swap rule →
     `ERR_GXCM_FRAME`.
-13. `RSTA` errors → `ERR_RSTA`.
+13. `RSTA` errors → `ERR_RSTA` (whitelist, alignment, width/value consistency,
+    `gx_index` bounds and monotonicity).
 14. `META` errors → `ERR_META`.
 
 Within step 12 the three passes are separate: all cmd-word checks run before

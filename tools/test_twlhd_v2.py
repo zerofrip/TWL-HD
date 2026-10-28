@@ -182,6 +182,12 @@ def error_cases():
                         rsta_payload=rsta((0x04000350, 0, 0, 3))),
                   "ERR_RSTA"))
 
+    # RSTA value wider than the port width.
+    cases.append(("rsta-value-width",
+                  build(entries((0x40, 1)),
+                        rsta_payload=rsta((0x04000360, 0x1FF, 0, 1))),
+                  "ERR_RSTA"))
+
     return cases
 
 
@@ -199,6 +205,11 @@ def valid_cases():
     struct.pack_into("<I", data, 8, len(data))
     struct.pack_into("<I", data, 20, 4)
     out[-1] = ("unknown-optional", bytes(data))
+
+    # Same structure as golden but one entry VALUE differs; digest must change.
+    diff = bytearray(golden())
+    struct.pack_into("<I", diff, 76, 0x12345678)  # value of the COLOR entry
+    out.append(("golden-diff-value", bytes(diff)))
     return out
 
 
@@ -303,6 +314,7 @@ class V2AgreementTest(unittest.TestCase):
         self.assertEqual(int(fields["meta_coverage"]),
                          view.meta_coverage_flags, name)
         self.assertEqual(counts, v2.count_by_cmd_word(view), name)
+        self.assertEqual(int(fields["digest"], 16), v2.digest(data, view), name)
 
     def test_every_error_class(self):
         for name, data, expected in error_cases():
@@ -318,6 +330,20 @@ class V2AgreementTest(unittest.TestCase):
                 view, error = self.run_python(data)
                 self.assertIsNone(error, name)
                 self.assert_agree("valid-" + name, data)
+
+    def test_digest_catches_value_change(self):
+        base = golden()
+        view, error = self.run_python(base)
+        self.assertIsNone(error)
+        base_digest = v2.digest(base, view)
+
+        diff = bytearray(base)
+        struct.pack_into("<I", diff, 76, 0x12345678)
+        diff = bytes(diff)
+        view, error = self.run_python(diff)
+        self.assertIsNone(error)
+        self.assertNotEqual(v2.digest(diff, view), base_digest,
+                            "digest must change when a GXCM value changes")
 
     def test_fixed_seed_mutations(self):
         rng = random.Random(0x4D0F)

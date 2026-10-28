@@ -514,6 +514,15 @@ static void test_rsta(void) {
     CHECK_EQ_INT(twlhd_v2_rsta_gx_index(&view, 3), 2u);
     CHECK_EQ_INT(twlhd_v2_rsta_value(&view, 0), 0u);
 
+    /* Values must be trimmed to the register width. */
+    put_rsta_entry(0, 0x04000360u, 0x1FFu, 0u, 1u);
+    size = build_raw(g_gx, 16u, meta, sizeof meta, g_rs, 16u, 0u, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_RSTA);
+
+    put_rsta_entry(0, 0x04000380u, 0x1FFFFu, 0u, 2u);
+    size = build_raw(g_gx, 16u, meta, sizeof meta, g_rs, 16u, 0u, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_RSTA);
+
     /* An explicitly empty RSTA chunk is accepted and counted as present. */
     size = build_raw(g_gx, 16u, meta, sizeof meta, NULL, 0u, 0u, 0u);
     CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
@@ -577,6 +586,68 @@ static void test_view_fields(void) {
     CHECK_EQ_INT(twlhd_v2_rsta_addr(&view, 1), 0u);
     CHECK_EQ_INT(twlhd_v2_gxcm_cmd_word(NULL, 0), 0u);
     CHECK_EQ_INT(twlhd_v2_rsta_addr(NULL, 0), 0u);
+}
+
+static int view_is_zeroed(const TwlhdV2View *view) {
+    const uint8_t *p = (const uint8_t *)view;
+    size_t i;
+
+    for (i = 0; i < sizeof *view; i++) {
+        if (p[i] != 0u) return 0;
+    }
+    return 1;
+}
+
+static void poison_view(TwlhdV2View *view) {
+    memset(view, 0xAB, sizeof *view);
+}
+
+static void test_view_zeroed_on_errors(void) {
+    TwlhdV2View view;
+    uint8_t meta[TWLHD_V2_META_PAYLOAD_SIZE];
+    size_t size;
+
+    put_meta(meta, TWLHD_V2_BACKEND_SYNTHETIC, 0u, 0u, 0u);
+
+    /* A few representative early, mid and late error paths. */
+    poison_view(&view);
+    CHECK_EQ_INT(twlhd_v2_parse(NULL, 0, &view), TWLHD_V2_ERR_NULL);
+    CHECK(view_is_zeroed(&view));
+
+    poison_view(&view);
+    put_le32(g_buf + 0, 1u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, 32u, &view), TWLHD_V2_ERR_VERSION);
+    CHECK(view_is_zeroed(&view));
+    put_le32(g_buf + 0, TWLHD_V2_VERSION);
+
+    poison_view(&view);
+    size = build_gx_only(1u, 0u);
+    /* Keep total_size at the real value but pass one byte less. */
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size - 1u, &view),
+                 TWLHD_V2_ERR_SIZE);
+    CHECK(view_is_zeroed(&view));
+
+    /* Late error: bad GXCM command id. */
+    put_gxcm_entry(0, 0x42u, 0u);
+    size = build_raw(g_gx, 8u, meta, sizeof meta, NULL, 0u, 0u, 0u);
+    poison_view(&view);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_GXCM_CMD);
+    CHECK(view_is_zeroed(&view));
+
+    /* Late error: bad RSTA value for width. */
+    put_gxcm_entry(0, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    put_rsta_entry(0, 0x04000360u, 0x1FFu, 0u, 1u);
+    size = build_raw(g_gx, 8u, meta, sizeof meta, g_rs, 16u, 0u, 0u);
+    poison_view(&view);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_RSTA);
+    CHECK(view_is_zeroed(&view));
+
+    /* Success fully populates the view. */
+    size = build_golden(TWLHD_V2_FLAG_FRAME_COMPLETE);
+    poison_view(&view);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK(!view_is_zeroed(&view));
+    CHECK_EQ_INT(view.total_size, size);
 }
 
 static void test_result_strings(void) {
@@ -672,6 +743,8 @@ int main(void) {
     test_report("v2-parse/rsta");
     test_meta();
     test_report("v2-parse/meta");
+    test_view_zeroed_on_errors();
+    test_report("v2-parse/view-zeroed-on-errors");
     test_view_fields();
     test_report("v2-parse/view-fields");
     test_result_strings();

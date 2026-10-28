@@ -83,14 +83,26 @@ static inline void default_write(uint32_t addr, uint32_t width,
 
 namespace twlhd_shim {
 
+static inline uint32_t mask_to_width(uint32_t value, uint32_t width) {
+    switch (width) {
+    case 1u:
+        return value & 0xFFu;
+    case 2u:
+        return value & 0xFFFFu;
+    default:
+        return value;
+    }
+}
+
 template <uint32_t ADDR, uint32_t WIDTH>
 class Port {
 public:
     Port() {}
 
     Port &operator=(uint32_t value) {
-        twlhd_gx_rec_hook(ADDR, value, WIDTH);
-        TWLHD_SHIM_HW_WRITE(ADDR, WIDTH, value);
+        uint32_t masked = mask_to_width(value, WIDTH);
+        twlhd_gx_rec_hook(ADDR, masked, WIDTH);
+        TWLHD_SHIM_HW_WRITE(ADDR, WIDTH, masked);
         return *this;
     }
 
@@ -156,21 +168,20 @@ private:
 
     void write(uint32_t index, uint32_t value) {
         uint32_t addr = ADDR + index * WIDTH;
-        twlhd_gx_rec_hook(addr, value, WIDTH);
-        TWLHD_SHIM_HW_WRITE(addr, WIDTH, value);
+        uint32_t masked = mask_to_width(value, WIDTH);
+        twlhd_gx_rec_hook(addr, masked, WIDTH);
+        TWLHD_SHIM_HW_WRITE(addr, WIDTH, masked);
     }
 };
 
 template <uint32_t ADDR, uint32_t WIDTH>
-Port<ADDR, WIDTH> &port() {
-    static Port<ADDR, WIDTH> instance;
-    return instance;
+Port<ADDR, WIDTH> port() {
+    return Port<ADDR, WIDTH>();
 }
 
 template <uint32_t ADDR, uint32_t WIDTH>
-ArrayPort<ADDR, WIDTH> &array_port() {
-    static ArrayPort<ADDR, WIDTH> instance;
-    return instance;
+ArrayPort<ADDR, WIDTH> array_port() {
+    return ArrayPort<ADDR, WIDTH>();
 }
 
 } /* namespace twlhd_shim */

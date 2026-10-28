@@ -184,6 +184,26 @@ static void test_matrix_helpers_record(void) {
     CHECK_EQ_INT(g_rec.gxcm[1].value, 0u);
 }
 
+static void test_oversized_writes_are_masked(void) {
+    mock_reset();
+    twlhd_gx_rec_init(&g_rec);
+    twlhd_gx_rec_arm(&g_rec);
+
+    GFX_FOG_TABLE[0] = 0x1FFu;   /* 1-byte port */
+    GFX_TOON_TABLE[0] = 0x1FFFFu;/* 2-byte port */
+
+    CHECK_EQ_INT(twlhd_gx_rec_rsta_count(&g_rec), 2u);
+    CHECK_EQ_INT(g_rec.rsta[0].addr, 0x04000360u);
+    CHECK_EQ_INT(g_rec.rsta[0].value, 0xFFu);
+    CHECK_EQ_INT(g_rec.rsta[0].width, 1u);
+    CHECK_EQ_INT(g_rec.rsta[1].addr, 0x04000380u);
+    CHECK_EQ_INT(g_rec.rsta[1].value, 0xFFFFu);
+    CHECK_EQ_INT(g_rec.rsta[1].width, 2u);
+
+    CHECK_EQ_INT((uint32_t)GFX_FOG_TABLE[0], 0xFFu);
+    CHECK_EQ_INT((uint32_t)GFX_TOON_TABLE[0], 0xFFFFu);
+}
+
 static void test_disarmed_helpers_are_ignored(void) {
     mock_reset();
     twlhd_gx_rec_init(&g_rec);
@@ -200,6 +220,8 @@ int main(void) {
     test_report("shim/inline-helpers");
     test_matrix_helpers_record();
     test_report("shim/matrix-helpers");
+    test_oversized_writes_are_masked();
+    test_report("shim/oversized-writes-masked");
     test_disarmed_helpers_are_ignored();
     test_report("shim/disarmed");
     return test_exit_code();

@@ -7,6 +7,13 @@
  * Pure C11: the shim (arm9v2/include/twlhd_gx_shim.hpp) calls
  * twlhd_gx_rec_hook() for every proxied port write.
  *
+ * The recorder is NOT interrupt-safe: a GX write from an interrupt handler
+ * in the middle of an append can corrupt the counts. Arm/disarm and capture
+ * only from thread/task context.
+ *
+ * glCallList (DMA display lists) bypasses the shim; captured files declare
+ * that gap via TWLHD_V2_COVERAGE_DMA_DISPLAY_LISTS.
+ *
  * HARDWARE UNVERIFIED: host-tested only. The DS-side behavior (every libnds
  * helper really routing through the shim) has never been run on hardware.
  */

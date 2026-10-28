@@ -34,6 +34,43 @@ CHUNK_FLAG_RESERVED_MASK = 0xFFFFFFFE
 
 COVERAGE_RESERVED_MASK = 0xFFFFFFF8
 
+_FNV1A_64_BASIS = 0xcbf29ce484222325
+_FNV1A_64_PRIME = 0x100000001b3
+
+
+def _fnv1a_64(data):
+    hash_ = _FNV1A_64_BASIS
+    for byte in data:
+        hash_ ^= byte
+        hash_ = (hash_ * _FNV1A_64_PRIME) & 0xFFFFFFFFFFFFFFFF
+    return hash_
+
+
+def _fnv1a_64_u32(hash_, value):
+    hash_ ^= value & 0xFF
+    hash_ = (hash_ * _FNV1A_64_PRIME) & 0xFFFFFFFFFFFFFFFF
+    hash_ ^= (value >> 8) & 0xFF
+    hash_ = (hash_ * _FNV1A_64_PRIME) & 0xFFFFFFFFFFFFFFFF
+    hash_ ^= (value >> 16) & 0xFF
+    hash_ = (hash_ * _FNV1A_64_PRIME) & 0xFFFFFFFFFFFFFFFF
+    hash_ ^= (value >> 24) & 0xFF
+    hash_ = (hash_ * _FNV1A_64_PRIME) & 0xFFFFFFFFFFFFFFFF
+    return hash_
+
+
+def digest(data, view):
+    """64-bit FNV-1a over header bytes then every GXCM/RSTA field."""
+    hash_ = _fnv1a_64(data[:HEADER_SIZE])
+    for word, value in view.gxcm:
+        hash_ = _fnv1a_64_u32(hash_, word)
+        hash_ = _fnv1a_64_u32(hash_, value)
+    for addr, value, gx_index, width in view.rsta:
+        hash_ = _fnv1a_64_u32(hash_, addr)
+        hash_ = _fnv1a_64_u32(hash_, value)
+        hash_ = _fnv1a_64_u32(hash_, gx_index)
+        hash_ = _fnv1a_64_u32(hash_, width)
+    return hash_
+
 
 def fourcc(text):
     raw = text.encode("ascii")
@@ -186,6 +223,12 @@ def _validate_rsta(payload, gxcm_count):
         if not _rsta_whitelisted(addr, width):
             raise V2Error("ERR_RSTA",
                           "RSTA entry %d is outside the whitelist" % i)
+        if width == 1 and value & ~0xFF:
+            raise V2Error("ERR_RSTA",
+                          "RSTA 1-byte value has high bits set")
+        if width == 2 and value & ~0xFFFF:
+            raise V2Error("ERR_RSTA",
+                          "RSTA 2-byte value has high bits set")
         if gx_index > gxcm_count:
             raise V2Error("ERR_RSTA", "RSTA gx_index past the GXCM end")
         if i and gx_index < previous_index:

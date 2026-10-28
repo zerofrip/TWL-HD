@@ -48,6 +48,7 @@ LDFLAGS		=	-specs=ds_arm9.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
 LIBS		:=	-lnds9 -lfat
 LIBDIRS		:=	$(LIBNDS)
+NM		:=	arm-none-eabi-nm
 
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
@@ -119,8 +120,19 @@ DEPENDS	:=	$(OFILES:.o=.d)
 #---------------------------------------------------------------------------------
 # main targets
 #---------------------------------------------------------------------------------
-$(OUTPUT).nds	:	$(OUTPUT).elf
+$(OUTPUT).nds	:	$(OUTPUT).elf guard_check
+
 $(OUTPUT).elf	:	$(OFILES)
+
+# Post-link check: function-local static proxies would emit __cxa_guard_acquire
+# and a guard variable. The proxies are stateless, so these must be absent.
+guard_check: $(OUTPUT).elf
+	@echo "Checking for guard variables..."
+	@if $(NM) -C $< | grep -qE '__cxa_guard_acquire|guard variable for twlhd_shim::'; then \
+		echo "Error: $< contains guard variables (reintroduced a function-local static?)"; \
+		exit 1; \
+	fi
+	@echo "Guard-variable check passed."
 
 #---------------------------------------------------------------------------------
 # you need a rule like this for each extension you use as binary data

@@ -8,6 +8,8 @@
 
 #include "twlhd_v2_parse.h"
 
+#include <string.h>
+
 #define RSTA_DISP3DCNT_START 0x04000060u
 #define RSTA_EDGE_START      0x04000330u
 #define RSTA_ALPHA_START     0x04000340u
@@ -245,10 +247,13 @@ static TwlhdV2Result validate_rsta(const uint8_t *payload, uint32_t size,
     for (i = 0; i < count; i++) {
         const uint8_t *p = payload + (size_t)i * TWLHD_V2_RSTA_ENTRY_SIZE;
         uint32_t addr = read_le32(p + 0);
+        uint32_t value = read_le32(p + 4);
         uint32_t gx_index = read_le32(p + 8);
         uint32_t width = read_le32(p + 12);
 
         if (!twlhd_v2_rsta_whitelisted(addr, width)) return TWLHD_V2_ERR_RSTA;
+        if (width == 1u && (value & ~0xFFu) != 0u) return TWLHD_V2_ERR_RSTA;
+        if (width == 2u && (value & ~0xFFFFu) != 0u) return TWLHD_V2_ERR_RSTA;
         if (gx_index > gxcm_count) return TWLHD_V2_ERR_RSTA;
         if (i != 0u && gx_index < previous_index) return TWLHD_V2_ERR_RSTA;
         previous_index = gx_index;
@@ -304,8 +309,11 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
     uint64_t offset;
     uint32_t i;
     TwlhdV2Result result;
+    TwlhdV2View local_view;
 
-    if (!data || !view) return TWLHD_V2_ERR_NULL;
+    if (!view) return TWLHD_V2_ERR_NULL;
+    memset(view, 0, sizeof *view);
+    if (!data) return TWLHD_V2_ERR_NULL;
 
     /* Version first whenever the word exists, so v1 is not mislabelled. */
     if (size >= 4u && read_le32(data) != TWLHD_V2_VERSION) {
@@ -406,32 +414,37 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
         return TWLHD_V2_ERR_CHUNK_FLAGS;
     }
 
-    view->total_size = total_size;
-    view->flags = flags;
-    view->frame_index = frame_index;
-    view->chunk_count = chunk_count;
-    view->unknown_chunks_skipped = unknown;
-    view->gxcm = data + gxcm_offset;
-    view->rsta = seen_rsta ? data + rsta_offset : NULL;
-    view->rsta_count = 0;
-    view->meta_backend_id = 0;
-    view->meta_coverage_flags = 0;
+    memset(&local_view, 0, sizeof local_view);
+    local_view.total_size = total_size;
+    local_view.flags = flags;
+    local_view.frame_index = frame_index;
+    local_view.chunk_count = chunk_count;
+    local_view.unknown_chunks_skipped = unknown;
+    local_view.gxcm = data + gxcm_offset;
+    local_view.rsta = seen_rsta ? data + rsta_offset : NULL;
 
-    result = validate_gxcm(view->gxcm, gxcm_size, flags, &view->gxcm_count);
-    if (result != TWLHD_V2_OK) return result;
+    result = validate_gxcm(local_view.gxcm, gxcm_size, flags,
+                           &local_view.gxcm_count);
+    if (result != TWLHD_V2_OK) goto fail;
 
     if (seen_rsta) {
-        result = validate_rsta(view->rsta, rsta_size, view->gxcm_count,
-                               &view->rsta_count);
-        if (result != TWLHD_V2_OK) return result;
+        result = validate_rsta(local_view.rsta, rsta_size,
+                               local_view.gxcm_count,
+                               &local_view.rsta_count);
+        if (result != TWLHD_V2_OK) goto fail;
     }
 
     result = validate_meta(data + meta_offset, meta_size,
-                           &view->meta_backend_id,
-                           &view->meta_coverage_flags);
-    if (result != TWLHD_V2_OK) return result;
+                           &local_view.meta_backend_id,
+                           &local_view.meta_coverage_flags);
+    if (result != TWLHD_V2_OK) goto fail;
 
+    memcpy(view, &local_view, sizeof local_view);
     return TWLHD_V2_OK;
+
+fail:
+    memset(view, 0, sizeof *view);
+    return result;
 }
 
 const char *twlhd_v2_result_string(TwlhdV2Result result) {

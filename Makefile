@@ -56,7 +56,8 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_v2_write \
 	tests/host/build/test_gx_record \
 	tests/host/build/test_v2_compat \
-	tests/host/build/test_libnds_shim
+	tests/host/build/test_libnds_shim \
+	tests/host/build/test_demo_frame
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -116,6 +117,28 @@ tests/host/build/test_libnds_shim: tests/host/test_libnds_shim.cpp \
 		exit 1; \
 	fi
 	$(HOST_CXX) $(SHIM_CFLAGS) -o $@ $< $(HOST_V2_COMMON)
+
+# The demo-frame test compiles the same frame body the DS uses, with the same
+# mock-hardware seam as the shim test.
+SHIM_CXXFLAGS := -std=c++11 -O1 -g -DARM9 -D__NDS__ -fpermissive \
+	-Iarm9v2/include -Iarm9v2/source -Icommon -Itests/host \
+	-I$(DEVKITPRO)/libnds/include -I$(DEVKITPRO)/calico/include \
+	-idirafter $(DEVKITARM)/arm-none-eabi/include
+
+tests/host/build/test_demo_frame: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the demo-frame test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the demo-frame test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -o $@ $< $(HOST_V2_COMMON)
 
 tests/host/build:
 	mkdir -p $@
