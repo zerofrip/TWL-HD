@@ -40,8 +40,9 @@ APP_DESCRIPTION	:=	DS 3D capture research
 APP_AUTHOR	:=	TWL-HD contributors
 
 #---------------------------------------------------------------------------------
-# Diagnostic build (make diag / make -C arm11 DIAG=1): same objects, different
-# entry point. Sits after the default TARGET assignment so it overrides it.
+# Diagnostic build (make -C arm11 DIAG=1): separate build dir, different
+# entry point. Sits after the default TARGET/BUILD assignment so it overrides
+# them.
 #
 # HARDWARE UNVERIFIED (build-verified only); this build's purpose is
 # real-hardware bisection. Do not deploy.
@@ -49,6 +50,7 @@ APP_AUTHOR	:=	TWL-HD contributors
 DIAG	?=	0
 ifeq ($(DIAG),1)
 TARGET	:=	twlhd-arm11-diag
+BUILD	:=	build-diag
 endif
 
 #---------------------------------------------------------------------------------
@@ -127,7 +129,7 @@ export INCLUDE		:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 
 export LIBPATHS		:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-.PHONY: $(BUILD) clean all diag
+.PHONY: $(BUILD) clean all
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -135,13 +137,6 @@ all: $(BUILD)
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
-
-#---------------------------------------------------------------------------------
-# Diagnostic 3dsx: re-invoke the recursive build with DIAG=1 so TARGET and the
-# source list switch while the shared objects stay in the same build dir.
-#---------------------------------------------------------------------------------
-diag: $(BUILD)
-	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile DIAG=1
 
 #---------------------------------------------------------------------------------
 clean:

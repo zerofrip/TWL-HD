@@ -11,6 +11,11 @@
  * B = draw one frame (trace around FrameBegin/draw/FrameEnd)
  * X = draw frames in a loop, START escapes back to the menu
  *
+ * HOW TO READ: GPU work starts at C3D_FrameEnd, so a hung GPU typically shows
+ * up as the NEXT frame's FrameBegin being the last marker. "FrameBegin" last
+ * on frame >=2 means the previous frame hung; "C3D_FrameEnd" last means
+ * FrameEnd/display transfer; "DrawArrays" last means the draw call.
+ *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
  */
@@ -38,8 +43,15 @@ static int g_in_frame;
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy. */
 static void trace_cb(const char *step) {
+    u16 w, h;
+    u8 *fb;
+
     printf("  > %s\n", step);
-    gfxFlushBuffers();
+    /* Flush the bottom framebuffer through the kernel cache, not GSP.
+     * gfxFlushBuffers can block if GSP is wedged, which would hide the
+     * last marker before the hang. */
+    fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+    svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)fb, (u32)(w * h * 3));
     if (!g_in_frame) {
         /* citro3d owns the top-screen present via C3D_FrameEnd; swap bottom only. */
         gfxScreenSwapBuffers(GFX_BOTTOM, false);
