@@ -1,6 +1,6 @@
 # Phase 4B/4C — Minimal PICA200 Debug Renderer
 
-**Status: BUILD VERIFIED / UNIT VERIFIED / HARDWARE UNVERIFIED.** The code
+**Status: BUILD VERIFIED / UNIT VERIFIED / HARDWARE OBSERVED for the built-in triangle and SD frames up to 900 vertices (see `PHASE4_HARDWARE_FINDINGS.md`); everything else remains HARDWARE UNVERIFIED.** The code
 below builds with devkitARM + libctru + citro3d and its host-side modules pass
 deterministic tests, but the ARM11 application has never been executed on a
 3DS in this project. Nothing here has been compared against real DS output.
