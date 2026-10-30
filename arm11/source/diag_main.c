@@ -132,7 +132,7 @@ static void print_markers(void) {
     }
     for (i = count; i > 0; i--) {
         const char *m = g_markers[(first + i - 1) & (MARKER_RING - 1u)];
-        printf("  %s\n", m ? m : "-");
+        printf("  %.37s\n", m ? m : "-");
     }
 }
 
@@ -147,7 +147,7 @@ static void print_results(void) {
     }
     for (i = count; i > 0; i--) {
         const char *r = g_results[(first + i - 1) & (RESULT_RING - 1u)];
-        printf("%s\n", r[0] ? r : " ");
+        printf("%.39s\n", r[0] ? r : " ");
     }
 }
 
@@ -171,17 +171,19 @@ static void update_heartbeat(void) {
     u8 *fb;
 
     /* Redraw only the heartbeat counter on the title line (1-based ANSI).
-     * Col 33 + "hb:%4lu" ends at col 39, inside the 40-column budget. */
-    printf("\x1b[1;33Hhb:%4lu", g_vblank_count);
+     * Col 33 + "hb:%4lu" ends at col 39, inside the 40-column budget.
+     * Modulo keeps the counter from ever growing past four digits. */
+    printf("\x1b[1;33Hhb:%4lu", g_vblank_count % 10000UL);
     fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
     svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)fb, (u32)(w * h * 3));
 }
 
 /* Screen budget for the bottom console: 40 columns x 30 rows.
- * Every printed line must be <=39 characters. Exact row budget:
+ * libctru scrolls once the 30th newline is emitted, so the UI must use at
+ * most 29 newline-terminated rows. Every printed line must be <=39 visible
+ * characters. Exact row budget:
  *   1  title + heartbeat
  *   1  subtitle
- *   1  blank
  *   7  flags
  *   1  blank
  *   1  key legend
@@ -192,18 +194,31 @@ static void update_heartbeat(void) {
  *   1  markers header
  *   8  marker rows
  *  ---
- *  30  total
+ *  29  total
+ *
+ * Visible-character budget check for every printf in this file:
+ *   "TWL-HD arm11 diag v2"              20
+ *   "HARDWARE UNVERIFIED"               19
+ *   "%c %-13s [%c]%s"                   21 max (1+1+13+1+3+2)
+ *   "A=tog U/D=mv L=init B=1frm ..."    37
+ *   "ORTHO,NO_STATE need L"             21
+ *   "status: %.31s"                     39
+ *   "last %u results:"                  15
+ *   "%.39s" (result row)                39
+ *   "last %u markers:"                  15
+ *   "  -"                               3
+ *   "  %.37s" (marker row)              39
+ *   "hb:%4lu" (col 33..39)              7
  */
 static void render_ui(const char *status) {
     consoleClear();
     printf("TWL-HD arm11 diag v2\n");
     printf("HARDWARE UNVERIFIED\n");
-    printf("\n");
     print_flags();
     printf("\n");
     printf("A=tog U/D=mv L=init B=1frm START=exit\n");
     printf("ORTHO,NO_STATE need L\n");
-    printf("status: %s\n", status);
+    printf("status: %.31s\n", status);
     print_results();
     print_markers();
     if (g_wedged) {
@@ -274,7 +289,7 @@ static void reinit_renderer(char *status, size_t status_size) {
     renderer_set_debug_flags(g_flags);
     g_init_flags = g_flags;
     result = renderer_init();
-    snprintf(status, status_size, "renderer_init: %s",
+    snprintf(status, status_size, "init: %.24s",
              renderer_result_string(result));
 }
 
@@ -294,7 +309,7 @@ int main(void) {
     g_init_flags = 0;
     g_cursor = 0;
     g_wedged = 0;
-    snprintf(status, sizeof status, "stage 0: renderer NOT initialized");
+    snprintf(status, sizeof status, "stage0: no renderer");
 
     while (aptMainLoop()) {
         u32 keys;
@@ -351,7 +366,9 @@ int main(void) {
                                (unsigned long)effective_flags(),
                                g_frame_count);
                 }
-                snprintf(status, sizeof status, "one frame probed");
+                if (!g_wedged) {
+                    snprintf(status, sizeof status, "one frame probed");
+                }
             }
             need_redraw = 1;
         }
