@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v2).
+ * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v3).
  *
  * Stage 0 boots with gfxInitDefault() + a bottom-screen console only: no
  * renderer_init(), no fsInit(), no RTCom, no SD access. The renderer is
@@ -16,6 +16,14 @@
  *      -> minimal official-style draw path.
  *   6) L then B with ORTHO + NO_STATE + NO_UNIFORMS + NO_BIND
  *      -> minimal existing draw path.
+ *   7) L then B with FIXED48        -> one loader, fixed white, stride 48.
+ *   8) L then B with PACKED28       -> two loaders, 28-byte packed buffer.
+ *   9) L then B with SPLIT          -> two loaders, two non-interleaved buffers.
+ *
+ * Layout flags are mutually exclusive. If several are set the renderer uses
+ * this precedence:
+ *   OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_PACKED28 > LAYOUT_FIXED48
+ * and falls back to the normal 48-byte interleaved layout when none are set.
  *
  * HOW TO READ: GPU work starts at C3D_FrameEnd, so a hung GPU typically shows
  * up as the NEXT frame's FrameBegin (or the probe's NONBLOCK FrameBegin)
@@ -23,6 +31,7 @@
  * for up to 120 vblanks using C3D_FrameBegin(C3D_FRAME_NONBLOCK):
  *   "COMPLETED after K vblanks"  -> the previous frame was processed.
  *   "NOT COMPLETE after 120 vblanks (GPU wedged?)" -> the GPU never signalled.
+ * Result lines are flagged with the effective hex mask (%03lX, 0..0x3FF).
  *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
@@ -38,8 +47,8 @@
 
 #include "renderer.h"
 
-#define MARKER_RING 8u
-#define RESULT_RING 6u
+#define MARKER_RING 6u
+#define RESULT_RING 4u
 #define PROBE_VBLANKS 120
 
 /* Last MARKER_RING trace steps, newest at (g_marker_next - 1). */
@@ -65,13 +74,16 @@ static const struct {
     uint32_t bit;
     const char *name;
 } g_flag_defs[] = {
-    {TWLHD_RDBG_SKIP_DRAW,     "SKIP_DRAW"},
-    {TWLHD_RDBG_SKIP_CLEAR,    "SKIP_CLEAR"},
-    {TWLHD_RDBG_OFFICIAL_ATTR, "OFFICIAL_ATTR"},
-    {TWLHD_RDBG_ORTHO,         "ORTHO"},
-    {TWLHD_RDBG_NO_STATE,      "NO_STATE"},
-    {TWLHD_RDBG_NO_UNIFORMS,   "NO_UNIFORMS"},
-    {TWLHD_RDBG_NO_BIND,       "NO_BIND"},
+    {TWLHD_RDBG_SKIP_DRAW,       "SKIP_DRAW"},
+    {TWLHD_RDBG_SKIP_CLEAR,      "SKIP_CLEAR"},
+    {TWLHD_RDBG_OFFICIAL_ATTR,   "OFFICIAL_ATTR"},
+    {TWLHD_RDBG_ORTHO,           "ORTHO"},
+    {TWLHD_RDBG_NO_STATE,        "NO_STATE"},
+    {TWLHD_RDBG_NO_UNIFORMS,     "NO_UNIFORMS"},
+    {TWLHD_RDBG_NO_BIND,         "NO_BIND"},
+    {TWLHD_RDBG_LAYOUT_FIXED48,  "FIXED48"},
+    {TWLHD_RDBG_LAYOUT_PACKED28, "PACKED28"},
+    {TWLHD_RDBG_LAYOUT_SPLIT,    "SPLIT"},
 };
 
 #define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
@@ -184,20 +196,20 @@ static void update_heartbeat(void) {
  * characters. Exact row budget:
  *   1  title + heartbeat
  *   1  subtitle
- *   7  flags
+ *  10  flags
  *   1  blank
  *   1  key legend
  *   1  "ORTHO,NO_STATE need L" hint
  *   1  status
  *   1  results header
- *   6  result rows
+ *   4  result rows
  *   1  markers header
- *   8  marker rows
+ *   6  marker rows
  *  ---
- *  29  total
+ *  28  total
  *
  * Visible-character budget check for every printf in this file:
- *   "TWL-HD arm11 diag v2"              20
+ *   "TWL-HD arm11 diag v3"              20
  *   "HARDWARE UNVERIFIED"               19
  *   "%c %-13s [%c]%s"                   21 max (1+1+13+1+3+2)
  *   "A=tog U/D=mv L=init B=1frm ..."    37
@@ -212,7 +224,7 @@ static void update_heartbeat(void) {
  */
 static void render_ui(const char *status) {
     consoleClear();
-    printf("TWL-HD arm11 diag v2\n");
+    printf("TWL-HD arm11 diag v3\n");
     printf("HARDWARE UNVERIFIED\n");
     print_flags();
     printf("\n");
@@ -264,14 +276,14 @@ static void probe_previous_frame(char *status, size_t status_size) {
         if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
             C3D_FrameEnd(0);
             completed = 1;
-            add_result("%02lX f%d OK k=%d",
+            add_result("%03lX f%d OK k=%d",
                        (unsigned long)effective_flags(), g_frame_count, k + 1);
             break;
         }
     }
 
     if (!completed) {
-        add_result("%02lX f%d STUCK %d",
+        add_result("%03lX f%d STUCK %d",
                    (unsigned long)effective_flags(), g_frame_count,
                    PROBE_VBLANKS);
         g_wedged = 1;
@@ -362,7 +374,7 @@ int main(void) {
                 if (draw_one_frame()) {
                     probe_previous_frame(status, sizeof status);
                 } else {
-                    add_result("%02lX f%d REFUSED",
+                    add_result("%03lX f%d REFUSED",
                                (unsigned long)effective_flags(),
                                g_frame_count);
                 }

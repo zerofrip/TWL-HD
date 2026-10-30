@@ -55,14 +55,21 @@ const char *renderer_result_string(int result);
 /* Per-frame runtime debug toggles. All default to zero so a normal build with
  * no flags set behaves exactly like the original renderer. Init-time flags
  * (ORTHO, NO_STATE) take effect on the next renderer_init(); draw-time flags
- * are checked every renderer_draw(). */
-#define TWLHD_RDBG_SKIP_DRAW      0x01u
-#define TWLHD_RDBG_SKIP_CLEAR     0x02u
-#define TWLHD_RDBG_OFFICIAL_ATTR  0x04u
-#define TWLHD_RDBG_ORTHO          0x08u
-#define TWLHD_RDBG_NO_STATE       0x10u
-#define TWLHD_RDBG_NO_UNIFORMS    0x20u
-#define TWLHD_RDBG_NO_BIND        0x40u
+ * are checked every renderer_draw().
+ *
+ * Layout flags are mutually exclusive; if several are set the precedence is
+ * OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_PACKED28 > LAYOUT_FIXED48, and the
+ * normal interleaved 48-byte layout is used when none are set. */
+#define TWLHD_RDBG_SKIP_DRAW       0x01u
+#define TWLHD_RDBG_SKIP_CLEAR      0x02u
+#define TWLHD_RDBG_OFFICIAL_ATTR   0x04u
+#define TWLHD_RDBG_ORTHO           0x08u
+#define TWLHD_RDBG_NO_STATE        0x10u
+#define TWLHD_RDBG_NO_UNIFORMS     0x20u
+#define TWLHD_RDBG_NO_BIND         0x40u
+#define TWLHD_RDBG_LAYOUT_FIXED48  0x80u
+#define TWLHD_RDBG_LAYOUT_PACKED28 0x100u
+#define TWLHD_RDBG_LAYOUT_SPLIT    0x200u
 
 void renderer_set_debug_flags(uint32_t flags);
 uint32_t renderer_get_debug_flags(void);

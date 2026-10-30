@@ -53,8 +53,16 @@ typedef struct {
     C3D_Mtx projection;
     C3D_Mtx modelview;
     C3D_Mtx pending_modelview;
-    int using_official_attr;
+    int layout_mode;
 } RendererState;
+
+typedef enum {
+    LAYOUT_NORMAL = 0,
+    LAYOUT_OFFICIAL,
+    LAYOUT_FIXED48,
+    LAYOUT_PACKED28,
+    LAYOUT_SPLIT,
+} LayoutMode;
 
 static RendererState g_renderer;
 
@@ -72,6 +80,13 @@ static uint32_t g_debug_flags;
 /* Positions-only buffer used when TWLHD_RDBG_OFFICIAL_ATTR is set, matching
  * the official simple_tri attribute/buffer layout. */
 static void *g_official_buf;
+
+/* Buffers for the draw-time layout bisection modes. Each is allocated lazily
+ * on first use and freed in renderer_shutdown(). */
+static void *g_fixed48_buf;
+static void *g_packed28_buf;
+static void *g_split_pos_buf;
+static void *g_split_clr_buf;
 
 void renderer_set_trace(TwlhdRendererTraceFn cb) {
     g_trace = cb;
@@ -210,6 +225,160 @@ static void setup_official_attr(void) {
     BufInfo_Add(buf_info, g_official_buf, sizeof(float) * 3, 1, 0x0);
 }
 
+static void setup_fixed48_attr(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    C3D_BufInfo *buf_info;
+
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
+    AttrInfo_AddFixed(attr_info, 1);
+    C3D_FixedAttribSet(1, 1.0f, 1.0f, 1.0f, 1.0f);
+
+    if (!g_fixed48_buf) {
+        g_fixed48_buf = linearAlloc(sizeof g_builtin_triangle);
+        if (g_fixed48_buf) {
+            memcpy(g_fixed48_buf, g_builtin_triangle,
+                   sizeof g_builtin_triangle);
+            GSPGPU_FlushDataCache(g_fixed48_buf,
+                                  (u32)sizeof g_builtin_triangle);
+        }
+    }
+
+    if (!g_fixed48_buf) return;
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_fixed48_buf, sizeof(TwlhdVertex), 1, 0x0);
+}
+
+static void setup_packed28_attr(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    C3D_BufInfo *buf_info;
+    int i;
+
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
+    AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4);
+
+    if (!g_packed28_buf) {
+        /* 3 vertices * (3 pos + 4 rgba) floats = 84 bytes. */
+        g_packed28_buf = linearAlloc(3 * 28);
+        if (g_packed28_buf) {
+            float *dst = (float *)g_packed28_buf;
+            for (i = 0; i < 3; i++) {
+                dst[0] = g_builtin_triangle[i].pos[0];
+                dst[1] = g_builtin_triangle[i].pos[1];
+                dst[2] = g_builtin_triangle[i].pos[2];
+                dst[3] = g_builtin_triangle[i].rgba[0];
+                dst[4] = g_builtin_triangle[i].rgba[1];
+                dst[5] = g_builtin_triangle[i].rgba[2];
+                dst[6] = g_builtin_triangle[i].rgba[3];
+                dst += 7;
+            }
+            GSPGPU_FlushDataCache(g_packed28_buf, (u32)(3 * 28));
+        }
+    }
+
+    if (!g_packed28_buf) return;
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_packed28_buf, 28, 2, 0x10);
+}
+
+static void setup_split_attr(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    C3D_BufInfo *buf_info;
+    int i;
+
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
+    AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4);
+
+    if (!g_split_pos_buf) {
+        g_split_pos_buf = linearAlloc(3 * sizeof(float[3]));
+        if (g_split_pos_buf) {
+            float (*dst)[3] = (float (*)[3])g_split_pos_buf;
+            for (i = 0; i < 3; i++) {
+                dst[i][0] = g_builtin_triangle[i].pos[0];
+                dst[i][1] = g_builtin_triangle[i].pos[1];
+                dst[i][2] = g_builtin_triangle[i].pos[2];
+            }
+            GSPGPU_FlushDataCache(g_split_pos_buf,
+                                  (u32)(3 * sizeof(float[3])));
+        }
+    }
+
+    if (!g_split_clr_buf) {
+        g_split_clr_buf = linearAlloc(3 * sizeof(float[4]));
+        if (g_split_clr_buf) {
+            float (*dst)[4] = (float (*)[4])g_split_clr_buf;
+            for (i = 0; i < 3; i++) {
+                dst[i][0] = g_builtin_triangle[i].rgba[0];
+                dst[i][1] = g_builtin_triangle[i].rgba[1];
+                dst[i][2] = g_builtin_triangle[i].rgba[2];
+                dst[i][3] = g_builtin_triangle[i].rgba[3];
+            }
+            GSPGPU_FlushDataCache(g_split_clr_buf,
+                                  (u32)(3 * sizeof(float[4])));
+        }
+    }
+
+    if (!g_split_pos_buf || !g_split_clr_buf) return;
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    /* Verified against devkitPro's multiple_buf example: permutation 0x0
+     * maps buffer A to attribute 0, permutation 0x1 maps buffer B to
+     * attribute 1. */
+    BufInfo_Add(buf_info, g_split_pos_buf, sizeof(float[3]), 1, 0x0);
+    BufInfo_Add(buf_info, g_split_clr_buf, sizeof(float[4]), 1, 0x1);
+}
+
+static LayoutMode compute_target_layout(void) {
+    if (g_debug_flags & TWLHD_RDBG_OFFICIAL_ATTR) return LAYOUT_OFFICIAL;
+    if (g_debug_flags & TWLHD_RDBG_LAYOUT_SPLIT) return LAYOUT_SPLIT;
+    if (g_debug_flags & TWLHD_RDBG_LAYOUT_PACKED28) return LAYOUT_PACKED28;
+    if (g_debug_flags & TWLHD_RDBG_LAYOUT_FIXED48) return LAYOUT_FIXED48;
+    return LAYOUT_NORMAL;
+}
+
+static int layout_buffer_ready(LayoutMode mode) {
+    switch (mode) {
+    case LAYOUT_OFFICIAL:  return g_official_buf != NULL;
+    case LAYOUT_FIXED48:   return g_fixed48_buf != NULL;
+    case LAYOUT_PACKED28:  return g_packed28_buf != NULL;
+    case LAYOUT_SPLIT:     return g_split_pos_buf != NULL &&
+                                  g_split_clr_buf != NULL;
+    default:               return 0;
+    }
+}
+
+static void apply_layout(LayoutMode mode) {
+    switch (mode) {
+    case LAYOUT_OFFICIAL:
+        renderer_trace("RDBG official attr");
+        setup_official_attr();
+        break;
+    case LAYOUT_FIXED48:
+        renderer_trace("RDBG fixed48 layout");
+        setup_fixed48_attr();
+        break;
+    case LAYOUT_PACKED28:
+        renderer_trace("RDBG packed28 layout");
+        setup_packed28_attr();
+        break;
+    case LAYOUT_SPLIT:
+        renderer_trace("RDBG split layout");
+        setup_split_attr();
+        break;
+    default:
+        renderer_trace("RDBG restore attr");
+        setup_normal_attr_buffer();
+        break;
+    }
+}
+
 /* Idempotent shutdown. The caller must NOT be inside a C3D frame:
  * C3D_RenderTargetDelete panics if C3D_FrameBegin was called without a matching
  * C3D_FrameEnd. */
@@ -242,6 +411,22 @@ void renderer_shutdown(void) {
         linearFree(g_official_buf);
         g_official_buf = NULL;
     }
+    if (g_fixed48_buf) {
+        linearFree(g_fixed48_buf);
+        g_fixed48_buf = NULL;
+    }
+    if (g_packed28_buf) {
+        linearFree(g_packed28_buf);
+        g_packed28_buf = NULL;
+    }
+    if (g_split_pos_buf) {
+        linearFree(g_split_pos_buf);
+        g_split_pos_buf = NULL;
+    }
+    if (g_split_clr_buf) {
+        linearFree(g_split_clr_buf);
+        g_split_clr_buf = NULL;
+    }
 
     if (g_renderer.c3d_inited) {
         C3D_Fini();
@@ -252,11 +437,10 @@ void renderer_shutdown(void) {
     g_renderer.vertex_count = 0;
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
-    g_renderer.using_official_attr = 0;
+    g_renderer.layout_mode = LAYOUT_NORMAL;
 }
 
 int renderer_init(void) {
-    C3D_AttrInfo *attr_info;
     C3D_TexEnv *tex_env;
     int result = TWLHD_RENDER_OK;
     int i;
@@ -326,16 +510,8 @@ int renderer_init(void) {
     }
 
     renderer_trace("attr");
-    attr_info = C3D_GetAttrInfo();
-    if (g_debug_flags & TWLHD_RDBG_OFFICIAL_ATTR) {
-        setup_official_attr();
-        g_renderer.using_official_attr = 1;
-    } else {
-        AttrInfo_Init(attr_info);
-        AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3); /* v0 = position */
-        AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
-        g_renderer.using_official_attr = 0;
-    }
+    g_renderer.layout_mode = compute_target_layout();
+    apply_layout(g_renderer.layout_mode);
 
     if (g_debug_flags & TWLHD_RDBG_ORTHO) {
         renderer_trace("OrthoTilt");
@@ -416,7 +592,7 @@ int renderer_use_builtin_triangle(void) {
 }
 
 void renderer_draw(void) {
-    int official;
+    LayoutMode target;
 
     if (!g_renderer.ready) return;
 
@@ -426,50 +602,45 @@ void renderer_draw(void) {
      * freed here. See upstream citro3d renderqueue.c/base.c, read from the
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
 
-    official = (g_debug_flags & TWLHD_RDBG_OFFICIAL_ATTR) ? 1 : 0;
-    if (official && !g_renderer.using_official_attr) {
-        renderer_trace("RDBG official attr");
-        setup_official_attr();
-        g_renderer.using_official_attr = 1;
-    } else if (!official && g_renderer.using_official_attr) {
-        renderer_trace("RDBG restore attr");
-        setup_normal_attr_buffer();
-        g_renderer.using_official_attr = 0;
+    target = compute_target_layout();
+    if (target != g_renderer.layout_mode) {
+        apply_layout(target);
+        g_renderer.layout_mode = target;
     }
 
-    if (official) {
-        if (g_official_buf) {
+    if (target == LAYOUT_NORMAL) {
+        if (g_renderer.slots.pending) {
+            C3D_BufInfo *pending_buf_info;
+
             renderer_trace("commit/BufInfo");
+            twlhd_geometry_slots_commit(&g_renderer.slots);
+
+            /* linearAlloc() memory is CPU-cached on 3DS; the GPU DMA/read path
+             * does not snoop the CPU cache, so the memcpy in stage() can leave
+             * stale lines unless flushed. Hang suspect #1: works in emulator,
+             * stalls on hardware. The Result is deliberately ignored; a silent
+             * failure would mask the fix, which is acceptable for this
+             * diagnostic build. HARDWARE UNVERIFIED (build-verified only);
+             * this build's purpose is real-hardware bisection. Do not deploy. */
+            GSPGPU_FlushDataCache(g_renderer.slots.active,
+                                  (u32)g_renderer.slots.active_size);
+
+            pending_buf_info = C3D_GetBufInfo();
+            BufInfo_Init(pending_buf_info);
+            BufInfo_Add(pending_buf_info, g_renderer.slots.active,
+                        sizeof(TwlhdVertex), 2, 0x10);
+
+            g_renderer.modelview = g_renderer.pending_modelview;
             if (g_debug_flags & TWLHD_RDBG_ORTHO) {
                 Mtx_Identity(&g_renderer.modelview);
-            } else {
-                g_renderer.modelview = g_renderer.pending_modelview;
             }
         }
-    } else if (g_renderer.slots.pending) {
-        C3D_BufInfo *pending_buf_info;
-
+    } else if (layout_buffer_ready(target)) {
         renderer_trace("commit/BufInfo");
-        twlhd_geometry_slots_commit(&g_renderer.slots);
-
-        /* linearAlloc() memory is CPU-cached on 3DS; the GPU DMA/read path
-         * does not snoop the CPU cache, so the memcpy in stage() can leave
-         * stale lines unless flushed. Hang suspect #1: works in emulator,
-         * stalls on hardware. The Result is deliberately ignored; a silent
-         * failure would mask the fix, which is acceptable for this
-         * diagnostic build. HARDWARE UNVERIFIED (build-verified only);
-         * this build's purpose is real-hardware bisection. Do not deploy. */
-        GSPGPU_FlushDataCache(g_renderer.slots.active,
-                              (u32)g_renderer.slots.active_size);
-
-        pending_buf_info = C3D_GetBufInfo();
-        BufInfo_Init(pending_buf_info);
-        BufInfo_Add(pending_buf_info, g_renderer.slots.active,
-                    sizeof(TwlhdVertex), 2, 0x10);
-
-        g_renderer.modelview = g_renderer.pending_modelview;
         if (g_debug_flags & TWLHD_RDBG_ORTHO) {
             Mtx_Identity(&g_renderer.modelview);
+        } else {
+            g_renderer.modelview = g_renderer.pending_modelview;
         }
     }
 
@@ -495,16 +666,16 @@ void renderer_draw(void) {
 
     if (!(g_debug_flags & TWLHD_RDBG_SKIP_DRAW)) {
         renderer_trace("DrawArrays");
-        if (official) {
-            if (g_official_buf && g_renderer.vertex_count != 0) {
-                /* g_official_buf always holds exactly 3 positions. */
-                uint32_t official_count = g_renderer.vertex_count;
-                if (official_count > 3) official_count = 3;
-                C3D_DrawArrays(GPU_TRIANGLES, 0, (int)official_count);
-            }
-        } else {
+        if (target == LAYOUT_NORMAL) {
             if (g_renderer.slots.active && g_renderer.vertex_count != 0) {
                 C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
+            }
+        } else if (layout_buffer_ready(target)) {
+            /* Layout-mode buffers always hold exactly 3 built-in vertices. */
+            uint32_t layout_count = g_renderer.vertex_count;
+            if (layout_count > 3) layout_count = 3;
+            if (layout_count != 0) {
+                C3D_DrawArrays(GPU_TRIANGLES, 0, (int)layout_count);
             }
         }
     }
