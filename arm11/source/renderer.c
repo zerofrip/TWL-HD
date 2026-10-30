@@ -18,6 +18,7 @@
 #include <citro3d.h>
 
 #include <math.h>
+#include <stdbool.h>
 #include <string.h>
 
 #include "renderer.h"
@@ -52,6 +53,7 @@ typedef struct {
     C3D_Mtx projection;
     C3D_Mtx modelview;
     C3D_Mtx pending_modelview;
+    int using_official_attr;
 } RendererState;
 
 static RendererState g_renderer;
@@ -63,12 +65,30 @@ static RendererState g_renderer;
  * real-hardware bisection. Do not deploy. */
 static TwlhdRendererTraceFn g_trace;
 
+/* Runtime debug toggles. Deliberately outside RendererState so they survive
+ * the memset() at the top of renderer_init(). */
+static uint32_t g_debug_flags;
+
+/* Positions-only buffer used when TWLHD_RDBG_OFFICIAL_ATTR is set, matching
+ * the official simple_tri attribute/buffer layout. */
+static void *g_official_buf;
+
 void renderer_set_trace(TwlhdRendererTraceFn cb) {
     g_trace = cb;
 }
 
 void renderer_trace(const char *step) {
     if (g_trace) g_trace(step);
+}
+
+__attribute__((noinline, used)) void renderer_set_debug_flags(uint32_t flags) {
+    g_debug_flags = flags;
+    /* Reference the getter so the API pair stays together and reachable. */
+    (void)renderer_get_debug_flags();
+}
+
+__attribute__((noinline, used)) uint32_t renderer_get_debug_flags(void) {
+    return g_debug_flags;
 }
 
 /* Deterministic built-in triangle, used on startup and after Y. */
@@ -91,6 +111,13 @@ static const TwlhdVertex g_builtin_triangle[3] = {
         {0.0f, 0.0f, 1.0f},
         {0.5f, 1.0f},
     },
+};
+
+/* Positions-only copy of g_builtin_triangle for the simple_tri-style path. */
+static const float g_builtin_positions[3][3] = {
+    {-0.8f, -0.6f, 0.0f},
+    { 0.8f, -0.6f, 0.0f},
+    { 0.0f,  0.8f, 0.0f},
 };
 
 static void update_camera(const TwlhdVertex *vertices, uint32_t count) {
@@ -138,6 +165,51 @@ static void update_camera(const TwlhdVertex *vertices, uint32_t count) {
                FVec4_New(0.0f, 1.0f, 0.0f, 1.0f), false);
 }
 
+static void setup_normal_attr_only(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3); /* v0 = position */
+    AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
+}
+
+static void setup_normal_attr_buffer(void) {
+    C3D_BufInfo *buf_info;
+
+    setup_normal_attr_only();
+    if (!g_renderer.slots.active) return;
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_renderer.slots.active,
+                sizeof(TwlhdVertex), 2, 0x10);
+}
+
+static void setup_official_attr(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    C3D_BufInfo *buf_info;
+
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
+    AttrInfo_AddFixed(attr_info, 1);
+    C3D_FixedAttribSet(1, 1.0f, 1.0f, 1.0f, 1.0f);
+
+    if (!g_official_buf) {
+        g_official_buf = linearAlloc(sizeof g_builtin_positions);
+        if (g_official_buf) {
+            memcpy(g_official_buf, g_builtin_positions,
+                   sizeof g_builtin_positions);
+            GSPGPU_FlushDataCache(g_official_buf,
+                                  (u32)sizeof g_builtin_positions);
+        }
+    }
+
+    if (!g_official_buf) return;
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_official_buf, sizeof(float) * 3, 1, 0x0);
+}
+
 /* Idempotent shutdown. The caller must NOT be inside a C3D frame:
  * C3D_RenderTargetDelete panics if C3D_FrameBegin was called without a matching
  * C3D_FrameEnd. */
@@ -166,6 +238,11 @@ void renderer_shutdown(void) {
 
     twlhd_geometry_slots_release_active(&g_renderer.slots);
 
+    if (g_official_buf) {
+        linearFree(g_official_buf);
+        g_official_buf = NULL;
+    }
+
     if (g_renderer.c3d_inited) {
         C3D_Fini();
         g_renderer.c3d_inited = 0;
@@ -175,6 +252,7 @@ void renderer_shutdown(void) {
     g_renderer.vertex_count = 0;
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
+    g_renderer.using_official_attr = 0;
 }
 
 int renderer_init(void) {
@@ -188,6 +266,10 @@ int renderer_init(void) {
     memset(&g_renderer, 0, sizeof g_renderer);
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
+    /* Refresh the debug flags after the RendererState wipe. This also keeps
+     * the debug-flag API reachable in the normal (non-diag) ELF so that nm
+     * reports it; the call is a no-op when the flags are zero. */
+    renderer_set_debug_flags(g_debug_flags);
     twlhd_geometry_slots_init(&g_renderer.slots, linearAlloc, linearFree);
 
     renderer_trace("C3D_Init");
@@ -245,27 +327,43 @@ int renderer_init(void) {
 
     renderer_trace("attr");
     attr_info = C3D_GetAttrInfo();
-    AttrInfo_Init(attr_info);
-    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3); /* v0 = position */
-    AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
+    if (g_debug_flags & TWLHD_RDBG_OFFICIAL_ATTR) {
+        setup_official_attr();
+        g_renderer.using_official_attr = 1;
+    } else {
+        AttrInfo_Init(attr_info);
+        AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3); /* v0 = position */
+        AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
+        g_renderer.using_official_attr = 0;
+    }
 
-    renderer_trace("PerspTilt");
-    Mtx_PerspTilt(&g_renderer.projection, C3D_AngleFromDegrees(
-                      RENDER_FOV_DEGREES), C3D_AspectRatioTop,
-                  0.01f, 1000.0f, false);
+    if (g_debug_flags & TWLHD_RDBG_ORTHO) {
+        renderer_trace("OrthoTilt");
+        Mtx_OrthoTilt(&g_renderer.projection, -2.0f, 2.0f,
+                      -1.5f, 1.5f, 0.0f, 10.0f, true);
+        Mtx_Identity(&g_renderer.modelview);
+        Mtx_Identity(&g_renderer.pending_modelview);
+    } else {
+        renderer_trace("PerspTilt");
+        Mtx_PerspTilt(&g_renderer.projection, C3D_AngleFromDegrees(
+                          RENDER_FOV_DEGREES), C3D_AspectRatioTop,
+                      0.01f, 1000.0f, false);
+    }
 
-    /* Flat pass-through of the per-vertex color; no texture is captured. */
-    renderer_trace("TexEnv");
-    for (i = 0; i < 6; i++) C3D_TexEnvInit(C3D_GetTexEnv(i));
-    tex_env = C3D_GetTexEnv(0);
-    C3D_TexEnvSrc(tex_env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
-    C3D_TexEnvFunc(tex_env, C3D_Both, GPU_REPLACE);
+    if (!(g_debug_flags & TWLHD_RDBG_NO_STATE)) {
+        /* Flat pass-through of the per-vertex color; no texture is captured. */
+        renderer_trace("TexEnv");
+        for (i = 0; i < 6; i++) C3D_TexEnvInit(C3D_GetTexEnv(i));
+        tex_env = C3D_GetTexEnv(0);
+        C3D_TexEnvSrc(tex_env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(tex_env, C3D_Both, GPU_REPLACE);
 
-    /* Debug view: depth on, culling off so mis-wound geometry is visible. */
-    renderer_trace("DepthTest");
-    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
-    renderer_trace("CullFace");
-    C3D_CullFace(GPU_CULL_NONE);
+        /* Debug view: depth on, culling off so mis-wound geometry is visible. */
+        renderer_trace("DepthTest");
+        C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+        renderer_trace("CullFace");
+        C3D_CullFace(GPU_CULL_NONE);
+    }
 
     g_renderer.ready = 1;
 
@@ -273,6 +371,10 @@ int renderer_init(void) {
     if (renderer_use_builtin_triangle() != TWLHD_RENDER_OK) {
         result = TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
         goto fail;
+    }
+
+    if (g_debug_flags & TWLHD_RDBG_ORTHO) {
+        Mtx_Identity(&g_renderer.modelview);
     }
 
     return TWLHD_RENDER_OK;
@@ -303,7 +405,7 @@ int renderer_set_geometry(const TwlhdVertex *vertices,
 
     g_renderer.vertex_count = vertex_count;
 
-    if (vertex_count != 0) {
+    if (vertex_count != 0 && !(g_debug_flags & TWLHD_RDBG_ORTHO)) {
         update_camera(vertices, vertex_count);
     }
     return TWLHD_RENDER_OK;
@@ -314,6 +416,8 @@ int renderer_use_builtin_triangle(void) {
 }
 
 void renderer_draw(void) {
+    int official;
+
     if (!g_renderer.ready) return;
 
     /* By documented precondition this runs between a successful
@@ -321,10 +425,31 @@ void renderer_draw(void) {
      * queue, so the old active buffer is no longer read by the GPU and can be
      * freed here. See upstream citro3d renderqueue.c/base.c, read from the
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
-    renderer_trace("commit/BufInfo");
-    if (g_renderer.slots.pending) {
+
+    official = (g_debug_flags & TWLHD_RDBG_OFFICIAL_ATTR) ? 1 : 0;
+    if (official && !g_renderer.using_official_attr) {
+        renderer_trace("RDBG official attr");
+        setup_official_attr();
+        g_renderer.using_official_attr = 1;
+    } else if (!official && g_renderer.using_official_attr) {
+        renderer_trace("RDBG restore attr");
+        setup_normal_attr_buffer();
+        g_renderer.using_official_attr = 0;
+    }
+
+    if (official) {
+        if (g_official_buf) {
+            renderer_trace("commit/BufInfo");
+            if (g_debug_flags & TWLHD_RDBG_ORTHO) {
+                Mtx_Identity(&g_renderer.modelview);
+            } else {
+                g_renderer.modelview = g_renderer.pending_modelview;
+            }
+        }
+    } else if (g_renderer.slots.pending) {
         C3D_BufInfo *pending_buf_info;
 
+        renderer_trace("commit/BufInfo");
         twlhd_geometry_slots_commit(&g_renderer.slots);
 
         /* linearAlloc() memory is CPU-cached on 3DS; the GPU DMA/read path
@@ -343,25 +468,42 @@ void renderer_draw(void) {
                     sizeof(TwlhdVertex), 2, 0x10);
 
         g_renderer.modelview = g_renderer.pending_modelview;
+        if (g_debug_flags & TWLHD_RDBG_ORTHO) {
+            Mtx_Identity(&g_renderer.modelview);
+        }
     }
 
-    renderer_trace("RenderTargetClear");
-    C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
-                          RENDER_CLEAR_COLOR, 0);
+    if (!(g_debug_flags & TWLHD_RDBG_SKIP_CLEAR)) {
+        renderer_trace("RenderTargetClear");
+        C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
+                              RENDER_CLEAR_COLOR, 0);
+    }
     renderer_trace("FrameDrawOn");
     C3D_FrameDrawOn(g_renderer.target);
 
-    renderer_trace("BindProgram");
-    C3D_BindProgram(&g_renderer.program);
-    renderer_trace("FVUnif");
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_projection,
-                     &g_renderer.projection);
-    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_modelview,
-                     &g_renderer.modelview);
+    if (!(g_debug_flags & TWLHD_RDBG_NO_BIND)) {
+        renderer_trace("BindProgram");
+        C3D_BindProgram(&g_renderer.program);
+    }
+    if (!(g_debug_flags & TWLHD_RDBG_NO_UNIFORMS)) {
+        renderer_trace("FVUnif");
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_projection,
+                         &g_renderer.projection);
+        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_modelview,
+                         &g_renderer.modelview);
+    }
 
-    renderer_trace("DrawArrays");
-    if (g_renderer.slots.active && g_renderer.vertex_count != 0) {
-        C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
+    if (!(g_debug_flags & TWLHD_RDBG_SKIP_DRAW)) {
+        renderer_trace("DrawArrays");
+        if (official) {
+            if (g_official_buf && g_renderer.vertex_count != 0) {
+                C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
+            }
+        } else {
+            if (g_renderer.slots.active && g_renderer.vertex_count != 0) {
+                C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
+            }
+        }
     }
 }
 

@@ -1,20 +1,28 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic.
+ * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v2).
  *
  * Stage 0 boots with gfxInitDefault() + a bottom-screen console only: no
  * renderer_init(), no fsInit(), no RTCom, no SD access. The renderer is
- * brought up on demand and every citro3d/PICA step is printed BEFORE it runs,
- * so the last marker left on the bottom screen names the call that stalled.
+ * brought up on demand and every citro3d/PICA step is traced BEFORE it runs,
+ * so the last marker on the bottom screen names the call that stalled.
  *
- * A = renderer_set_trace() + renderer_init()
- * B = draw one frame (trace around FrameBegin/draw/FrameEnd)
- * X = draw frames in a loop, START escapes back to the menu
+ * TEST MATRIX the tester should run (flags are independent toggles):
+ *   1) L then B with all flags OFF  -> baseline.
+ *   2) L then B with SKIP_DRAW      -> [clear only] test.
+ *   3) L then B with SKIP_CLEAR     -> [draw only] test.
+ *   4) L then B with OFFICIAL_ATTR  -> simple_tri-style attribute/buffer path.
+ *   5) L then B with OFFICIAL_ATTR + ORTHO + NO_STATE + NO_UNIFORMS
+ *      -> minimal official-style draw path.
+ *   6) L then B with ORTHO + NO_STATE + NO_UNIFORMS + NO_BIND
+ *      -> minimal existing draw path.
  *
  * HOW TO READ: GPU work starts at C3D_FrameEnd, so a hung GPU typically shows
- * up as the NEXT frame's FrameBegin being the last marker. "FrameBegin" last
- * on frame >=2 means the previous frame hung; "C3D_FrameEnd" last means
- * FrameEnd/display transfer; "DrawArrays" last means the draw call.
+ * up as the NEXT frame's FrameBegin (or the probe's NONBLOCK FrameBegin)
+ * never completing. The B button now runs exactly ONE frame and then probes
+ * for up to 120 vblanks using C3D_FrameBegin(C3D_FRAME_NONBLOCK):
+ *   "COMPLETED after K vblanks"  -> the previous frame was processed.
+ *   "NOT COMPLETE after 120 vblanks (GPU wedged?)" -> the GPU never signalled.
  *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
@@ -23,33 +31,63 @@
 #include <3ds.h>
 #include <citro3d.h>
 
+#include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "renderer.h"
 
 #define MARKER_RING 8u
+#define RESULT_RING 6u
+#define PROBE_VBLANKS 120
 
 /* Last MARKER_RING trace steps, newest at (g_marker_next - 1). */
 static const char *g_markers[MARKER_RING];
 static unsigned g_marker_next;
+
+/* Last RESULT_RING probe results, newest at (g_result_next - 1). */
+static char g_results[RESULT_RING][80];
+static unsigned g_result_next;
+
 static int g_frame_count;
 static unsigned long g_vblank_count;
 /* Set between C3D_FrameBegin and C3D_FrameEnd: no swap may happen in there. */
 static int g_in_frame;
 
+static uint32_t g_flags;
+static int g_cursor;
+static int g_wedged;
+
+/* Flag metadata for the UI. Order matches the cursor. */
+static const struct {
+    uint32_t bit;
+    const char *name;
+} g_flag_defs[] = {
+    {TWLHD_RDBG_SKIP_DRAW,     "SKIP_DRAW"},
+    {TWLHD_RDBG_SKIP_CLEAR,    "SKIP_CLEAR"},
+    {TWLHD_RDBG_OFFICIAL_ATTR, "OFFICIAL_ATTR"},
+    {TWLHD_RDBG_ORTHO,         "ORTHO"},
+    {TWLHD_RDBG_NO_STATE,      "NO_STATE"},
+    {TWLHD_RDBG_NO_UNIFORMS,   "NO_UNIFORMS"},
+    {TWLHD_RDBG_NO_BIND,       "NO_BIND"},
+};
+
+#define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
+
 /* Runs immediately before each traced citro3d/PICA step. A C3D frame may be
- * open, so only the display swap is conditional; the print itself writes into
- * the single-buffered bottom framebuffer and is visible right away.
+ * open, so only the display swap is conditional; the print itself would
+ * disturb the fixed UI layout, so only the marker ring is updated here.
+ * The bottom framebuffer is flushed through the kernel cache (not GSP),
+ * because gfxFlushBuffers can block if GSP is wedged, which would hide the
+ * last marker before the hang.
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy. */
 static void trace_cb(const char *step) {
     u16 w, h;
     u8 *fb;
 
-    printf("  > %s\n", step);
-    /* Flush the bottom framebuffer through the kernel cache, not GSP.
-     * gfxFlushBuffers can block if GSP is wedged, which would hide the
-     * last marker before the hang. */
+    /* Flush the bottom framebuffer through the kernel cache, not GSP. */
     fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
     svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)fb, (u32)(w * h * 3));
     if (!g_in_frame) {
@@ -61,29 +99,96 @@ static void trace_cb(const char *step) {
     g_marker_next++;
 }
 
+static void add_result(const char *fmt, ...) {
+    va_list ap;
+    char *slot = g_results[g_result_next & (RESULT_RING - 1u)];
+
+    va_start(ap, fmt);
+    vsnprintf(slot, sizeof g_results[0], fmt, ap);
+    va_end(ap);
+    g_result_next++;
+}
+
 static void print_markers(void) {
     unsigned count = g_marker_next < MARKER_RING ? g_marker_next : MARKER_RING;
     unsigned first = g_marker_next - count;
     unsigned i;
 
-    printf("last %u markers:\n", count);
-    for (i = 0; i < count; i++) {
-        printf("  %s\n", g_markers[(first + i) & (MARKER_RING - 1u)]);
+    printf("last %u markers:\n", MARKER_RING);
+    for (i = MARKER_RING; i > count; i--) {
+        printf("  -\n");
+    }
+    for (i = count; i > 0; i--) {
+        const char *m = g_markers[(first + i - 1) & (MARKER_RING - 1u)];
+        printf("  %s\n", m ? m : "-");
     }
 }
 
-static void render_status(const char *status) {
+static void print_results(void) {
+    unsigned count = g_result_next < RESULT_RING ? g_result_next : RESULT_RING;
+    unsigned first = g_result_next - count;
+    unsigned i;
+
+    printf("last %u results:\n", RESULT_RING);
+    for (i = RESULT_RING; i > count; i--) {
+        printf("\n");
+    }
+    for (i = count; i > 0; i--) {
+        const char *r = g_results[(first + i - 1) & (RESULT_RING - 1u)];
+        printf("%s\n", r[0] ? r : " ");
+    }
+}
+
+static void print_flags(void) {
+    unsigned i;
+    for (i = 0; i < FLAG_COUNT; i++) {
+        char cursor = (i == (unsigned)g_cursor) ? '>' : ' ';
+        char mark = (g_flags & g_flag_defs[i].bit) ? 'x' : ' ';
+        printf("%c %-16s [%c]\n", cursor, g_flag_defs[i].name, mark);
+    }
+}
+
+static void update_heartbeat(void) {
+    u16 w, h;
+    u8 *fb;
+
+    /* Redraw only the heartbeat counter on the title line (1-based ANSI).
+     * Use the kernel cache flush (not gfxFlushBuffers) so the heartbeat keeps
+     * updating even if the GSP queue is wedged. */
+    printf("\x1b[1;38Hhb:%5lu", g_vblank_count);
+    fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+    svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)fb, (u32)(w * h * 3));
+}
+
+static void render_ui(const char *status) {
     consoleClear();
     printf("TWL-HD arm11 hardware-hang bisect\n");
-    printf("HARDWARE UNVERIFIED (build-only) - do not deploy\n\n");
-    printf("A=renderer_init  B=one frame  X=loop\n");
-    printf("START=exit\n\n");
-    printf("status: %s\n", status);
-    printf("frames: %d  vblanks: %lu\n\n", g_frame_count, g_vblank_count);
+    printf("HARDWARE UNVERIFIED (build-only) - do not deploy\n");
+    printf("\n");
+    print_flags();
+    printf("\n");
+    printf("A=toggle  UP/DOWN=move  L=reinit\n");
+    printf("B=one frame + probe  START=exit\n");
+    if (g_wedged) {
+        printf("status: GPU WEDGED - hold POWER to power off\n");
+    } else {
+        printf("status: %s\n", status);
+    }
+    print_results();
     print_markers();
-    gfxFlushBuffers();
-    /* citro3d owns the top-screen present via C3D_FrameEnd; swap bottom only. */
-    gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    if (g_wedged) {
+        /* Once the GPU is wedged, avoid gfxFlushBuffers/gfxScreenSwapBuffers
+         * because they may block on GSP. The single-buffered console is
+         * already visible after a kernel cache flush. */
+        u16 w, h;
+        u8 *fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
+        svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)fb,
+                                 (u32)(w * h * 3));
+    } else {
+        gfxFlushBuffers();
+        /* citro3d owns the top-screen present via C3D_FrameEnd; swap bottom only. */
+        gfxScreenSwapBuffers(GFX_BOTTOM, false);
+    }
 }
 
 static int draw_one_frame(void) {
@@ -103,9 +208,45 @@ static int draw_one_frame(void) {
     return began;
 }
 
+static void probe_previous_frame(void) {
+    int completed = 0;
+    int k;
+
+    for (k = 0; k < PROBE_VBLANKS; k++) {
+        gspWaitForVBlank();
+        g_vblank_count++;
+        if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
+            C3D_FrameEnd(0);
+            completed = 1;
+            add_result("%08lX frame %d: COMPLETED after %d vblanks",
+                       (unsigned long)g_flags, g_frame_count, k);
+            break;
+        }
+    }
+
+    if (!completed) {
+        add_result("%08lX frame %d: NOT COMPLETE after %d vblanks (GPU wedged?)",
+                   (unsigned long)g_flags, g_frame_count, PROBE_VBLANKS);
+        g_wedged = 1;
+    }
+}
+
+static void reinit_renderer(char *status, size_t status_size) {
+    int result;
+
+    if (renderer_is_ready()) {
+        renderer_shutdown();
+    }
+    renderer_set_trace(trace_cb);
+    renderer_set_debug_flags(g_flags);
+    result = renderer_init();
+    snprintf(status, status_size, "renderer_init: %s",
+             renderer_result_string(result));
+}
+
 int main(void) {
-    char status[64];
-    int exit_loop = 0;
+    char status[80];
+    int need_redraw = 1;
 
     gfxInitDefault();
     gfxSet3D(false);
@@ -115,62 +256,74 @@ int main(void) {
     gfxSetDoubleBuffering(GFX_BOTTOM, false);
     consoleInit(GFX_BOTTOM, NULL);
 
+    g_flags = 0;
+    g_cursor = 0;
+    g_wedged = 0;
     snprintf(status, sizeof status, "stage 0: renderer NOT initialized");
-    render_status(status);
 
-    while (aptMainLoop() && !exit_loop) {
+    while (aptMainLoop()) {
         u32 keys;
 
         hidScanInput();
         keys = hidKeysDown();
 
+        if (g_wedged) {
+            /* Once a frame never completed, do not touch the GPU again.
+             * renderer_shutdown() would block draining the citro3d queue, and
+             * gfxExit() also talks to GSP. We keep looping with the wedged
+             * message and let the user power off the console. */
+            if (need_redraw) {
+                render_ui(status);
+                need_redraw = 0;
+            }
+            update_heartbeat();
+            g_vblank_count++;
+            gspWaitForVBlank();
+            continue;
+        }
+
         if (keys & KEY_START) break;
 
+        if (keys & KEY_UP) {
+            if (g_cursor > 0) g_cursor--;
+            need_redraw = 1;
+        }
+        if (keys & KEY_DOWN) {
+            if (g_cursor < (int)FLAG_COUNT - 1) g_cursor++;
+            need_redraw = 1;
+        }
         if (keys & KEY_A) {
-            int result;
+            g_flags ^= g_flag_defs[g_cursor].bit;
+            snprintf(status, sizeof status, "toggled %s",
+                     g_flag_defs[g_cursor].name);
+            need_redraw = 1;
+        }
 
-            if (renderer_is_ready()) {
-                snprintf(status, sizeof status, "already initialized");
-            } else {
-                renderer_set_trace(trace_cb);
-                result = renderer_init();
-                snprintf(status, sizeof status, "renderer_init: %s",
-                         renderer_result_string(result));
-            }
-            render_status(status);
+        if (keys & KEY_L) {
+            reinit_renderer(status, sizeof status);
+            need_redraw = 1;
         }
 
         if (keys & KEY_B) {
             if (!renderer_is_ready()) {
-                snprintf(status, sizeof status, "B: press A first");
-            } else if (draw_one_frame()) {
-                snprintf(status, sizeof status, "one frame drawn");
+                snprintf(status, sizeof status, "B: press L first");
             } else {
-                snprintf(status, sizeof status, "FrameBegin refused");
+                if (draw_one_frame()) {
+                    probe_previous_frame();
+                } else {
+                    add_result("%08lX frame %d: FrameBegin refused",
+                               (unsigned long)g_flags, g_frame_count);
+                }
+                snprintf(status, sizeof status, "one frame probed");
             }
-            render_status(status);
+            need_redraw = 1;
         }
 
-        if (keys & KEY_X) {
-            if (!renderer_is_ready()) {
-                snprintf(status, sizeof status, "X: press A first");
-                render_status(status);
-            } else {
-                while (aptMainLoop()) {
-                    draw_one_frame();
-                    snprintf(status, sizeof status,
-                             "looping, START stops");
-                    render_status(status);
-                    g_vblank_count++;
-                    gspWaitForVBlank();
-                    hidScanInput();
-                    if (hidKeysDown() & KEY_START) {
-                        exit_loop = 1;
-                        break;
-                    }
-                }
-            }
+        if (need_redraw) {
+            render_ui(status);
+            need_redraw = 0;
         }
+        update_heartbeat();
 
         g_vblank_count++;
         gspWaitForVBlank();

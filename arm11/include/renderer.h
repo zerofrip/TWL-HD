@@ -52,6 +52,21 @@ int renderer_is_ready(void);
 uint32_t renderer_vertex_count(void);
 const char *renderer_result_string(int result);
 
+/* Per-frame runtime debug toggles. All default to zero so a normal build with
+ * no flags set behaves exactly like the original renderer. Init-time flags
+ * (ORTHO, NO_STATE) take effect on the next renderer_init(); draw-time flags
+ * are checked every renderer_draw(). */
+#define TWLHD_RDBG_SKIP_DRAW      0x01u
+#define TWLHD_RDBG_SKIP_CLEAR     0x02u
+#define TWLHD_RDBG_OFFICIAL_ATTR  0x04u
+#define TWLHD_RDBG_ORTHO          0x08u
+#define TWLHD_RDBG_NO_STATE       0x10u
+#define TWLHD_RDBG_NO_UNIFORMS    0x20u
+#define TWLHD_RDBG_NO_BIND        0x40u
+
+void renderer_set_debug_flags(uint32_t flags);
+uint32_t renderer_get_debug_flags(void);
+
 /* Diagnostic trace hook. renderer_trace() calls the installed callback (if
  * any) immediately BEFORE the named citro3d/PICA step, so the last step seen
  * names the call that stalled. The hook defaults to NULL, in which case
