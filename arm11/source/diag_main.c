@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v3).
+ * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v4).
  *
  * Stage 0 boots with gfxInitDefault() + a bottom-screen console only: no
  * renderer_init(), no fsInit(), no RTCom, no SD access. The renderer is
@@ -19,13 +19,20 @@
  *   7) L then B with FIXED48        -> one loader, fixed white, stride 48.
  *   8) L then B with PACKED28       -> two loaders, 28-byte packed buffer.
  *   9) L then B with SPLIT          -> two loaders, two non-interleaved buffers.
- *  10) L then B with NORMAL_COPY    -> normal layout from private 48-byte copy.
+ *  10) L then B with STRIDE         -> two loaders, parametric stride/count/pad.
+ *  11) L then B with NORMAL_COPY    -> normal layout from private 48-byte copy.
  *
  * Layout flags are mutually exclusive. If several are set the renderer uses
  * this precedence:
- *   OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_PACKED28 > LAYOUT_FIXED48
- *     > LAYOUT_NORMAL_COPY
+ *   OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_STRIDE > LAYOUT_PACKED28
+ *     > LAYOUT_FIXED48 > LAYOUT_NORMAL_COPY
  * and falls back to the normal 48-byte interleaved layout when none are set.
+ *
+ * STRIDE PARAMETERS (adjust with LEFT/RIGHT on the parameter rows):
+ *   STRIDE  {28,32,36,40,44,48,52,56,64,96} bytes
+ *   VERTS   {3,6,36,300,3000} vertices (multiple of 3)
+ *   PAD     {0,256,4096} bytes
+ * Parameters take effect on the next B together with renderer_set_debug_flags().
  *
  * HOW TO READ: GPU work starts at C3D_FrameEnd, so a hung GPU typically shows
  * up as the NEXT frame's FrameBegin (or the probe's NONBLOCK FrameBegin)
@@ -33,10 +40,14 @@
  * for up to 120 vblanks using C3D_FrameBegin(C3D_FRAME_NONBLOCK):
  *   "COMPLETED after K vblanks"  -> the previous frame was processed.
  *   "NOT COMPLETE after 120 vblanks (GPU wedged?)" -> the GPU never signalled.
- * Result lines are flagged with the effective hex mask (%03lX, 0..0x7FF).
+ * Result lines show the effective hex mask (%03lX) and the active stride,
+ * vertex count and pad: %03lX s%u v%u p%u f%d OK k=%d
+ *                                            ... STUCK 120.
  *
- * Bisection ladder for the two-loader/stride-48 vs. slots.active buffer path:
- *   OFFICIAL_ATTR -> FIXED48 -> NORMAL_COPY -> NORMAL.
+ * Bisection plan:
+ *   - stride sweep at VERTS=3 PAD=0 across the STRIDE presets;
+ *   - size test at STRIDE=28 with VERTS 36/300/3000;
+ *   - buffer-size test at STRIDE=48 with PAD=4096.
  *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
@@ -52,8 +63,8 @@
 
 #include "renderer.h"
 
-#define MARKER_RING 6u
-#define RESULT_RING 4u
+#define MARKER_RING 5u
+#define RESULT_RING 3u
 #define PROBE_VBLANKS 120
 
 /* Ring indexing uses modulo (%), so the sizes do not need to be powers of two.
@@ -84,20 +95,51 @@ static const struct {
     uint32_t bit;
     const char *name;
 } g_flag_defs[] = {
-    {TWLHD_RDBG_SKIP_DRAW,       "SKIP_DRAW"},
-    {TWLHD_RDBG_SKIP_CLEAR,      "SKIP_CLEAR"},
-    {TWLHD_RDBG_OFFICIAL_ATTR,   "OFFICIAL_ATTR"},
-    {TWLHD_RDBG_ORTHO,           "ORTHO"},
-    {TWLHD_RDBG_NO_STATE,        "NO_STATE"},
-    {TWLHD_RDBG_NO_UNIFORMS,     "NO_UNIFORMS"},
-    {TWLHD_RDBG_NO_BIND,         "NO_BIND"},
+    {TWLHD_RDBG_SKIP_DRAW,         "SKIP_DRAW"},
+    {TWLHD_RDBG_SKIP_CLEAR,        "SKIP_CLEAR"},
+    {TWLHD_RDBG_OFFICIAL_ATTR,     "OFFICIAL_ATTR"},
+    {TWLHD_RDBG_ORTHO,             "ORTHO"},
+    {TWLHD_RDBG_NO_STATE,          "NO_STATE"},
+    {TWLHD_RDBG_NO_UNIFORMS,       "NO_UNIFORMS"},
+    {TWLHD_RDBG_NO_BIND,           "NO_BIND"},
     {TWLHD_RDBG_LAYOUT_FIXED48,    "FIXED48"},
     {TWLHD_RDBG_LAYOUT_PACKED28,   "PACKED28"},
     {TWLHD_RDBG_LAYOUT_SPLIT,      "SPLIT"},
+    {TWLHD_RDBG_LAYOUT_STRIDE,     "STRIDE"},
     {TWLHD_RDBG_LAYOUT_NORMAL_COPY,"NORMAL_COPY"},
 };
 
 #define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
+
+/* Parameter rows that follow the flag rows in the UI. */
+#define PARAM_COUNT 3
+
+static const char *g_param_names[PARAM_COUNT] = {
+    "STRIDE", "VERTS", "PAD"
+};
+
+static uint32_t g_param_values[PARAM_COUNT] = {
+    48, 3, 0
+};
+
+static const uint32_t g_stride_presets[] = {
+    28, 32, 36, 40, 44, 48, 52, 56, 64, 96
+};
+static const uint32_t g_verts_presets[] = {
+    3, 6, 36, 300, 3000
+};
+static const uint32_t g_pad_presets[] = {
+    0, 256, 4096
+};
+
+static const struct {
+    const uint32_t *presets;
+    unsigned count;
+} g_param_presets[PARAM_COUNT] = {
+    {g_stride_presets, sizeof g_stride_presets / sizeof g_stride_presets[0]},
+    {g_verts_presets,  sizeof g_verts_presets  / sizeof g_verts_presets[0]},
+    {g_pad_presets,    sizeof g_pad_presets    / sizeof g_pad_presets[0]},
+};
 
 /* Flags that affect renderer_init() only; all other flags are read at draw
  * time and can be changed without re-initializing. */
@@ -174,18 +216,48 @@ static void print_results(void) {
     }
 }
 
-static void print_flags(void) {
+static int param_preset_index(unsigned param) {
+    const uint32_t *presets = g_param_presets[param].presets;
+    unsigned count = g_param_presets[param].count;
     unsigned i;
-    for (i = 0; i < FLAG_COUNT; i++) {
+    for (i = 0; i < count; i++) {
+        if (presets[i] == g_param_values[param]) return (int)i;
+    }
+    return 0;
+}
+
+static void adjust_param(unsigned param, int delta) {
+    const uint32_t *presets = g_param_presets[param].presets;
+    unsigned count = g_param_presets[param].count;
+    int idx = param_preset_index(param);
+    idx += delta;
+    while (idx < 0) idx += (int)count;
+    while (idx >= (int)count) idx -= (int)count;
+    g_param_values[param] = presets[idx];
+}
+
+static void print_menu(void) {
+    unsigned i;
+    unsigned total_rows = FLAG_COUNT + PARAM_COUNT;
+
+    for (i = 0; i < total_rows; i++) {
         char cursor = (i == (unsigned)g_cursor) ? '>' : ' ';
-        char mark = (g_flags & g_flag_defs[i].bit) ? 'x' : ' ';
-        const char *hint = "";
-        if ((g_flag_defs[i].bit & INIT_FLAGS) &&
-            ((g_flags & g_flag_defs[i].bit) !=
-             (g_init_flags & g_flag_defs[i].bit))) {
-            hint = " *";
+        if (i < FLAG_COUNT) {
+            char mark = (g_flags & g_flag_defs[i].bit) ? 'x' : ' ';
+            const char *hint = "";
+            if ((g_flag_defs[i].bit & INIT_FLAGS) &&
+                ((g_flags & g_flag_defs[i].bit) !=
+                 (g_init_flags & g_flag_defs[i].bit))) {
+                hint = " *";
+            }
+            printf("%c %-13s [%c]%s\n",
+                   cursor, g_flag_defs[i].name, mark, hint);
+        } else {
+            unsigned p = i - FLAG_COUNT;
+            printf("%c %-8s [%lu]\n",
+                   cursor, g_param_names[p],
+                   (unsigned long)g_param_values[p]);
         }
-        printf("%c %-13s [%c]%s\n", cursor, g_flag_defs[i].name, mark, hint);
     }
 }
 
@@ -206,24 +278,23 @@ static void update_heartbeat(void) {
  * most 29 newline-terminated rows. Every printed line must be <=39 visible
  * characters. Exact row budget:
  *   1  title + heartbeat
- *   1  subtitle
- *  11  flags
- *   1  blank
+ *  12  flags
+ *   3  parameter rows
  *   1  key legend
  *   1  "ORTHO,NO_STATE need L" hint
  *   1  status
  *   1  results header
- *   4  result rows
+ *   3  result rows
  *   1  markers header
- *   6  marker rows
+ *   5  marker rows
  *  ---
  *  29  total
  *
  * Visible-character budget check for every printf in this file:
- *   "TWL-HD arm11 diag v3"              20
- *   "HARDWARE UNVERIFIED"               19
+ *   "TWL-HD arm11 diag v4"              21
  *   "%c %-13s [%c]%s"                   21 max (1+1+13+1+3+2)
- *   "A=tog U/D=mv L=init B=1frm ..."    37
+ *   "%c %-8s [%lu]"                     21 max (1+1+8+1+5+4)
+ *   "A=tog U/D=mv L/R=adj L=init B=go"  34
  *   "ORTHO,NO_STATE need L"             21
  *   "status: %.31s"                     39
  *   "last %u results:"                  15
@@ -235,11 +306,9 @@ static void update_heartbeat(void) {
  */
 static void render_ui(const char *status) {
     consoleClear();
-    printf("TWL-HD arm11 diag v3\n");
-    printf("HARDWARE UNVERIFIED\n");
-    print_flags();
-    printf("\n");
-    printf("A=tog U/D=mv L=init B=1frm START=exit\n");
+    printf("TWL-HD arm11 diag v4\n");
+    print_menu();
+    printf("A=tog U/D=mv L/R=adj L=init B=go\n");
     printf("ORTHO,NO_STATE need L\n");
     printf("status: %.31s\n", status);
     print_results();
@@ -287,15 +356,19 @@ static void probe_previous_frame(char *status, size_t status_size) {
         if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
             C3D_FrameEnd(0);
             completed = 1;
-            add_result("%03lX f%d OK k=%d",
-                       (unsigned long)effective_flags(), g_frame_count, k + 1);
+            add_result("%03lX s%u v%u p%u f%d OK k=%d",
+                       (unsigned long)effective_flags(),
+                       (unsigned)g_param_values[0], (unsigned)g_param_values[1],
+                       (unsigned)g_param_values[2], g_frame_count, k + 1);
             break;
         }
     }
 
     if (!completed) {
-        add_result("%03lX f%d STUCK %d",
-                   (unsigned long)effective_flags(), g_frame_count,
+        add_result("%03lX s%u v%u p%u f%d STUCK %d",
+                   (unsigned long)effective_flags(),
+                   (unsigned)g_param_values[0], (unsigned)g_param_values[1],
+                   (unsigned)g_param_values[2], g_frame_count,
                    PROBE_VBLANKS);
         g_wedged = 1;
         snprintf(status, status_size, "GPU WEDGED - hold POWER");
@@ -309,6 +382,9 @@ static void reinit_renderer(char *status, size_t status_size) {
         renderer_shutdown();
     }
     renderer_set_trace(trace_cb);
+    renderer_set_debug_stride(g_param_values[0]);
+    renderer_set_debug_vertex_count(g_param_values[1]);
+    renderer_set_debug_pad(g_param_values[2]);
     renderer_set_debug_flags(g_flags);
     g_init_flags = g_flags;
     result = renderer_init();
@@ -362,14 +438,29 @@ int main(void) {
             need_redraw = 1;
         }
         if (keys & KEY_DOWN) {
-            if (g_cursor < (int)FLAG_COUNT - 1) g_cursor++;
+            if (g_cursor < (int)(FLAG_COUNT + PARAM_COUNT) - 1) g_cursor++;
             need_redraw = 1;
         }
         if (keys & KEY_A) {
-            g_flags ^= g_flag_defs[g_cursor].bit;
-            snprintf(status, sizeof status, "toggled %s",
-                     g_flag_defs[g_cursor].name);
+            if (g_cursor < (int)FLAG_COUNT) {
+                g_flags ^= g_flag_defs[g_cursor].bit;
+                snprintf(status, sizeof status, "toggled %s",
+                         g_flag_defs[g_cursor].name);
+            }
+            /* A on a parameter row does nothing. */
             need_redraw = 1;
+        }
+        if (keys & KEY_LEFT) {
+            if (g_cursor >= (int)FLAG_COUNT) {
+                adjust_param((unsigned)g_cursor - FLAG_COUNT, -1);
+                need_redraw = 1;
+            }
+        }
+        if (keys & KEY_RIGHT) {
+            if (g_cursor >= (int)FLAG_COUNT) {
+                adjust_param((unsigned)g_cursor - FLAG_COUNT, 1);
+                need_redraw = 1;
+            }
         }
 
         if (keys & KEY_L) {
@@ -381,12 +472,18 @@ int main(void) {
             if (!renderer_is_ready()) {
                 snprintf(status, sizeof status, "B: press L first");
             } else {
+                renderer_set_debug_stride(g_param_values[0]);
+                renderer_set_debug_vertex_count(g_param_values[1]);
+                renderer_set_debug_pad(g_param_values[2]);
                 renderer_set_debug_flags(g_flags);
                 if (draw_one_frame()) {
                     probe_previous_frame(status, sizeof status);
                 } else {
-                    add_result("%03lX f%d REFUSED",
+                    add_result("%03lX s%u v%u p%u f%d REFUSED",
                                (unsigned long)effective_flags(),
+                               (unsigned)g_param_values[0],
+                               (unsigned)g_param_values[1],
+                               (unsigned)g_param_values[2],
                                g_frame_count);
                 }
                 if (!g_wedged) {

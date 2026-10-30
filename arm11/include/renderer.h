@@ -58,9 +58,9 @@ const char *renderer_result_string(int result);
  * are checked every renderer_draw().
  *
  * Layout flags are mutually exclusive; if several are set the precedence is
- * OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_PACKED28 > LAYOUT_FIXED48 >
- * LAYOUT_NORMAL_COPY, and the normal interleaved 48-byte layout is used when
- * none are set. */
+ * OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_STRIDE > LAYOUT_PACKED28 >
+ * LAYOUT_FIXED48 > LAYOUT_NORMAL_COPY, and the normal interleaved 48-byte
+ * layout is used when none are set. */
 #define TWLHD_RDBG_SKIP_DRAW         0x01u
 #define TWLHD_RDBG_SKIP_CLEAR        0x02u
 #define TWLHD_RDBG_OFFICIAL_ATTR     0x04u
@@ -71,10 +71,18 @@ const char *renderer_result_string(int result);
 #define TWLHD_RDBG_LAYOUT_FIXED48    0x80u
 #define TWLHD_RDBG_LAYOUT_PACKED28   0x100u
 #define TWLHD_RDBG_LAYOUT_SPLIT      0x200u
+#define TWLHD_RDBG_LAYOUT_STRIDE     0x800u
 #define TWLHD_RDBG_LAYOUT_NORMAL_COPY 0x400u
 
 void renderer_set_debug_flags(uint32_t flags);
 uint32_t renderer_get_debug_flags(void);
+
+/* Parametric stride-layout parameters. Defaults are 48 bytes, 3 vertices and
+ * 0 padding. Setters clamp/ignore out-of-range values. The active values are
+ * read by renderer_draw() only when TWLHD_RDBG_LAYOUT_STRIDE is set. */
+void renderer_set_debug_stride(uint32_t bytes);
+void renderer_set_debug_vertex_count(uint32_t n);
+void renderer_set_debug_pad(uint32_t bytes);
 
 /* Diagnostic trace hook. renderer_trace() calls the installed callback (if
  * any) immediately BEFORE the named citro3d/PICA step, so the last step seen

@@ -62,6 +62,7 @@ typedef enum {
     LAYOUT_FIXED48,
     LAYOUT_PACKED28,
     LAYOUT_SPLIT,
+    LAYOUT_STRIDE,
     LAYOUT_NORMAL_COPY,
 } LayoutMode;
 
@@ -89,6 +90,16 @@ static void *g_packed28_buf;
 static void *g_split_pos_buf;
 static void *g_split_clr_buf;
 
+/* Parametric stride-layout state. Kept outside RendererState so it survives
+ * the memset() at the top of renderer_init(). */
+static uint32_t g_debug_stride = 48;
+static uint32_t g_debug_vertex_count = 3;
+static uint32_t g_debug_pad = 0;
+static void *g_stride_buf;
+static uint32_t g_stride_buf_stride;
+static uint32_t g_stride_buf_count;
+static uint32_t g_stride_buf_pad;
+
 void renderer_set_trace(TwlhdRendererTraceFn cb) {
     g_trace = cb;
 }
@@ -105,6 +116,23 @@ __attribute__((noinline, used)) void renderer_set_debug_flags(uint32_t flags) {
 
 __attribute__((noinline, used)) uint32_t renderer_get_debug_flags(void) {
     return g_debug_flags;
+}
+
+__attribute__((noinline, used)) void renderer_set_debug_stride(uint32_t bytes) {
+    if (bytes < 28) bytes = 28;
+    if (bytes > 128) bytes = 128;
+    bytes &= ~3u;
+    g_debug_stride = bytes;
+}
+
+__attribute__((noinline, used)) void renderer_set_debug_vertex_count(uint32_t n) {
+    if (n < 3 || n > 3000 || (n % 3) != 0) return;
+    g_debug_vertex_count = n;
+}
+
+__attribute__((noinline, used)) void renderer_set_debug_pad(uint32_t bytes) {
+    if (bytes > 8192) return;
+    g_debug_pad = bytes;
 }
 
 /* Deterministic built-in triangle, used on startup and after Y. */
@@ -355,9 +383,71 @@ static void setup_split_attr(void) {
     BufInfo_Add(buf_info, g_split_clr_buf, sizeof(float[4]), 1, 0x1);
 }
 
+/* Rebuild the parametric stride buffer if the requested parameters differ from
+ * the ones the current buffer was built with. This runs inside renderer_draw()
+ * before the BufInfo/AttrInfo setup, so the GPU is idle: the diag only changes
+ * parameters after a completed (probed) frame. */
+static void ensure_stride_buf(void) {
+    size_t size;
+    uint32_t i;
+
+    if (g_stride_buf &&
+        g_stride_buf_stride == g_debug_stride &&
+        g_stride_buf_count == g_debug_vertex_count &&
+        g_stride_buf_pad == g_debug_pad) {
+        return;
+    }
+
+    if (g_stride_buf) {
+        linearFree(g_stride_buf);
+        g_stride_buf = NULL;
+    }
+
+    size = (size_t)g_debug_stride * g_debug_vertex_count + g_debug_pad;
+    g_stride_buf = linearAlloc(size);
+    if (!g_stride_buf) return;
+
+    memset(g_stride_buf, 0, size);
+    for (i = 0; i < g_debug_vertex_count; i++) {
+        const TwlhdVertex *v = &g_builtin_triangle[i % 3];
+        float *pos = (float *)((uint8_t *)g_stride_buf +
+                               (size_t)i * g_debug_stride);
+        float *rgba = (float *)((uint8_t *)g_stride_buf +
+                                (size_t)i * g_debug_stride + 12);
+        pos[0] = v->pos[0];
+        pos[1] = v->pos[1];
+        pos[2] = v->pos[2];
+        rgba[0] = v->rgba[0];
+        rgba[1] = v->rgba[1];
+        rgba[2] = v->rgba[2];
+        rgba[3] = v->rgba[3];
+    }
+
+    g_stride_buf_stride = g_debug_stride;
+    g_stride_buf_count = g_debug_vertex_count;
+    g_stride_buf_pad = g_debug_pad;
+    GSPGPU_FlushDataCache(g_stride_buf, (u32)size);
+}
+
+static void setup_stride_attr(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    C3D_BufInfo *buf_info;
+
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
+    AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4);
+
+    if (!g_stride_buf) return;
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_stride_buf, g_debug_stride, 2, 0x10);
+}
+
 static LayoutMode compute_target_layout(void) {
     if (g_debug_flags & TWLHD_RDBG_OFFICIAL_ATTR) return LAYOUT_OFFICIAL;
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_SPLIT) return LAYOUT_SPLIT;
+    if (g_debug_flags & TWLHD_RDBG_LAYOUT_STRIDE) return LAYOUT_STRIDE;
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_PACKED28) return LAYOUT_PACKED28;
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_FIXED48) return LAYOUT_FIXED48;
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_NORMAL_COPY) return LAYOUT_NORMAL_COPY;
@@ -372,6 +462,7 @@ static int layout_buffer_ready(LayoutMode mode) {
     case LAYOUT_PACKED28:     return g_packed28_buf != NULL;
     case LAYOUT_SPLIT:        return g_split_pos_buf != NULL &&
                                      g_split_clr_buf != NULL;
+    case LAYOUT_STRIDE:       return g_stride_buf != NULL;
     default:                  return 0;
     }
 }
@@ -397,6 +488,11 @@ static void apply_layout(LayoutMode mode, int trace) {
     case LAYOUT_SPLIT:
         renderer_trace("RDBG split layout");
         setup_split_attr();
+        break;
+    case LAYOUT_STRIDE:
+        /* The stride buffer and attribute/buffer info are set up inside
+         * renderer_draw() so that parameter changes can be applied while the
+         * GPU is idle. */
         break;
     default:
         if (trace) renderer_trace("RDBG restore attr");
@@ -453,6 +549,13 @@ void renderer_shutdown(void) {
         linearFree(g_split_clr_buf);
         g_split_clr_buf = NULL;
     }
+    if (g_stride_buf) {
+        linearFree(g_stride_buf);
+        g_stride_buf = NULL;
+    }
+    g_stride_buf_stride = 0;
+    g_stride_buf_count = 0;
+    g_stride_buf_pad = 0;
 
     if (g_renderer.c3d_inited) {
         C3D_Fini();
@@ -629,7 +732,12 @@ void renderer_draw(void) {
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
 
     target = compute_target_layout();
-    if (target != g_renderer.layout_mode) {
+    if (target == LAYOUT_STRIDE) {
+        renderer_trace("RDBG stride layout");
+        ensure_stride_buf();
+        setup_stride_attr();
+        g_renderer.layout_mode = target;
+    } else if (target != g_renderer.layout_mode) {
         apply_layout(target, 1);
         g_renderer.layout_mode = target;
     }
@@ -697,9 +805,15 @@ void renderer_draw(void) {
                 C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
             }
         } else if (layout_buffer_ready(target)) {
-            /* Layout-mode buffers always hold exactly 3 built-in vertices. */
-            uint32_t layout_count = g_renderer.vertex_count;
-            if (layout_count > 3) layout_count = 3;
+            uint32_t layout_count;
+            if (target == LAYOUT_STRIDE) {
+                layout_count = g_debug_vertex_count;
+            } else {
+                /* Other layout-mode buffers always hold exactly 3 built-in
+                 * vertices. */
+                layout_count = g_renderer.vertex_count;
+                if (layout_count > 3) layout_count = 3;
+            }
             if (layout_count != 0) {
                 C3D_DrawArrays(GPU_TRIANGLES, 0, (int)layout_count);
             }
