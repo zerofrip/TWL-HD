@@ -22,6 +22,7 @@
 #include <string.h>
 
 #include "renderer.h"
+#include "twlhd_attr_pad.h"
 #include "twlhd_geometry_slots.h"
 
 #include "twlhd_vshader_shbin.h"
@@ -54,6 +55,7 @@ typedef struct {
     C3D_Mtx modelview;
     C3D_Mtx pending_modelview;
     int layout_mode;
+    int layout_pad_decl;
 } RendererState;
 
 typedef enum {
@@ -216,16 +218,40 @@ static void setup_normal_attr_only(void) {
     AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
 }
 
-static void setup_normal_attr_buffer(void) {
-    C3D_BufInfo *buf_info;
+/* Add one PICA200 attribute buffer, optionally declaring padding components
+ * so that the buffer's declared bytes match its stride. When PAD_DECL is off
+ * the call is identical to the original unpadded BufInfo_Add. */
+static void add_bufinfo_padded(void *buf, uint32_t stride,
+                               uint32_t real_components,
+                               uint64_t real_perm,
+                               uint32_t declared_bytes) {
+    C3D_BufInfo *buf_info = C3D_GetBufInfo();
+    uint64_t perm = real_perm;
+    uint32_t components = real_components;
 
+    if (g_debug_flags & TWLHD_RDBG_PAD_DECL) {
+        if (twlhd_attr_pad_perm(stride, declared_bytes, real_components,
+                                real_perm, &perm, &components) == 0) {
+            if (components != real_components || perm != real_perm) {
+                renderer_trace("RDBG pad decl");
+            }
+        } else {
+            renderer_trace("RDBG pad fail");
+            perm = real_perm;
+            components = real_components;
+        }
+    }
+
+    BufInfo_Add(buf_info, buf, stride, (s8)components, perm);
+}
+
+static void setup_normal_attr_buffer(void) {
     setup_normal_attr_only();
     if (!g_renderer.slots.active) return;
 
-    buf_info = C3D_GetBufInfo();
-    BufInfo_Init(buf_info);
-    BufInfo_Add(buf_info, g_renderer.slots.active,
-                sizeof(TwlhdVertex), 2, 0x10);
+    BufInfo_Init(C3D_GetBufInfo());
+    add_bufinfo_padded(g_renderer.slots.active, sizeof(TwlhdVertex),
+                       2, 0x10, 28);
 }
 
 static void setup_official_attr(void) {
@@ -271,7 +297,6 @@ static void ensure_fixed48_buf(void) {
 
 static void setup_fixed48_attr(void) {
     C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
-    C3D_BufInfo *buf_info;
 
     AttrInfo_Init(attr_info);
     AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
@@ -281,22 +306,18 @@ static void setup_fixed48_attr(void) {
     ensure_fixed48_buf();
     if (!g_fixed48_buf) return;
 
-    buf_info = C3D_GetBufInfo();
-    BufInfo_Init(buf_info);
-    BufInfo_Add(buf_info, g_fixed48_buf, sizeof(TwlhdVertex), 1, 0x0);
+    BufInfo_Init(C3D_GetBufInfo());
+    add_bufinfo_padded(g_fixed48_buf, sizeof(TwlhdVertex), 1, 0x0, 12);
 }
 
 static void setup_normalcopy_attr(void) {
-    C3D_BufInfo *buf_info;
-
     ensure_fixed48_buf();
     if (!g_fixed48_buf) return;
 
     setup_normal_attr_only();
 
-    buf_info = C3D_GetBufInfo();
-    BufInfo_Init(buf_info);
-    BufInfo_Add(buf_info, g_fixed48_buf, sizeof(TwlhdVertex), 2, 0x10);
+    BufInfo_Init(C3D_GetBufInfo());
+    add_bufinfo_padded(g_fixed48_buf, sizeof(TwlhdVertex), 2, 0x10, 28);
 }
 
 static void setup_packed28_attr(void) {
@@ -431,7 +452,6 @@ static void ensure_stride_buf(void) {
 
 static void setup_stride_attr(void) {
     C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
-    C3D_BufInfo *buf_info;
 
     AttrInfo_Init(attr_info);
     AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
@@ -439,9 +459,8 @@ static void setup_stride_attr(void) {
 
     if (!g_stride_buf) return;
 
-    buf_info = C3D_GetBufInfo();
-    BufInfo_Init(buf_info);
-    BufInfo_Add(buf_info, g_stride_buf, g_debug_stride, 2, 0x10);
+    BufInfo_Init(C3D_GetBufInfo());
+    add_bufinfo_padded(g_stride_buf, g_debug_stride, 2, 0x10, 28);
 }
 
 static LayoutMode compute_target_layout(void) {
@@ -567,6 +586,7 @@ void renderer_shutdown(void) {
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
     g_renderer.layout_mode = LAYOUT_NORMAL;
+    g_renderer.layout_pad_decl = 0;
 }
 
 int renderer_init(void) {
@@ -722,6 +742,7 @@ int renderer_use_builtin_triangle(void) {
 
 void renderer_draw(void) {
     LayoutMode target;
+    int target_pad_decl;
 
     if (!g_renderer.ready) return;
 
@@ -732,14 +753,18 @@ void renderer_draw(void) {
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
 
     target = compute_target_layout();
+    target_pad_decl = (g_debug_flags & TWLHD_RDBG_PAD_DECL) ? 1 : 0;
     if (target == LAYOUT_STRIDE) {
         renderer_trace("RDBG stride layout");
         ensure_stride_buf();
         setup_stride_attr();
         g_renderer.layout_mode = target;
-    } else if (target != g_renderer.layout_mode) {
+        g_renderer.layout_pad_decl = target_pad_decl;
+    } else if (target != g_renderer.layout_mode ||
+               target_pad_decl != g_renderer.layout_pad_decl) {
         apply_layout(target, 1);
         g_renderer.layout_mode = target;
+        g_renderer.layout_pad_decl = target_pad_decl;
     }
 
     if (target == LAYOUT_NORMAL) {
@@ -761,8 +786,8 @@ void renderer_draw(void) {
 
             pending_buf_info = C3D_GetBufInfo();
             BufInfo_Init(pending_buf_info);
-            BufInfo_Add(pending_buf_info, g_renderer.slots.active,
-                        sizeof(TwlhdVertex), 2, 0x10);
+            add_bufinfo_padded(g_renderer.slots.active, sizeof(TwlhdVertex),
+                               2, 0x10, 28);
 
             g_renderer.modelview = g_renderer.pending_modelview;
             if (g_debug_flags & TWLHD_RDBG_ORTHO) {

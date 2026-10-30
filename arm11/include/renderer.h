@@ -73,6 +73,7 @@ const char *renderer_result_string(int result);
 #define TWLHD_RDBG_LAYOUT_SPLIT      0x200u
 #define TWLHD_RDBG_LAYOUT_STRIDE     0x800u
 #define TWLHD_RDBG_LAYOUT_NORMAL_COPY 0x400u
+#define TWLHD_RDBG_PAD_DECL          0x1000u
 
 void renderer_set_debug_flags(uint32_t flags);
 uint32_t renderer_get_debug_flags(void);

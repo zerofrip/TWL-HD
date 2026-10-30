@@ -46,18 +46,19 @@ HOST_CFLAGS += $(HOST_SAN)
 HOST_LDFLAGS := $(HOST_SAN)
 
 HOST_COMMON := common/twlhd_frame_parse.c common/twlhd_vertex_convert.c \
-	common/twlhd_geometry_slots.c
+	common/twlhd_geometry_slots.c common/twlhd_attr_pad.c
 HOST_V2_COMMON := common/twlhd_v2_parse.c common/twlhd_v2_write.c \
 	common/twlhd_gx_record.c
 HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_geometry_slots.h common/twlhd_frame_format.h \
 	common/twlhd_v2_format.h common/twlhd_v2_parse.h \
 	common/twlhd_v2_write.h common/twlhd_gx_record.h \
-	tests/host/tests_host.h
+	common/twlhd_attr_pad.h tests/host/tests_host.h
 HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_converter \
 	tests/host/build/test_roundtrip \
 	tests/host/build/test_geometry_slots \
+	tests/host/build/test_attr_pad \
 	tests/host/build/test_v2_parse \
 	tests/host/build/test_v2_write \
 	tests/host/build/test_gx_record \
@@ -83,6 +84,10 @@ tests/host/build/test_roundtrip: tests/host/test_roundtrip.c $(HOST_COMMON) \
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_COMMON) $(HOST_LDFLAGS)
 
 tests/host/build/test_geometry_slots: tests/host/test_geometry_slots.c \
+		$(HOST_COMMON) $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_attr_pad: tests/host/test_attr_pad.c \
 		$(HOST_COMMON) $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_COMMON) $(HOST_LDFLAGS)
 

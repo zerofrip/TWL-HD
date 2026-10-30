@@ -1,26 +1,21 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v4).
+ * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v5).
  *
  * Stage 0 boots with gfxInitDefault() + a bottom-screen console only: no
  * renderer_init(), no fsInit(), no RTCom, no SD access. The renderer is
  * brought up on demand and every citro3d/PICA step is traced BEFORE it runs,
  * so the last marker on the bottom screen names the call that stalled.
  *
- * TEST MATRIX the tester should run (flags are independent toggles):
- *   1) L then B with all flags OFF  -> baseline.
- *   2) L then B with SKIP_DRAW      -> [clear only] test.
- *   3) L then B with SKIP_CLEAR     -> [draw only] test.
- *   4) L then B with OFFICIAL_ATTR  -> simple_tri-style attribute/buffer path.
- *   5) L then B with OFFICIAL_ATTR + ORTHO + NO_STATE + NO_UNIFORMS
- *      -> minimal official-style draw path.
- *   6) L then B with ORTHO + NO_STATE + NO_UNIFORMS + NO_BIND
- *      -> minimal existing draw path.
- *   7) L then B with FIXED48        -> one loader, fixed white, stride 48.
- *   8) L then B with PACKED28       -> two loaders, 28-byte packed buffer.
- *   9) L then B with SPLIT          -> two loaders, two non-interleaved buffers.
- *  10) L then B with STRIDE         -> two loaders, parametric stride/count/pad.
- *  11) L then B with NORMAL_COPY    -> normal layout from private 48-byte copy.
+ * UI FLAGS (8 toggleable rows; hidden flags still work if set by other code):
+ *   SKIP_DRAW      -> do not call C3D_DrawArrays.
+ *   OFFICIAL_ATTR  -> simple_tri-style attribute/buffer path.
+ *   FIXED48        -> one loader, fixed white, stride 48.
+ *   PACKED28       -> two loaders, 28-byte packed buffer.
+ *   SPLIT          -> two loaders, two non-interleaved buffers.
+ *   STRIDE         -> two loaders, parametric stride/count/pad.
+ *   NORMAL_COPY    -> normal layout from a private 48-byte copy.
+ *   PAD_DECL       -> declare vertex padding so declared bytes == stride.
  *
  * Layout flags are mutually exclusive. If several are set the renderer uses
  * this precedence:
@@ -40,14 +35,16 @@
  * for up to 120 vblanks using C3D_FrameBegin(C3D_FRAME_NONBLOCK):
  *   "COMPLETED after K vblanks"  -> the previous frame was processed.
  *   "NOT COMPLETE after 120 vblanks (GPU wedged?)" -> the GPU never signalled.
- * Result lines show the effective hex mask (%03lX) and the active stride,
- * vertex count and pad: %03lX s%u v%u p%u f%d OK k=%d
+ * Result lines show the effective hex mask (%04lX) and the active stride,
+ * vertex count and pad: %04lX s%u v%u p%u f%d OK k=%d
  *                                            ... STUCK 120.
  *
- * Bisection plan:
- *   - stride sweep at VERTS=3 PAD=0 across the STRIDE presets;
- *   - size test at STRIDE=28 with VERTS 36/300/3000;
- *   - buffer-size test at STRIDE=48 with PAD=4096.
+ * Run 5 plan (PAD_DECL hypothesis):
+ *   1) L, PAD_DECL on, B            -> real NORMAL path with padding;
+ *                                      expect OK + RGB triangle if the
+ *                                      hypothesis holds.
+ *   2) STRIDE + PAD_DECL, VERTS 36/300/3000 at STRIDE=48 (size check).
+ *   3) STRIDE sweep across the STRIDE presets with PAD_DECL on.
  *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
@@ -63,8 +60,8 @@
 
 #include "renderer.h"
 
-#define MARKER_RING 5u
-#define RESULT_RING 3u
+#define MARKER_RING 6u
+#define RESULT_RING 4u
 #define PROBE_VBLANKS 120
 
 /* Ring indexing uses modulo (%), so the sizes do not need to be powers of two.
@@ -96,17 +93,13 @@ static const struct {
     const char *name;
 } g_flag_defs[] = {
     {TWLHD_RDBG_SKIP_DRAW,         "SKIP_DRAW"},
-    {TWLHD_RDBG_SKIP_CLEAR,        "SKIP_CLEAR"},
     {TWLHD_RDBG_OFFICIAL_ATTR,     "OFFICIAL_ATTR"},
-    {TWLHD_RDBG_ORTHO,             "ORTHO"},
-    {TWLHD_RDBG_NO_STATE,          "NO_STATE"},
-    {TWLHD_RDBG_NO_UNIFORMS,       "NO_UNIFORMS"},
-    {TWLHD_RDBG_NO_BIND,           "NO_BIND"},
     {TWLHD_RDBG_LAYOUT_FIXED48,    "FIXED48"},
     {TWLHD_RDBG_LAYOUT_PACKED28,   "PACKED28"},
     {TWLHD_RDBG_LAYOUT_SPLIT,      "SPLIT"},
     {TWLHD_RDBG_LAYOUT_STRIDE,     "STRIDE"},
     {TWLHD_RDBG_LAYOUT_NORMAL_COPY,"NORMAL_COPY"},
+    {TWLHD_RDBG_PAD_DECL,          "PAD_DECL"},
 };
 
 #define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
@@ -142,7 +135,8 @@ static const struct {
 };
 
 /* Flags that affect renderer_init() only; all other flags are read at draw
- * time and can be changed without re-initializing. */
+ * time and can be changed without re-initializing. The hidden init-time flags
+ * are no longer toggleable in the UI, so this path is kept only for safety. */
 #define INIT_FLAGS (TWLHD_RDBG_ORTHO | TWLHD_RDBG_NO_STATE)
 
 /* Effective flags the renderer actually used: draw-time flags from the
@@ -278,24 +272,24 @@ static void update_heartbeat(void) {
  * most 29 newline-terminated rows. Every printed line must be <=39 visible
  * characters. Exact row budget:
  *   1  title + heartbeat
- *  12  flags
+ *   8  flags
  *   3  parameter rows
  *   1  key legend
- *   1  "ORTHO,NO_STATE need L" hint
+ *   1  "PAD_DECL: declare vertex padding" hint
  *   1  status
  *   1  results header
- *   3  result rows
+ *   4  result rows
  *   1  markers header
- *   5  marker rows
+ *   6  marker rows
  *  ---
- *  29  total
+ *  27  total (<=29)
  *
  * Visible-character budget check for every printf in this file:
- *   "TWL-HD arm11 diag v4"              21
+ *   "TWL-HD arm11 diag v5"              21
  *   "%c %-13s [%c]%s"                   21 max (1+1+13+1+3+2)
  *   "%c %-8s [%lu]"                     21 max (1+1+8+1+5+4)
  *   "A=tog U/D=mv L/R=adj L=init B=go"  34
- *   "ORTHO,NO_STATE need L"             21
+ *   "PAD_DECL: declare vertex padding"  34
  *   "status: %.31s"                     39
  *   "last %u results:"                  15
  *   "%.39s" (result row)                39
@@ -306,10 +300,10 @@ static void update_heartbeat(void) {
  */
 static void render_ui(const char *status) {
     consoleClear();
-    printf("TWL-HD arm11 diag v4\n");
+    printf("TWL-HD arm11 diag v5\n");
     print_menu();
     printf("A=tog U/D=mv L/R=adj L=init B=go\n");
-    printf("ORTHO,NO_STATE need L\n");
+    printf("PAD_DECL: declare vertex padding\n");
     printf("status: %.31s\n", status);
     print_results();
     print_markers();
@@ -356,7 +350,7 @@ static void probe_previous_frame(char *status, size_t status_size) {
         if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
             C3D_FrameEnd(0);
             completed = 1;
-            add_result("%03lX s%u v%u p%u f%d OK k=%d",
+            add_result("%04lX s%u v%u p%u f%d OK k=%d",
                        (unsigned long)effective_flags(),
                        (unsigned)g_param_values[0], (unsigned)g_param_values[1],
                        (unsigned)g_param_values[2], g_frame_count, k + 1);
@@ -365,7 +359,7 @@ static void probe_previous_frame(char *status, size_t status_size) {
     }
 
     if (!completed) {
-        add_result("%03lX s%u v%u p%u f%d STUCK %d",
+        add_result("%04lX s%u v%u p%u f%d STUCK %d",
                    (unsigned long)effective_flags(),
                    (unsigned)g_param_values[0], (unsigned)g_param_values[1],
                    (unsigned)g_param_values[2], g_frame_count,
@@ -479,7 +473,7 @@ int main(void) {
                 if (draw_one_frame()) {
                     probe_previous_frame(status, sizeof status);
                 } else {
-                    add_result("%03lX s%u v%u p%u f%d REFUSED",
+                    add_result("%04lX s%u v%u p%u f%d REFUSED",
                                (unsigned long)effective_flags(),
                                (unsigned)g_param_values[0],
                                (unsigned)g_param_values[1],
