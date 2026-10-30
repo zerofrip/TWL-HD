@@ -41,7 +41,8 @@ static void trace_cb(const char *step) {
     printf("  > %s\n", step);
     gfxFlushBuffers();
     if (!g_in_frame) {
-        gfxSwapBuffers();
+        /* citro3d owns the top-screen present via C3D_FrameEnd; swap bottom only. */
+        gfxScreenSwapBuffers(GFX_BOTTOM, false);
         gspWaitForVBlank();
     }
     g_markers[g_marker_next & (MARKER_RING - 1u)] = step;
@@ -69,7 +70,8 @@ static void render_status(const char *status) {
     printf("frames: %d  vblanks: %lu\n\n", g_frame_count, g_vblank_count);
     print_markers();
     gfxFlushBuffers();
-    gfxSwapBuffers();
+    /* citro3d owns the top-screen present via C3D_FrameEnd; swap bottom only. */
+    gfxScreenSwapBuffers(GFX_BOTTOM, false);
 }
 
 static int draw_one_frame(void) {
@@ -80,10 +82,11 @@ static int draw_one_frame(void) {
     if (began) {
         g_in_frame = 1;
         renderer_draw();
+        renderer_trace("C3D_FrameEnd");
         C3D_FrameEnd(0);
         g_in_frame = 0;
     }
-    renderer_trace("FrameEnd");
+    renderer_trace("FrameEnd done");
     if (began) g_frame_count++;
     return began;
 }
