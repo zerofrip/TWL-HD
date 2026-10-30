@@ -51,3 +51,15 @@ void renderer_draw(void);
 int renderer_is_ready(void);
 uint32_t renderer_vertex_count(void);
 const char *renderer_result_string(int result);
+
+/* Diagnostic trace hook. renderer_trace() calls the installed callback (if
+ * any) immediately BEFORE the named citro3d/PICA step, so the last step seen
+ * names the call that stalled. The hook defaults to NULL, in which case
+ * renderer_trace() is a no-op and the normal path is unchanged.
+ *
+ * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
+ * real-hardware bisection. Do not deploy. */
+typedef void (*TwlhdRendererTraceFn)(const char *step);
+
+void renderer_set_trace(TwlhdRendererTraceFn cb);
+void renderer_trace(const char *step);

@@ -56,6 +56,21 @@ typedef struct {
 
 static RendererState g_renderer;
 
+/* Diagnostic trace hook. NULL by default: renderer_trace() is then a no-op and
+ * the normal build is unchanged. Deliberately outside RendererState so it
+ * survives the memset() at the top of renderer_init().
+ * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
+ * real-hardware bisection. Do not deploy. */
+static TwlhdRendererTraceFn g_trace;
+
+void renderer_set_trace(TwlhdRendererTraceFn cb) {
+    g_trace = cb;
+}
+
+void renderer_trace(const char *step) {
+    if (g_trace) g_trace(step);
+}
+
 /* Deterministic built-in triangle, used on startup and after Y. */
 static const TwlhdVertex g_builtin_triangle[3] = {
     {
@@ -175,20 +190,24 @@ int renderer_init(void) {
     g_renderer.u_loc_modelview = -1;
     twlhd_geometry_slots_init(&g_renderer.slots, linearAlloc, linearFree);
 
+    renderer_trace("C3D_Init");
     if (!C3D_Init(C3D_DEFAULT_CMDBUF_SIZE)) {
         return TWLHD_RENDER_ERR_C3D_INIT;
     }
     g_renderer.c3d_inited = 1;
 
+    renderer_trace("RenderTargetCreate");
     g_renderer.target = C3D_RenderTargetCreate(
         240, 400, GPU_RB_RGBA8, GPU_RB_DEPTH24_STENCIL8);
     if (!g_renderer.target) {
         result = TWLHD_RENDER_ERR_TARGET;
         goto fail;
     }
+    renderer_trace("SetOutput");
     C3D_RenderTargetSetOutput(g_renderer.target, GFX_TOP, GFX_LEFT,
                               DISPLAY_TRANSFER_FLAGS);
 
+    renderer_trace("DVLB_ParseFile");
     g_renderer.dvlb = DVLB_ParseFile(
         (u32 *)(void *)twlhd_vshader_shbin,
         (u32)twlhd_vshader_shbin_size);
@@ -197,19 +216,23 @@ int renderer_init(void) {
         goto fail;
     }
 
+    renderer_trace("shaderProgramInit");
     if (R_FAILED(shaderProgramInit(&g_renderer.program))) {
         result = TWLHD_RENDER_ERR_SHADER;
         goto fail;
     }
     g_renderer.program_inited = 1;
 
+    renderer_trace("SetVsh");
     if (R_FAILED(shaderProgramSetVsh(&g_renderer.program,
                                      &g_renderer.dvlb->DVLE[0]))) {
         result = TWLHD_RENDER_ERR_SHADER;
         goto fail;
     }
+    renderer_trace("BindProgram");
     C3D_BindProgram(&g_renderer.program);
 
+    renderer_trace("uniform");
     g_renderer.u_loc_projection = shaderInstanceGetUniformLocation(
         g_renderer.program.vertexShader, "projection");
     g_renderer.u_loc_modelview = shaderInstanceGetUniformLocation(
@@ -220,27 +243,33 @@ int renderer_init(void) {
         goto fail;
     }
 
+    renderer_trace("attr");
     attr_info = C3D_GetAttrInfo();
     AttrInfo_Init(attr_info);
     AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3); /* v0 = position */
     AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
 
+    renderer_trace("PerspTilt");
     Mtx_PerspTilt(&g_renderer.projection, C3D_AngleFromDegrees(
                       RENDER_FOV_DEGREES), C3D_AspectRatioTop,
                   0.01f, 1000.0f, false);
 
     /* Flat pass-through of the per-vertex color; no texture is captured. */
+    renderer_trace("TexEnv");
     for (i = 0; i < 6; i++) C3D_TexEnvInit(C3D_GetTexEnv(i));
     tex_env = C3D_GetTexEnv(0);
     C3D_TexEnvSrc(tex_env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
     C3D_TexEnvFunc(tex_env, C3D_Both, GPU_REPLACE);
 
     /* Debug view: depth on, culling off so mis-wound geometry is visible. */
+    renderer_trace("DepthTest");
     C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+    renderer_trace("CullFace");
     C3D_CullFace(GPU_CULL_NONE);
 
     g_renderer.ready = 1;
 
+    renderer_trace("builtin");
     if (renderer_use_builtin_triangle() != TWLHD_RENDER_OK) {
         result = TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
         goto fail;
@@ -292,10 +321,21 @@ void renderer_draw(void) {
      * queue, so the old active buffer is no longer read by the GPU and can be
      * freed here. See upstream citro3d renderqueue.c/base.c, read from the
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
+    renderer_trace("commit/BufInfo");
     if (g_renderer.slots.pending) {
         C3D_BufInfo *pending_buf_info;
 
         twlhd_geometry_slots_commit(&g_renderer.slots);
+
+        /* linearAlloc() memory is CPU-cached on 3DS; the GPU DMA/read path
+         * does not snoop the CPU cache, so the memcpy in stage() can leave
+         * stale lines unless flushed. Hang suspect #1: works in emulator,
+         * stalls on hardware. The Result is deliberately ignored; a silent
+         * failure would mask the fix, which is acceptable for this
+         * diagnostic build. HARDWARE UNVERIFIED (build-verified only);
+         * this build's purpose is real-hardware bisection. Do not deploy. */
+        GSPGPU_FlushDataCache(g_renderer.slots.active,
+                              (u32)g_renderer.slots.active_size);
 
         pending_buf_info = C3D_GetBufInfo();
         BufInfo_Init(pending_buf_info);
@@ -305,16 +345,21 @@ void renderer_draw(void) {
         g_renderer.modelview = g_renderer.pending_modelview;
     }
 
+    renderer_trace("RenderTargetClear");
     C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
                           RENDER_CLEAR_COLOR, 0);
+    renderer_trace("FrameDrawOn");
     C3D_FrameDrawOn(g_renderer.target);
 
+    renderer_trace("BindProgram");
     C3D_BindProgram(&g_renderer.program);
+    renderer_trace("FVUnif");
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_projection,
                      &g_renderer.projection);
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_modelview,
                      &g_renderer.modelview);
 
+    renderer_trace("DrawArrays");
     if (g_renderer.slots.active && g_renderer.vertex_count != 0) {
         C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
     }

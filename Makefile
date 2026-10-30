@@ -1,4 +1,4 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
@@ -13,6 +13,12 @@ arm9v2:
 
 arm11:
 	$(MAKE) -C arm11
+
+# Diagnostic ARM11 3dsx for real-hardware hang bisection. Separate target; the
+# normal `arm11` build is untouched. HARDWARE UNVERIFIED (build-verified only);
+# this build's purpose is real-hardware bisection. Do not deploy.
+arm11-diag:
+	$(MAKE) -C arm11 DIAG=1
 
 arm11_ucode:
 	$(MAKE) -C arm11_ucode

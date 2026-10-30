@@ -40,6 +40,18 @@ APP_DESCRIPTION	:=	DS 3D capture research
 APP_AUTHOR	:=	TWL-HD contributors
 
 #---------------------------------------------------------------------------------
+# Diagnostic build (make diag / make -C arm11 DIAG=1): same objects, different
+# entry point. Sits after the default TARGET assignment so it overrides it.
+#
+# HARDWARE UNVERIFIED (build-verified only); this build's purpose is
+# real-hardware bisection. Do not deploy.
+#---------------------------------------------------------------------------------
+DIAG	?=	0
+ifeq ($(DIAG),1)
+TARGET	:=	twlhd-arm11-diag
+endif
+
+#---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv6k -mtune=mpcore -mfpu=vfp -mfloat-abi=hard -mtp=soft
@@ -73,6 +85,12 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+# main.c and diag_main.c both define main(); each build takes exactly one.
+ifeq ($(DIAG),1)
+CFILES		:=	$(filter-out main.c,$(CFILES))
+else
+CFILES		:=	$(filter-out diag_main.c,$(CFILES))
+endif
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
@@ -109,7 +127,7 @@ export INCLUDE		:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 
 export LIBPATHS		:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all diag
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
@@ -117,6 +135,13 @@ all: $(BUILD)
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+#---------------------------------------------------------------------------------
+# Diagnostic 3dsx: re-invoke the recursive build with DIAG=1 so TARGET and the
+# source list switch while the shared objects stay in the same build dir.
+#---------------------------------------------------------------------------------
+diag: $(BUILD)
+	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile DIAG=1
 
 #---------------------------------------------------------------------------------
 clean:
