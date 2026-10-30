@@ -19,10 +19,12 @@
  *   7) L then B with FIXED48        -> one loader, fixed white, stride 48.
  *   8) L then B with PACKED28       -> two loaders, 28-byte packed buffer.
  *   9) L then B with SPLIT          -> two loaders, two non-interleaved buffers.
+ *  10) L then B with NORMAL_COPY    -> normal layout from private 48-byte copy.
  *
  * Layout flags are mutually exclusive. If several are set the renderer uses
  * this precedence:
  *   OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_PACKED28 > LAYOUT_FIXED48
+ *     > LAYOUT_NORMAL_COPY
  * and falls back to the normal 48-byte interleaved layout when none are set.
  *
  * HOW TO READ: GPU work starts at C3D_FrameEnd, so a hung GPU typically shows
@@ -31,7 +33,10 @@
  * for up to 120 vblanks using C3D_FrameBegin(C3D_FRAME_NONBLOCK):
  *   "COMPLETED after K vblanks"  -> the previous frame was processed.
  *   "NOT COMPLETE after 120 vblanks (GPU wedged?)" -> the GPU never signalled.
- * Result lines are flagged with the effective hex mask (%03lX, 0..0x3FF).
+ * Result lines are flagged with the effective hex mask (%03lX, 0..0x7FF).
+ *
+ * Bisection ladder for the two-loader/stride-48 vs. slots.active buffer path:
+ *   OFFICIAL_ATTR -> FIXED48 -> NORMAL_COPY -> NORMAL.
  *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
@@ -50,6 +55,11 @@
 #define MARKER_RING 6u
 #define RESULT_RING 4u
 #define PROBE_VBLANKS 120
+
+/* Ring indexing uses modulo (%), so the sizes do not need to be powers of two.
+ * A zero size would divide by zero, so assert it is nonzero. */
+_Static_assert(MARKER_RING != 0, "MARKER_RING must be nonzero");
+_Static_assert(RESULT_RING != 0, "RESULT_RING must be nonzero");
 
 /* Last MARKER_RING trace steps, newest at (g_marker_next - 1). */
 static const char *g_markers[MARKER_RING];
@@ -81,9 +91,10 @@ static const struct {
     {TWLHD_RDBG_NO_STATE,        "NO_STATE"},
     {TWLHD_RDBG_NO_UNIFORMS,     "NO_UNIFORMS"},
     {TWLHD_RDBG_NO_BIND,         "NO_BIND"},
-    {TWLHD_RDBG_LAYOUT_FIXED48,  "FIXED48"},
-    {TWLHD_RDBG_LAYOUT_PACKED28, "PACKED28"},
-    {TWLHD_RDBG_LAYOUT_SPLIT,    "SPLIT"},
+    {TWLHD_RDBG_LAYOUT_FIXED48,    "FIXED48"},
+    {TWLHD_RDBG_LAYOUT_PACKED28,   "PACKED28"},
+    {TWLHD_RDBG_LAYOUT_SPLIT,      "SPLIT"},
+    {TWLHD_RDBG_LAYOUT_NORMAL_COPY,"NORMAL_COPY"},
 };
 
 #define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
@@ -119,13 +130,13 @@ static void trace_cb(const char *step) {
         gfxScreenSwapBuffers(GFX_BOTTOM, false);
         gspWaitForVBlank();
     }
-    g_markers[g_marker_next & (MARKER_RING - 1u)] = step;
+    g_markers[g_marker_next % MARKER_RING] = step;
     g_marker_next++;
 }
 
 static void add_result(const char *fmt, ...) {
     va_list ap;
-    char *slot = g_results[g_result_next & (RESULT_RING - 1u)];
+    char *slot = g_results[g_result_next % RESULT_RING];
 
     va_start(ap, fmt);
     vsnprintf(slot, sizeof g_results[0], fmt, ap);
@@ -143,7 +154,7 @@ static void print_markers(void) {
         printf("  -\n");
     }
     for (i = count; i > 0; i--) {
-        const char *m = g_markers[(first + i - 1) & (MARKER_RING - 1u)];
+        const char *m = g_markers[(first + i - 1) % MARKER_RING];
         printf("  %.37s\n", m ? m : "-");
     }
 }
@@ -158,7 +169,7 @@ static void print_results(void) {
         printf("\n");
     }
     for (i = count; i > 0; i--) {
-        const char *r = g_results[(first + i - 1) & (RESULT_RING - 1u)];
+        const char *r = g_results[(first + i - 1) % RESULT_RING];
         printf("%.39s\n", r[0] ? r : " ");
     }
 }
@@ -196,7 +207,7 @@ static void update_heartbeat(void) {
  * characters. Exact row budget:
  *   1  title + heartbeat
  *   1  subtitle
- *  10  flags
+ *  11  flags
  *   1  blank
  *   1  key legend
  *   1  "ORTHO,NO_STATE need L" hint
@@ -206,7 +217,7 @@ static void update_heartbeat(void) {
  *   1  markers header
  *   6  marker rows
  *  ---
- *  28  total
+ *  29  total
  *
  * Visible-character budget check for every printf in this file:
  *   "TWL-HD arm11 diag v3"              20

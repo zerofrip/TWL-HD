@@ -62,6 +62,7 @@ typedef enum {
     LAYOUT_FIXED48,
     LAYOUT_PACKED28,
     LAYOUT_SPLIT,
+    LAYOUT_NORMAL_COPY,
 } LayoutMode;
 
 static RendererState g_renderer;
@@ -225,15 +226,10 @@ static void setup_official_attr(void) {
     BufInfo_Add(buf_info, g_official_buf, sizeof(float) * 3, 1, 0x0);
 }
 
-static void setup_fixed48_attr(void) {
-    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
-    C3D_BufInfo *buf_info;
-
-    AttrInfo_Init(attr_info);
-    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
-    AttrInfo_AddFixed(attr_info, 1);
-    C3D_FixedAttribSet(1, 1.0f, 1.0f, 1.0f, 1.0f);
-
+/* Allocate and flush the shared private 48-byte copy of the built-in triangle.
+ * Used by both FIXED48 (one loader, fixed color) and NORMAL_COPY (normal
+ * two-loader layout from a private buffer instead of slots.active). */
+static void ensure_fixed48_buf(void) {
     if (!g_fixed48_buf) {
         g_fixed48_buf = linearAlloc(sizeof g_builtin_triangle);
         if (g_fixed48_buf) {
@@ -243,12 +239,36 @@ static void setup_fixed48_attr(void) {
                                   (u32)sizeof g_builtin_triangle);
         }
     }
+}
 
+static void setup_fixed48_attr(void) {
+    C3D_AttrInfo *attr_info = C3D_GetAttrInfo();
+    C3D_BufInfo *buf_info;
+
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 3);
+    AttrInfo_AddFixed(attr_info, 1);
+    C3D_FixedAttribSet(1, 1.0f, 1.0f, 1.0f, 1.0f);
+
+    ensure_fixed48_buf();
     if (!g_fixed48_buf) return;
 
     buf_info = C3D_GetBufInfo();
     BufInfo_Init(buf_info);
     BufInfo_Add(buf_info, g_fixed48_buf, sizeof(TwlhdVertex), 1, 0x0);
+}
+
+static void setup_normalcopy_attr(void) {
+    C3D_BufInfo *buf_info;
+
+    ensure_fixed48_buf();
+    if (!g_fixed48_buf) return;
+
+    setup_normal_attr_only();
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_fixed48_buf, sizeof(TwlhdVertex), 2, 0x10);
 }
 
 static void setup_packed28_attr(void) {
@@ -340,21 +360,23 @@ static LayoutMode compute_target_layout(void) {
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_SPLIT) return LAYOUT_SPLIT;
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_PACKED28) return LAYOUT_PACKED28;
     if (g_debug_flags & TWLHD_RDBG_LAYOUT_FIXED48) return LAYOUT_FIXED48;
+    if (g_debug_flags & TWLHD_RDBG_LAYOUT_NORMAL_COPY) return LAYOUT_NORMAL_COPY;
     return LAYOUT_NORMAL;
 }
 
 static int layout_buffer_ready(LayoutMode mode) {
     switch (mode) {
-    case LAYOUT_OFFICIAL:  return g_official_buf != NULL;
-    case LAYOUT_FIXED48:   return g_fixed48_buf != NULL;
-    case LAYOUT_PACKED28:  return g_packed28_buf != NULL;
-    case LAYOUT_SPLIT:     return g_split_pos_buf != NULL &&
-                                  g_split_clr_buf != NULL;
-    default:               return 0;
+    case LAYOUT_OFFICIAL:     return g_official_buf != NULL;
+    case LAYOUT_FIXED48:      return g_fixed48_buf != NULL;
+    case LAYOUT_NORMAL_COPY:  return g_fixed48_buf != NULL;
+    case LAYOUT_PACKED28:     return g_packed28_buf != NULL;
+    case LAYOUT_SPLIT:        return g_split_pos_buf != NULL &&
+                                     g_split_clr_buf != NULL;
+    default:                  return 0;
     }
 }
 
-static void apply_layout(LayoutMode mode) {
+static void apply_layout(LayoutMode mode, int trace) {
     switch (mode) {
     case LAYOUT_OFFICIAL:
         renderer_trace("RDBG official attr");
@@ -363,6 +385,10 @@ static void apply_layout(LayoutMode mode) {
     case LAYOUT_FIXED48:
         renderer_trace("RDBG fixed48 layout");
         setup_fixed48_attr();
+        break;
+    case LAYOUT_NORMAL_COPY:
+        renderer_trace("RDBG normalcopy layout");
+        setup_normalcopy_attr();
         break;
     case LAYOUT_PACKED28:
         renderer_trace("RDBG packed28 layout");
@@ -373,7 +399,7 @@ static void apply_layout(LayoutMode mode) {
         setup_split_attr();
         break;
     default:
-        renderer_trace("RDBG restore attr");
+        if (trace) renderer_trace("RDBG restore attr");
         setup_normal_attr_buffer();
         break;
     }
@@ -511,7 +537,7 @@ int renderer_init(void) {
 
     renderer_trace("attr");
     g_renderer.layout_mode = compute_target_layout();
-    apply_layout(g_renderer.layout_mode);
+    apply_layout(g_renderer.layout_mode, 0);
 
     if (g_debug_flags & TWLHD_RDBG_ORTHO) {
         renderer_trace("OrthoTilt");
@@ -604,7 +630,7 @@ void renderer_draw(void) {
 
     target = compute_target_layout();
     if (target != g_renderer.layout_mode) {
-        apply_layout(target);
+        apply_layout(target, 1);
         g_renderer.layout_mode = target;
     }
 
