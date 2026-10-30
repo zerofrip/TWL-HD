@@ -497,7 +497,10 @@ void renderer_draw(void) {
         renderer_trace("DrawArrays");
         if (official) {
             if (g_official_buf && g_renderer.vertex_count != 0) {
-                C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
+                /* g_official_buf always holds exactly 3 positions. */
+                uint32_t official_count = g_renderer.vertex_count;
+                if (official_count > 3) official_count = 3;
+                C3D_DrawArrays(GPU_TRIANGLES, 0, (int)official_count);
             }
         } else {
             if (g_renderer.slots.active && g_renderer.vertex_count != 0) {

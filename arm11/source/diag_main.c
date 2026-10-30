@@ -56,6 +56,7 @@ static unsigned long g_vblank_count;
 static int g_in_frame;
 
 static uint32_t g_flags;
+static uint32_t g_init_flags;
 static int g_cursor;
 static int g_wedged;
 
@@ -74,6 +75,17 @@ static const struct {
 };
 
 #define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
+
+/* Flags that affect renderer_init() only; all other flags are read at draw
+ * time and can be changed without re-initializing. */
+#define INIT_FLAGS (TWLHD_RDBG_ORTHO | TWLHD_RDBG_NO_STATE)
+
+/* Effective flags the renderer actually used: draw-time flags from the
+ * renderer's current setting plus init-time flags captured at the last L. */
+static uint32_t effective_flags(void) {
+    return (renderer_get_debug_flags() & ~INIT_FLAGS) |
+           (g_init_flags & INIT_FLAGS);
+}
 
 /* Runs immediately before each traced citro3d/PICA step. A C3D frame may be
  * open, so only the display swap is conditional; the print itself would
@@ -144,7 +156,13 @@ static void print_flags(void) {
     for (i = 0; i < FLAG_COUNT; i++) {
         char cursor = (i == (unsigned)g_cursor) ? '>' : ' ';
         char mark = (g_flags & g_flag_defs[i].bit) ? 'x' : ' ';
-        printf("%c %-16s [%c]\n", cursor, g_flag_defs[i].name, mark);
+        const char *hint = "";
+        if ((g_flag_defs[i].bit & INIT_FLAGS) &&
+            ((g_flags & g_flag_defs[i].bit) !=
+             (g_init_flags & g_flag_defs[i].bit))) {
+            hint = " *";
+        }
+        printf("%c %-13s [%c]%s\n", cursor, g_flag_defs[i].name, mark, hint);
     }
 }
 
@@ -153,27 +171,39 @@ static void update_heartbeat(void) {
     u8 *fb;
 
     /* Redraw only the heartbeat counter on the title line (1-based ANSI).
-     * Use the kernel cache flush (not gfxFlushBuffers) so the heartbeat keeps
-     * updating even if the GSP queue is wedged. */
-    printf("\x1b[1;38Hhb:%5lu", g_vblank_count);
+     * Col 33 + "hb:%4lu" ends at col 39, inside the 40-column budget. */
+    printf("\x1b[1;33Hhb:%4lu", g_vblank_count);
     fb = gfxGetFramebuffer(GFX_BOTTOM, GFX_LEFT, &w, &h);
     svcFlushProcessDataCache(CUR_PROCESS_HANDLE, (u32)fb, (u32)(w * h * 3));
 }
 
+/* Screen budget for the bottom console: 40 columns x 30 rows.
+ * Every printed line must be <=39 characters. Exact row budget:
+ *   1  title + heartbeat
+ *   1  subtitle
+ *   1  blank
+ *   7  flags
+ *   1  blank
+ *   1  key legend
+ *   1  "ORTHO,NO_STATE need L" hint
+ *   1  status
+ *   1  results header
+ *   6  result rows
+ *   1  markers header
+ *   8  marker rows
+ *  ---
+ *  30  total
+ */
 static void render_ui(const char *status) {
     consoleClear();
-    printf("TWL-HD arm11 hardware-hang bisect\n");
-    printf("HARDWARE UNVERIFIED (build-only) - do not deploy\n");
+    printf("TWL-HD arm11 diag v2\n");
+    printf("HARDWARE UNVERIFIED\n");
     printf("\n");
     print_flags();
     printf("\n");
-    printf("A=toggle  UP/DOWN=move  L=reinit\n");
-    printf("B=one frame + probe  START=exit\n");
-    if (g_wedged) {
-        printf("status: GPU WEDGED - hold POWER to power off\n");
-    } else {
-        printf("status: %s\n", status);
-    }
+    printf("A=tog U/D=mv L=init B=1frm START=exit\n");
+    printf("ORTHO,NO_STATE need L\n");
+    printf("status: %s\n", status);
     print_results();
     print_markers();
     if (g_wedged) {
@@ -208,26 +238,29 @@ static int draw_one_frame(void) {
     return began;
 }
 
-static void probe_previous_frame(void) {
+static void probe_previous_frame(char *status, size_t status_size) {
     int completed = 0;
     int k;
 
+    renderer_trace("probe");
     for (k = 0; k < PROBE_VBLANKS; k++) {
         gspWaitForVBlank();
         g_vblank_count++;
         if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
             C3D_FrameEnd(0);
             completed = 1;
-            add_result("%08lX frame %d: COMPLETED after %d vblanks",
-                       (unsigned long)g_flags, g_frame_count, k);
+            add_result("%02lX f%d OK k=%d",
+                       (unsigned long)effective_flags(), g_frame_count, k + 1);
             break;
         }
     }
 
     if (!completed) {
-        add_result("%08lX frame %d: NOT COMPLETE after %d vblanks (GPU wedged?)",
-                   (unsigned long)g_flags, g_frame_count, PROBE_VBLANKS);
+        add_result("%02lX f%d STUCK %d",
+                   (unsigned long)effective_flags(), g_frame_count,
+                   PROBE_VBLANKS);
         g_wedged = 1;
+        snprintf(status, status_size, "GPU WEDGED - hold POWER");
     }
 }
 
@@ -239,6 +272,7 @@ static void reinit_renderer(char *status, size_t status_size) {
     }
     renderer_set_trace(trace_cb);
     renderer_set_debug_flags(g_flags);
+    g_init_flags = g_flags;
     result = renderer_init();
     snprintf(status, status_size, "renderer_init: %s",
              renderer_result_string(result));
@@ -257,6 +291,7 @@ int main(void) {
     consoleInit(GFX_BOTTOM, NULL);
 
     g_flags = 0;
+    g_init_flags = 0;
     g_cursor = 0;
     g_wedged = 0;
     snprintf(status, sizeof status, "stage 0: renderer NOT initialized");
@@ -308,11 +343,13 @@ int main(void) {
             if (!renderer_is_ready()) {
                 snprintf(status, sizeof status, "B: press L first");
             } else {
+                renderer_set_debug_flags(g_flags);
                 if (draw_one_frame()) {
-                    probe_previous_frame();
+                    probe_previous_frame(status, sizeof status);
                 } else {
-                    add_result("%08lX frame %d: FrameBegin refused",
-                               (unsigned long)g_flags, g_frame_count);
+                    add_result("%02lX f%d REFUSED",
+                               (unsigned long)effective_flags(),
+                               g_frame_count);
                 }
                 snprintf(status, sizeof status, "one frame probed");
             }
@@ -327,6 +364,19 @@ int main(void) {
 
         g_vblank_count++;
         gspWaitForVBlank();
+    }
+
+    if (g_wedged) {
+        /* Once the GPU is wedged, never reach renderer_shutdown() or gfxExit()
+         * on any exit path (including aptMainLoop() returning false). Stay in a
+         * heartbeat loop and let the user power off. HOME handling may also
+         * hang; this is acceptable because the GPU is wedged and no further
+         * damage is possible. */
+        while (1) {
+            gspWaitForVBlank();
+            update_heartbeat();
+            g_vblank_count++;
+        }
     }
 
     renderer_shutdown();
