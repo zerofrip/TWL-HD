@@ -52,10 +52,11 @@ int renderer_is_ready(void);
 uint32_t renderer_vertex_count(void);
 const char *renderer_result_string(int result);
 
-/* Per-frame runtime debug toggles. All default to zero so a normal build with
- * no flags set behaves exactly like the original renderer. Init-time flags
- * (ORTHO, NO_STATE) take effect on the next renderer_init(); draw-time flags
- * are checked every renderer_draw().
+/* Per-frame runtime debug toggles. All default to zero. Vertex buffer padding
+ * is declared by default so that the declared bytes match the stride; NO_PAD
+ * reverts to the old unpadded behaviour for diagnostic contrast. Init-time
+ * flags (ORTHO, NO_STATE) take effect on the next renderer_init(); draw-time
+ * flags are checked every renderer_draw().
  *
  * Layout flags are mutually exclusive; if several are set the precedence is
  * OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_STRIDE > LAYOUT_PACKED28 >
@@ -73,7 +74,7 @@ const char *renderer_result_string(int result);
 #define TWLHD_RDBG_LAYOUT_SPLIT      0x200u
 #define TWLHD_RDBG_LAYOUT_STRIDE     0x800u
 #define TWLHD_RDBG_LAYOUT_NORMAL_COPY 0x400u
-#define TWLHD_RDBG_PAD_DECL          0x1000u
+#define TWLHD_RDBG_NO_PAD            0x1000u
 
 void renderer_set_debug_flags(uint32_t flags);
 uint32_t renderer_get_debug_flags(void);

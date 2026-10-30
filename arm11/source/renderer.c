@@ -55,7 +55,7 @@ typedef struct {
     C3D_Mtx modelview;
     C3D_Mtx pending_modelview;
     int layout_mode;
-    int layout_pad_decl;
+    int layout_no_pad;
 } RendererState;
 
 typedef enum {
@@ -218,9 +218,14 @@ static void setup_normal_attr_only(void) {
     AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = color    */
 }
 
-/* Add one PICA200 attribute buffer, optionally declaring padding components
- * so that the buffer's declared bytes match its stride. When PAD_DECL is off
- * the call is identical to the original unpadded BufInfo_Add. */
+/* Add one PICA200 attribute buffer, declaring padding components whenever the
+ * buffer's stride is larger than its declared attribute bytes. Hardware Run 5
+ * showed that the normal 48-byte interleaved layout works only when the gap
+ * is declared (S1), while the same layout without the declaration wedged the
+ * GPU (S3). The PICA200 requires the total declared bytes of an attribute
+ * buffer to equal its stride; any unused bytes must be exposed as padding
+ * components. The NO_PAD flag skips the padding declaration and restores the
+ * old behaviour for diagnostic contrast. */
 static void add_bufinfo_padded(void *buf, uint32_t stride,
                                uint32_t real_components,
                                uint64_t real_perm,
@@ -229,7 +234,7 @@ static void add_bufinfo_padded(void *buf, uint32_t stride,
     uint64_t perm = real_perm;
     uint32_t components = real_components;
 
-    if (g_debug_flags & TWLHD_RDBG_PAD_DECL) {
+    if (!(g_debug_flags & TWLHD_RDBG_NO_PAD)) {
         if (twlhd_attr_pad_perm(stride, declared_bytes, real_components,
                                 real_perm, &perm, &components) == 0) {
             if (components != real_components || perm != real_perm) {
@@ -586,7 +591,7 @@ void renderer_shutdown(void) {
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
     g_renderer.layout_mode = LAYOUT_NORMAL;
-    g_renderer.layout_pad_decl = 0;
+    g_renderer.layout_no_pad = 0;
 }
 
 int renderer_init(void) {
@@ -742,7 +747,7 @@ int renderer_use_builtin_triangle(void) {
 
 void renderer_draw(void) {
     LayoutMode target;
-    int target_pad_decl;
+    int target_no_pad;
 
     if (!g_renderer.ready) return;
 
@@ -753,18 +758,18 @@ void renderer_draw(void) {
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
 
     target = compute_target_layout();
-    target_pad_decl = (g_debug_flags & TWLHD_RDBG_PAD_DECL) ? 1 : 0;
+    target_no_pad = (g_debug_flags & TWLHD_RDBG_NO_PAD) ? 1 : 0;
     if (target == LAYOUT_STRIDE) {
         renderer_trace("RDBG stride layout");
         ensure_stride_buf();
         setup_stride_attr();
         g_renderer.layout_mode = target;
-        g_renderer.layout_pad_decl = target_pad_decl;
+        g_renderer.layout_no_pad = target_no_pad;
     } else if (target != g_renderer.layout_mode ||
-               target_pad_decl != g_renderer.layout_pad_decl) {
+               target_no_pad != g_renderer.layout_no_pad) {
         apply_layout(target, 1);
         g_renderer.layout_mode = target;
-        g_renderer.layout_pad_decl = target_pad_decl;
+        g_renderer.layout_no_pad = target_no_pad;
     }
 
     if (target == LAYOUT_NORMAL) {

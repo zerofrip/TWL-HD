@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /*
- * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v5).
+ * TWL-HD Phase 4B/4C - ARM11 hardware-hang bisecting diagnostic (build v6).
  *
  * Stage 0 boots with gfxInitDefault() + a bottom-screen console only: no
  * renderer_init(), no fsInit(), no RTCom, no SD access. The renderer is
@@ -15,7 +15,7 @@
  *   SPLIT          -> two loaders, two non-interleaved buffers.
  *   STRIDE         -> two loaders, parametric stride/count/pad.
  *   NORMAL_COPY    -> normal layout from a private 48-byte copy.
- *   PAD_DECL       -> declare vertex padding so declared bytes == stride.
+ *   NO_PAD         -> old unpadded declaration (known to hang).
  *
  * Layout flags are mutually exclusive. If several are set the renderer uses
  * this precedence:
@@ -35,16 +35,15 @@
  * for up to 120 vblanks using C3D_FrameBegin(C3D_FRAME_NONBLOCK):
  *   "COMPLETED after K vblanks"  -> the previous frame was processed.
  *   "NOT COMPLETE after 120 vblanks (GPU wedged?)" -> the GPU never signalled.
- * Result lines show the effective hex mask (%04lX) and the active stride,
- * vertex count and pad: %04lX s%u v%u p%u f%d OK k=%d
- *                                            ... STUCK 120.
+ * Result lines show the effective hex mask and, when STRIDE is active, the
+ * active stride/vertex count/pad: %04lX [s%u v%u p%u ]f%d OK k=%d
+ *                                                    ... STUCK %d.
  *
- * Run 5 plan (PAD_DECL hypothesis):
- *   1) L, PAD_DECL on, B            -> real NORMAL path with padding;
- *                                      expect OK + RGB triangle if the
- *                                      hypothesis holds.
- *   2) STRIDE + PAD_DECL, VERTS 36/300/3000 at STRIDE=48 (size check).
- *   3) STRIDE sweep across the STRIDE presets with PAD_DECL on.
+ * Run 6 plan:
+ *   1) L, B with all flags off   -> real NORMAL path (padded); expect OK and
+ *                                   the RGB triangle.
+ *   2) STRIDE on, VERTS 36/300/3000 at STRIDE=48, B each.
+ *   3) NO_PAD on + B             -> expected STUCK (contrast; ends session).
  *
  * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
  * real-hardware bisection. Do not deploy.
@@ -99,7 +98,7 @@ static const struct {
     {TWLHD_RDBG_LAYOUT_SPLIT,      "SPLIT"},
     {TWLHD_RDBG_LAYOUT_STRIDE,     "STRIDE"},
     {TWLHD_RDBG_LAYOUT_NORMAL_COPY,"NORMAL_COPY"},
-    {TWLHD_RDBG_PAD_DECL,          "PAD_DECL"},
+    {TWLHD_RDBG_NO_PAD,            "NO_PAD"},
 };
 
 #define FLAG_COUNT (sizeof g_flag_defs / sizeof g_flag_defs[0])
@@ -275,7 +274,7 @@ static void update_heartbeat(void) {
  *   8  flags
  *   3  parameter rows
  *   1  key legend
- *   1  "PAD_DECL: declare vertex padding" hint
+ *   1  "NO_PAD: old unpadded decl (hangs)" hint
  *   1  status
  *   1  results header
  *   4  result rows
@@ -285,25 +284,25 @@ static void update_heartbeat(void) {
  *  27  total (<=29)
  *
  * Visible-character budget check for every printf in this file:
- *   "TWL-HD arm11 diag v5"              21
- *   "%c %-13s [%c]%s"                   21 max (1+1+13+1+3+2)
- *   "%c %-8s [%lu]"                     21 max (1+1+8+1+5+4)
- *   "A=tog U/D=mv L/R=adj L=init B=go"  34
- *   "PAD_DECL: declare vertex padding"  34
- *   "status: %.31s"                     39
- *   "last %u results:"                  15
- *   "%.39s" (result row)                39
- *   "last %u markers:"                  15
- *   "  -"                               3
- *   "  %.37s" (marker row)              39
- *   "hb:%4lu" (col 33..39)              7
+ *   "TWL-HD arm11 diag v6"                 21
+ *   "%c %-13s [%c]%s"                      21 max (1+1+13+1+3+2)
+ *   "%c %-8s [%lu]"                        21 max (1+1+8+1+5+4)
+ *   "A=tog U/D=mv L/R=adj L=init B=go"     34
+ *   "NO_PAD: old unpadded decl (hangs)"    35
+ *   "status: %.31s"                        39
+ *   "last %u results:"                     15
+ *   "%.39s" (result row)                   39
+ *   "last %u markers:"                     15
+ *   "  -"                                  3
+ *   "  %.37s" (marker row)                 39
+ *   "hb:%4lu" (col 33..39)                 7
  */
 static void render_ui(const char *status) {
     consoleClear();
-    printf("TWL-HD arm11 diag v5\n");
+    printf("TWL-HD arm11 diag v6\n");
     print_menu();
     printf("A=tog U/D=mv L/R=adj L=init B=go\n");
-    printf("PAD_DECL: declare vertex padding\n");
+    printf("NO_PAD: old unpadded decl (hangs)\n");
     printf("status: %.31s\n", status);
     print_results();
     print_markers();
@@ -342,6 +341,7 @@ static int draw_one_frame(void) {
 static void probe_previous_frame(char *status, size_t status_size) {
     int completed = 0;
     int k;
+    uint32_t flags = effective_flags();
 
     renderer_trace("probe");
     for (k = 0; k < PROBE_VBLANKS; k++) {
@@ -350,20 +350,35 @@ static void probe_previous_frame(char *status, size_t status_size) {
         if (C3D_FrameBegin(C3D_FRAME_NONBLOCK)) {
             C3D_FrameEnd(0);
             completed = 1;
-            add_result("%04lX s%u v%u p%u f%d OK k=%d",
-                       (unsigned long)effective_flags(),
-                       (unsigned)g_param_values[0], (unsigned)g_param_values[1],
-                       (unsigned)g_param_values[2], g_frame_count, k + 1);
+            if (flags & TWLHD_RDBG_LAYOUT_STRIDE) {
+                add_result("%04lX s%u v%u p%u f%d OK k=%d",
+                           (unsigned long)flags,
+                           (unsigned)g_param_values[0],
+                           (unsigned)g_param_values[1],
+                           (unsigned)g_param_values[2],
+                           g_frame_count, k + 1);
+            } else {
+                add_result("%04lX f%d OK k=%d",
+                           (unsigned long)flags,
+                           g_frame_count, k + 1);
+            }
             break;
         }
     }
 
     if (!completed) {
-        add_result("%04lX s%u v%u p%u f%d STUCK %d",
-                   (unsigned long)effective_flags(),
-                   (unsigned)g_param_values[0], (unsigned)g_param_values[1],
-                   (unsigned)g_param_values[2], g_frame_count,
-                   PROBE_VBLANKS);
+        if (flags & TWLHD_RDBG_LAYOUT_STRIDE) {
+            add_result("%04lX s%u v%u p%u f%d STUCK %d",
+                       (unsigned long)flags,
+                       (unsigned)g_param_values[0],
+                       (unsigned)g_param_values[1],
+                       (unsigned)g_param_values[2],
+                       g_frame_count, PROBE_VBLANKS);
+        } else {
+            add_result("%04lX f%d STUCK %d",
+                       (unsigned long)flags,
+                       g_frame_count, PROBE_VBLANKS);
+        }
         g_wedged = 1;
         snprintf(status, status_size, "GPU WEDGED - hold POWER");
     }
@@ -473,12 +488,19 @@ int main(void) {
                 if (draw_one_frame()) {
                     probe_previous_frame(status, sizeof status);
                 } else {
-                    add_result("%04lX s%u v%u p%u f%d REFUSED",
-                               (unsigned long)effective_flags(),
-                               (unsigned)g_param_values[0],
-                               (unsigned)g_param_values[1],
-                               (unsigned)g_param_values[2],
-                               g_frame_count);
+                    uint32_t flags = effective_flags();
+                    if (flags & TWLHD_RDBG_LAYOUT_STRIDE) {
+                        add_result("%04lX s%u v%u p%u f%d REFUSED",
+                                   (unsigned long)flags,
+                                   (unsigned)g_param_values[0],
+                                   (unsigned)g_param_values[1],
+                                   (unsigned)g_param_values[2],
+                                   g_frame_count);
+                    } else {
+                        add_result("%04lX f%d REFUSED",
+                                   (unsigned long)flags,
+                                   g_frame_count);
+                    }
                 }
                 if (!g_wedged) {
                     snprintf(status, sizeof status, "one frame probed");
