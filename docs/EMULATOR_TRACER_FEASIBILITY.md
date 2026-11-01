@@ -11,7 +11,7 @@ that the homebrew register-proxy shim (backend B) cannot see?
 
 Evidence labels: **SOURCE-READ** = read in the emulator source in this session
 (file:line given; paths are relative to the emulator checkout root, e.g.
-`/home/one/3ds/desmume`); **MECHANICAL** = compared by a script, not by eye;
+`/home/one/3ds/desmume`); **MECHANICAL** = compared by an ad-hoc script at the time; the scripts were **not kept**, so on re-check treat these results as SOURCE-READ until re-run;
 **BUILD VERIFIED** = a build or command actually ran here and its output was observed;
 **EMULATOR VERIFIED** = observed by running our ROM in DeSmuME (never hardware);
 **UNVERIFIED** = reasoning or recollection, not checked here.
@@ -19,8 +19,7 @@ Nothing in this document is HARDWARE VERIFIED.
 
 **Where the BUILD/EMULATOR evidence lives:** the DeSmuME out-of-tree build, the run of the
 `arm9v2` demo and its parse/comparison results are recorded in `docs/EMULATOR_VALIDATION.md`
-(added by the emulator-validation harness change, which must be merged for that reference to
-resolve), including the SHA-256 of the captured frame and the exact commands.
+(added to `main` by the emulator-validation harness merge), including the SHA-256 of the captured frame and the exact commands.
 
 **Supersedes one earlier statement:** `docs/PHASE4D_CAPTURE_EXPANSION_PROPOSAL.md` §9
 (decision 5) said no DS emulator was available. Since then emulator sources were supplied and
@@ -52,7 +51,7 @@ DeSmuME was built; real **hardware is still not available** for this work.
 | Packed GXFIFO words (incl. DMA) | `gfx3d_sendCommandToFIFO(v)` → `gxf_hardware.receive(v)` (`:3623`) | Called from the MMU for writes to `0x04000400` (`desmume/src/MMU.cpp:4685`; the case covers writes to `0x04000400–0x0400043F`) |
 | Direct command ports | `gfx3d_sendCommand(adr, val)`: `cmd = (adr & 0x1FF) >> 2` (`:3632`) | Called from `MMU.cpp:4717`. The `case` list is the same id set as our table |
 | Frame boundary | `SWAP_BUFFERS` (0x50) passes through the same funnel; execution is `gfx3d_glFlush` (`:3197`) | Issue-time boundary is what a v2 file needs |
-| Rendering registers (RSTA) | `gfx3d_glClearColor<T>`, `gfx3d_glClearDepth<T,N>`, `gfx3d_glClearImageOffset<T,N>`, `gfx3d_glFogColor`, `gfx3d_glFogOffset`, `gfx3d_glAlphaFunc`, called from width-specific MMU write handlers (`MMU.cpp:3795–3830`, `4447–4479`, `5009–5032`) | The handler path gives the access width (u8/u16/u32) that RSTA entries need. Toon, edge and fog tables go through `gfx3d_UpdateToonTable<T>` (`MMU.cpp:3397,3949,4677`), `gfx3d_UpdateEdgeMarkColorTable<T>` (`:3383,3935,4663`) and `gfx3d_UpdateFogTable<T>` (`:3389,3941,4669`); the fog setter **masks each byte to 7 bits** (`& 0x7F`), so a tracer must decide whether to record the value as written (pre-mask, matching the shim) or as applied. `DISP3DCNT` was not located in this audit |
+| Rendering registers (RSTA) | `gfx3d_glClearColor<T>`, `gfx3d_glClearDepth<T,N>`, `gfx3d_glClearImageOffset<T,N>`, `gfx3d_glFogColor`, `gfx3d_glFogOffset`, `gfx3d_glAlphaFunc`, called from width-specific MMU write handlers (`MMU.cpp:3795–3830`, `4447–4479`, `5009–5032`) | The handler path gives the access width (u8/u16/u32) that RSTA entries need. Toon, edge and fog tables go through `gfx3d_UpdateToonTable<T>` (`MMU.cpp:3397,3949,4677`), `gfx3d_UpdateEdgeMarkColorTable<T>` (`:3383,3935,4663`) and `gfx3d_UpdateFogTable<T>` (`:3389,3941,4669`); the MMU write handlers **mask each byte to 7 bits** before calling the fog setter (`& 0x7F` / `0x7F7F` / `0x7F7F7F7F` at the call sites above), so a tracer must decide whether to record the value as written (pre-mask, matching the shim) or as applied. `DISP3DCNT` (`REG_DISPA_DISP3DCNT`) is handled in `MMU.cpp` (e.g. lines 2536, 2914, 3556; found in the follow-up fact-check, not analysed further here) |
 
 Facts that affect the writer:
 
@@ -84,7 +83,7 @@ emulator's hook is unlikely to appear identically in the other.
 
 ## 3. Command-table cross-check — MECHANICAL
 
-Scripts parsed each source; nothing was compared by eye.
+Ad-hoc scripts parsed each source when this audit was written; the scripts were not kept in the repository, so the counts below are reproducible only by re-reading the three tables (treat as SOURCE-READ until re-run).
 
 | Source | Result |
 |---|---|
@@ -106,7 +105,7 @@ The tracer would emit one v2 file per frame (a frame ends at its `SWAP_BUFFERS` 
 | Zero-parameter value | DeSmuME passes 0; the shim records whatever the game wrote | **Spec follow-up:** state that consumers must ignore the value of a zero-parameter entry. Not changed in this audit |
 | NOP | melonDS emits them | Tracer must filter; entry validity rule unchanged |
 | RSTA | Hook the register setters with width | Same whitelist applies |
-| Hidden library state | The shim captures the *actual values written*; libnds keeps the clear colour's polygon id in the library global `glCurClearColor` (inline `glClearColor`/`glClearPolyID` do `GFX_CLEAR_COLOR = glCurClearColor = (glCurClearColor & mask) \| …`, `videoGL.h:1303,1311`; the symbol is a BSS variable in `libnds9.a`) | **Observed (EMULATOR VERIFIED):** the first clear-colour write in the captured DS frame was `0x3F1F0000`, while a fresh single-frame host run gives `0x001F0000`. **Cause (SOURCE-READ, inferred):** the polygon id left in `glCurClearColor` by earlier frames. Not a defect; worth a spec note |
+| Hidden library state | The shim captures the *actual values written*; libnds keeps the clear colour's polygon id in the library global `glCurClearColor` (inline `glClearColor`/`glClearPolyID` do `GFX_CLEAR_COLOR = glCurClearColor = (glCurClearColor & mask) \| …`, `videoGL.h:1303,1311`; the symbol is a BSS variable in `libnds9.a`) | **Observed (EMULATOR VERIFIED):** the first clear-colour write in the captured DS frame was `0x3F1F0000`, while a fresh single-frame host run gives `0x001F0000`. **Cause (as stated in `docs/EMULATOR_VALIDATION.md` and the comparator's comments; libnds `glInit()` was not re-read for this audit):** the library global `glCurClearColor` is seeded by `glInit()` on the DS (polygon-id bits 24..29 = `0x3F`) while the host test leaves it at zero, so the first clear-colour write differs only in those bits. Not a defect; worth a spec note |
 | Frame size | Real frames may exceed 65,536 `GXCM` entries or 1 MiB | **UNVERIFIED.** Hardware vertex/polygon RAM is finite, but commands beyond it are still issued. Section 8 decision |
 | Textures | Descriptors (`TEXIMAGE_PARAM`, `PLTT_BASE`) are ordinary commands; pixels live in VRAM state | Needs new chunks (`TXDS/TXDT/PLDT`, currently reserved). Out of scope here |
 
@@ -121,18 +120,18 @@ GPL-3.0-or-later (header text).
 
 Rules for this work:
 
-1. **A tracer is a modification of a GPL program.** Any binary or patch that contains
-   emulator code must be distributed under the emulator's license, with source. It
-   therefore lives in a separate fork/repository (or a patch file) outside TWL-HD.
+1. **A tracer would be a modification of a GPL program.** As we understand the GPL, any binary or patch that contains
+   emulator code must be distributed under the emulator's license, with source. As a policy choice we keep it in a separate
+   fork/repository (or a patch file) outside TWL-HD; rule 2 explains why that alone is not sufficient.
 2. **Separate repositories are not by themselves a guarantee.** What matters is what code
    moves between them:
    - Copying emulator code into TWL-HD would put that code under GPL terms inside an
      Apache-2.0 repository. **Do not.**
    - Copying TWL-HD's Apache-2.0 code (for example `common/twlhd_v2_write.c`) into the
-     fork makes the combined binary a GPL work that also carries Apache attribution/NOTICE
-     obligations. Apache-2.0 is compatible with GPLv3 but **not** with GPLv2-only; DeSmuME's
-     "or later" wording permits GPLv3 here, yet this still couples the two projects.
-   - **Linking** either way creates a combined work and is excluded.
+     fork would, in the project's cautious reading, make the combined binary a GPL work that also carries Apache attribution/NOTICE
+     obligations. The commonly stated position (e.g. the FSF's) is that Apache-2.0 is compatible with GPLv3 but not with GPLv2-only;
+     DeSmuME's "or later" wording would permit GPLv3 here, yet this still couples the two projects. (Not legal advice.)
+   - **Linking** either way is treated by this project as creating a combined work and is excluded as a policy.
 3. **Therefore the shared artifact is the specification only.** The tracer's writer is
    implemented independently from `docs/TWLHD_V2_FORMAT.md` (no copy of TWL-HD source),
    and TWL-HD's validators (`twlhd_v2_parse`, `tools/twlhd_v2_dump.py`) are used as
@@ -141,8 +140,9 @@ Rules for this work:
 4. **Output files are data.** A v2 trace does not contain program code. Traces from
    *commercial* ROMs may still embed copyrighted geometry and colours: do not commit or
    share them. Repository tests use only our own homebrew ROMs.
-5. **Facts versus expression.** Command ids and parameter counts are hardware facts
-   (public GBATEK); the cross-check in section 3 compared values and copied no code.
+5. **Facts versus expression.** The project's working posture is that command ids and parameter counts are hardware facts
+   (public GBATEK) rather than protectable expression; this is a posture, not a legal conclusion. The cross-check in section 3
+   compared values and copied no code.
 
 ## 6. Implementation plan (nothing started)
 

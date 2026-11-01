@@ -355,4 +355,5 @@ owner supplied DS/3DS emulator source trees; DeSmuME's CLI was built out of tree
 `arm9v2` demo was run in it (see `docs/EMULATOR_VALIDATION.md`). Real DS/3DS **hardware is
 still unavailable for the capture work**; a New 3DS exists on the owner's network and is the
 subject of the staged plan in `docs/HARDWARE_VALIDATION_3DS.md` and
-`docs/HARDWARE_TEST_PROCEDURE_3DS.md` (preparation only; nothing deployed).
+`docs/HARDWARE_TEST_PROCEDURE_3DS.md` (written as preparation only; the owner then ran the tests on the console themselves —
+see section 12 of the procedure and `docs/PHASE4_HARDWARE_FINDINGS.md`).

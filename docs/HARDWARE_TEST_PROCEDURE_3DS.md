@@ -3,7 +3,9 @@
 > **Status update (later; the text below is the original Run 1 procedure and is kept as written).**
 > The owner ran this and later builds on the console themselves; results are recorded in section 12 and in
 > `docs/PHASE4_HARDWARE_FINDINGS.md`. The assistant never connected to or executed anything on the console.
-> Sections 6, 9 and the "HARDWARE UNVERIFIED" wording below describe the situation BEFORE those runs.
+> Sections 6, 9 and the "HARDWARE UNVERIFIED" wording below describe the situation BEFORE those runs. Also historical: the staged copy
+> `/home/one/3ds/hwtest-staging/twlhd-arm11.3dsx` and the `SHA256SUMS` statements in sections 2 and 8 (the file was later moved to
+> `run2_artifacts/twlhd-arm11-run1-HUNG.3dsx`, and `SHA256SUMS` now lists only the newest artifacts), and the "staged copy remains" text in section 8.
 
 **Status: PREPARED, NOT APPROVED. Nothing has been connected to, uploaded to, or executed on
 the console.** The owner authorised *preparation only*. This document is the procedure that
@@ -216,14 +218,27 @@ file used, which buttons were pressed.
 
 ### Run 1 — follow-up report by the owner (HARDWARE OBSERVED, text report, 2026-10-29)
 
-The same build (SHA-256 `3198426913e9bc38c2e011ff299f596e2b517ba739b843e3ce304506f10dcb33`) was run: **the top screen stayed black,
+The owner stated they ran the build with SHA-256 `3198426913e9bc38c2e011ff299f596e2b517ba739b843e3ce304506f10dcb33` (the owner's statement; not independently confirmed from the console): **the top screen stayed black,
 the buttons did nothing, and a forced power-off (POWER hold) was needed. The console booted normally afterwards.**
 This answers the open points above for that build: the triangle was **not** displayed, and the app did not stay responsive.
-(Audit risk 1, a hang requiring a hard power-off, did occur; its cause was not the GPU-synchronisation scenario assumed in the audit — see below.)
+(Audit risk 1, a hang requiring a hard power-off, did occur. **Inference** from the later HARDWARE OBSERVED diagnostic results, not a direct observation: its cause was not the GPU-synchronisation scenario assumed in the audit — see below.)
 
-### Runs 2–6 — owner-run diagnostic builds (HARDWARE OBSERVED, photographs; summary)
+### Runs 2–6 — owner-run control, diagnostic and fixed builds (HARDWARE OBSERVED, photographs; summary)
 
-Details, build hashes, the evidence table and the labels are in `docs/PHASE4_HARDWARE_FINDINGS.md`. In short:
+The evidence table, root cause and labels are in `docs/PHASE4_HARDWARE_FINDINGS.md`. Run 2 also re-showed the original symptom (the original build and a
+build with a vertex-buffer cache flush both hung). Artifact hashes (of the files the assistant staged for each run, run by file name) and photographs are
+kept **outside** the repository in the owner's staging area (`/home/one/3ds/hwtest-staging/`: `RUN2_RESULTS.md`, `evidence/`, `run*_artifacts/`). Hashes:
+
+| Run | Artifact (SHA-256 prefix) |
+|---|---|
+| 1 | original app `3198426913e9…` (owner-stated) |
+| 2 | official `simple_tri` control `f6cef9a1…`; diag v1 `4bd2297f…`; original + cache flush `064017f7…` |
+| 3 | diag v2 `6dffde4f…` |
+| 4 | diag v3 `f2f8c25b…` |
+| 5 | diag v5 `a34c4d9b…` |
+| 6 | fixed production app `2b824245…`; diag v6 `7d73ac64…` |
+
+In short:
 - An unmodified official `simple_tri` control rendered correctly, so the console, launcher and citro3d were not the problem.
 - Diagnostic builds with a non-blocking GPU-completion probe showed every CPU-side call returning while the first submitted GPU frame never completed.
 - Toggling features one at a time on the console isolated the cause to the vertex attribute buffer: declared attribute bytes (28) did not equal the
