@@ -1,5 +1,10 @@
 # New 3DS Hardware Validation — Deployment Audit and Test Plan
 
+> **Status update.** This audit was written before any console run and is kept as written. The owner has since run the test and later
+> diagnostic builds on the console themselves; results (including that the first build hung, and why) are in
+> `docs/HARDWARE_TEST_PROCEDURE_3DS.md` section 12 and `docs/PHASE4_HARDWARE_FINDINGS.md`. Statements below that call the renderer
+> "HARDWARE UNVERIFIED" or describe the hang risk as GPU synchronisation reflect the state at the time of writing.
+
 **Status: AUDIT AND PLAN ONLY. Nothing has been deployed to, or executed on, the
 device. Approval is required before step T2 (see section 8).**
 

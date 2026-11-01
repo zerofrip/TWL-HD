@@ -1,5 +1,10 @@
 # New 3DS — Triangle-Only Hardware Test: Final Procedure (FOR APPROVAL)
 
+> **Status update (later; the text below is the original Run 1 procedure and is kept as written).**
+> The owner ran this and later builds on the console themselves; results are recorded in section 12 and in
+> `docs/PHASE4_HARDWARE_FINDINGS.md`. The assistant never connected to or executed anything on the console.
+> Sections 6, 9 and the "HARDWARE UNVERIFIED" wording below describe the situation BEFORE those runs.
+
 **Status: PREPARED, NOT APPROVED. Nothing has been connected to, uploaded to, or executed on
 the console.** The owner authorised *preparation only*. This document is the procedure that
 needs explicit approval before the owner copies anything to the SD card.
@@ -208,3 +213,22 @@ allocation did not fail on this console.
 
 Questions put to the owner: top-screen appearance, stability, exit behaviour, hash of the
 file used, which buttons were pressed.
+
+### Run 1 — follow-up report by the owner (HARDWARE OBSERVED, text report, 2026-10-29)
+
+The same build (SHA-256 `3198426913e9bc38c2e011ff299f596e2b517ba739b843e3ce304506f10dcb33`) was run: **the top screen stayed black,
+the buttons did nothing, and a forced power-off (POWER hold) was needed. The console booted normally afterwards.**
+This answers the open points above for that build: the triangle was **not** displayed, and the app did not stay responsive.
+(Audit risk 1, a hang requiring a hard power-off, did occur; its cause was not the GPU-synchronisation scenario assumed in the audit — see below.)
+
+### Runs 2–6 — owner-run diagnostic builds (HARDWARE OBSERVED, photographs; summary)
+
+Details, build hashes, the evidence table and the labels are in `docs/PHASE4_HARDWARE_FINDINGS.md`. In short:
+- An unmodified official `simple_tri` control rendered correctly, so the console, launcher and citro3d were not the problem.
+- Diagnostic builds with a non-blocking GPU-completion probe showed every CPU-side call returning while the first submitted GPU frame never completed.
+- Toggling features one at a time on the console isolated the cause to the vertex attribute buffer: declared attribute bytes (28) did not equal the
+  48-byte vertex stride. Declaring the 20-byte gap as padding made the frame complete; removing the declaration made it hang again in the same session.
+- The fixed production app then showed the built-in triangle, a 36-vertex cube and a 900-vertex frame from the SD card on the console, and a 3000-vertex
+  synthetic case completed; with padding disabled it hung (contrast).
+Not established: animation or long runs, textures, real DS captures, other vertex formats, and any DS-faithful rendering.
+Nothing in this section is an assistant-run observation.
