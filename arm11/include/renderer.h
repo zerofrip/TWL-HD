@@ -51,3 +51,49 @@ void renderer_draw(void);
 int renderer_is_ready(void);
 uint32_t renderer_vertex_count(void);
 const char *renderer_result_string(int result);
+
+/* Per-frame runtime debug toggles. All default to zero. Vertex buffer padding
+ * is declared by default so that the declared bytes match the stride; NO_PAD
+ * reverts to the old unpadded behaviour for diagnostic contrast. Init-time
+ * flags (ORTHO, NO_STATE) take effect on the next renderer_init(); draw-time
+ * flags are checked every renderer_draw().
+ *
+ * Layout flags are mutually exclusive; if several are set the precedence is
+ * OFFICIAL_ATTR > LAYOUT_SPLIT > LAYOUT_STRIDE > LAYOUT_PACKED28 >
+ * LAYOUT_FIXED48 > LAYOUT_NORMAL_COPY, and the normal interleaved 48-byte
+ * layout is used when none are set. */
+#define TWLHD_RDBG_SKIP_DRAW         0x01u
+#define TWLHD_RDBG_SKIP_CLEAR        0x02u
+#define TWLHD_RDBG_OFFICIAL_ATTR     0x04u
+#define TWLHD_RDBG_ORTHO             0x08u
+#define TWLHD_RDBG_NO_STATE          0x10u
+#define TWLHD_RDBG_NO_UNIFORMS       0x20u
+#define TWLHD_RDBG_NO_BIND           0x40u
+#define TWLHD_RDBG_LAYOUT_FIXED48    0x80u
+#define TWLHD_RDBG_LAYOUT_PACKED28   0x100u
+#define TWLHD_RDBG_LAYOUT_SPLIT      0x200u
+#define TWLHD_RDBG_LAYOUT_STRIDE     0x800u
+#define TWLHD_RDBG_LAYOUT_NORMAL_COPY 0x400u
+#define TWLHD_RDBG_NO_PAD            0x1000u
+
+void renderer_set_debug_flags(uint32_t flags);
+uint32_t renderer_get_debug_flags(void);
+
+/* Parametric stride-layout parameters. Defaults are 48 bytes, 3 vertices and
+ * 0 padding. Setters clamp/ignore out-of-range values. The active values are
+ * read by renderer_draw() only when TWLHD_RDBG_LAYOUT_STRIDE is set. */
+void renderer_set_debug_stride(uint32_t bytes);
+void renderer_set_debug_vertex_count(uint32_t n);
+void renderer_set_debug_pad(uint32_t bytes);
+
+/* Diagnostic trace hook. renderer_trace() calls the installed callback (if
+ * any) immediately BEFORE the named citro3d/PICA step, so the last step seen
+ * names the call that stalled. The hook defaults to NULL, in which case
+ * renderer_trace() is a no-op and the normal path is unchanged.
+ *
+ * HARDWARE UNVERIFIED (build-verified only); this build's purpose is
+ * real-hardware bisection. Do not deploy. */
+typedef void (*TwlhdRendererTraceFn)(const char *step);
+
+void renderer_set_trace(TwlhdRendererTraceFn cb);
+void renderer_trace(const char *step);

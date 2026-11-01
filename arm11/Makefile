@@ -40,6 +40,20 @@ APP_DESCRIPTION	:=	DS 3D capture research
 APP_AUTHOR	:=	TWL-HD contributors
 
 #---------------------------------------------------------------------------------
+# Diagnostic build (make -C arm11 DIAG=1): separate build dir, different
+# entry point. Sits after the default TARGET/BUILD assignment so it overrides
+# them.
+#
+# HARDWARE UNVERIFIED (build-verified only); this build's purpose is
+# real-hardware bisection. Do not deploy.
+#---------------------------------------------------------------------------------
+DIAG	?=	0
+ifeq ($(DIAG),1)
+TARGET	:=	twlhd-arm11-diag
+BUILD	:=	build-diag
+endif
+
+#---------------------------------------------------------------------------------
 # options for code generation
 #---------------------------------------------------------------------------------
 ARCH	:=	-march=armv6k -mtune=mpcore -mfpu=vfp -mfloat-abi=hard -mtp=soft
@@ -73,6 +87,12 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
+# main.c and diag_main.c both define main(); each build takes exactly one.
+ifeq ($(DIAG),1)
+CFILES		:=	$(filter-out main.c,$(CFILES))
+else
+CFILES		:=	$(filter-out diag_main.c,$(CFILES))
+endif
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
 SFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.s)))
 BINFILES	:=	$(foreach dir,$(DATA),$(notdir $(wildcard $(dir)/*.*)))
