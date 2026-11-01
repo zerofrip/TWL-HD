@@ -8,18 +8,18 @@
 
 #include "twlhd_gx_interp.h"
 
-#include <math.h>
-#include <stdio.h>
 #include <string.h>
 
 /* Fixed-point scale: matrices are 20.12 (raw word = value * 4096). */
 #define FX_SHIFT 12
 #define FX_ONE   (1 << FX_SHIFT)
-#define FX_MASK  ((1 << FX_SHIFT) - 1)
 
 /* Per-mode stack capacities (entries). */
 #define PROJ_STACK_CAP 1u
 #define POS_STACK_CAP  31u
+
+/* Parameter buffer. The largest GX command (LOAD_4x4 / MULT_4x4) has 16 words. */
+#define PARAM_BUF_SIZE 16u
 
 /* Persistent vertex component storage for VTX_XY/XZ/YZ. */
 typedef struct {
@@ -31,7 +31,6 @@ typedef struct {
 } GxMatrix;
 
 typedef struct {
-    GxMatrix base;          /* matrix in effect when sp == 0. */
     GxMatrix stack[31];     /* projection uses only index 0. */
     uint32_t sp;            /* next free slot; 0 means stack empty. */
     uint32_t capacity;      /* PROJ_STACK_CAP or POS_STACK_CAP. */
@@ -62,12 +61,14 @@ typedef struct {
     TwlhdGxVertex prim_buf[4]; /* max vertices needed for a quad. */
     uint32_t prim_count;
     uint32_t prim_tri_index;   /* triangle index inside a strip (for winding). */
+    int prim_emitted;          /* non-zero once a primitive has been emitted. */
 } GxInterp;
 
-static int32_t fx12_floor_div(int64_t v) {
-    if (v >= 0) return (int32_t)(v >> FX_SHIFT);
-    /* Arithmetic floor division by 4096 (truncate toward -infinity). */
-    return (int32_t)(-((-v + FX_MASK) >> FX_SHIFT));
+static int32_t fx12_floor_div(uint64_t v) {
+    /* The DS uses two's-complement fixed point; accumulate as unsigned to
+     * avoid signed overflow UB, then reinterpret and arithmetic-shift down.
+     * gcc/arm-none-eabi perform arithmetic right shift for int64_t. */
+    return (int32_t)((int64_t)v >> FX_SHIFT);
 }
 
 static void matrix_identity(GxMatrix *d) {
@@ -92,10 +93,10 @@ static void matrix_multiply(GxMatrix *current, const GxMatrix *operand) {
 
     for (col = 0; col < 4u; col++) {
         for (row = 0; row < 4u; row++) {
-            int64_t acc = 0;
+            uint64_t acc = 0;
             for (k = 0; k < 4u; k++) {
-                acc += (int64_t)current->m[k * 4 + row] *
-                       (int64_t)operand->m[col * 4 + k];
+                acc += (uint64_t)(int64_t)current->m[k * 4 + row] *
+                       (uint64_t)(int64_t)operand->m[col * 4 + k];
             }
             tmp.m[col * 4 + row] = fx12_floor_div(acc);
         }
@@ -173,10 +174,10 @@ static void recompute_clip(GxInterp *g) {
 
     for (col = 0; col < 4u; col++) {
         for (row = 0; row < 4u; row++) {
-            int64_t acc = 0;
+            uint64_t acc = 0;
             for (k = 0; k < 4u; k++) {
-                acc += (int64_t)g->proj.m[k * 4 + row] *
-                       (int64_t)g->pos.m[col * 4 + k];
+                acc += (uint64_t)(int64_t)g->proj.m[k * 4 + row] *
+                       (uint64_t)(int64_t)g->pos.m[col * 4 + k];
             }
             g->clip.m[col * 4 + row] = fx12_floor_div(acc);
         }
@@ -214,6 +215,18 @@ static int stack_pop(GxInterp *g, int32_t n) {
     GxStack *s = current_stack(g);
     uint32_t new_sp;
 
+    if (g->mode == 0u) {
+        /* Projection stack is one entry deep; the parameter is ignored and
+         * POP always restores slot 0. */
+        if (s->sp == 0u) {
+            g->stats->stack_errors++;
+            return 0;
+        }
+        matrix_copy(current_matrix(g), &s->stack[0]);
+        s->sp = 0u;
+        return 1;
+    }
+
     if (n <= 0) {
         g->stats->stack_errors++;
         return 0;
@@ -223,17 +236,19 @@ static int stack_pop(GxInterp *g, int32_t n) {
         return 0;
     }
     new_sp = s->sp - (uint32_t)n;
-    if (new_sp == 0u) {
-        matrix_copy(current_matrix(g), &s->base);
-    } else {
-        matrix_copy(current_matrix(g), &s->stack[new_sp - 1u]);
-    }
+    matrix_copy(current_matrix(g), &s->stack[new_sp]);
     s->sp = new_sp;
     return 1;
 }
 
 static int stack_store(GxInterp *g, uint32_t index) {
     GxStack *s = current_stack(g);
+
+    if (g->mode == 0u) {
+        /* Projection stack only has slot 0; the index parameter is ignored. */
+        matrix_copy(&s->stack[0], current_matrix(g));
+        return 1;
+    }
 
     if (index >= s->capacity) {
         g->stats->stack_errors++;
@@ -246,20 +261,18 @@ static int stack_store(GxInterp *g, uint32_t index) {
 static int stack_restore(GxInterp *g, uint32_t index) {
     GxStack *s = current_stack(g);
 
+    if (g->mode == 0u) {
+        /* Projection stack only has slot 0; the index parameter is ignored. */
+        matrix_copy(current_matrix(g), &s->stack[0]);
+        return 1;
+    }
+
     if (index >= s->capacity) {
         g->stats->stack_errors++;
         return 0;
     }
     matrix_copy(current_matrix(g), &s->stack[index]);
     return 1;
-}
-
-static void update_base_on_matrix_change(GxInterp *g) {
-    GxStack *s = current_stack(g);
-
-    if (s->sp == 0u) {
-        matrix_copy(&s->base, current_matrix(g));
-    }
 }
 
 static int16_t sign_extend16(uint32_t v) {
@@ -308,7 +321,7 @@ static void transform_vertex(GxInterp *g, float x, float y, float z,
 
 static int emit_triangle(GxInterp *g, const TwlhdGxVertex *a,
                          const TwlhdGxVertex *b, const TwlhdGxVertex *c) {
-    if (g->out_count + 3u > g->out_capacity) {
+    if (g->out_capacity - g->out_count < 3u) {
         g->stats->capacity_dropped += 3u;
         return 0;
     }
@@ -332,14 +345,17 @@ static void flush_primitive(GxInterp *g) {
         g->stats->dropped_incomplete += n % 4u;
         break;
     case 2u: /* triangle strip */
-        g->stats->dropped_incomplete += (n < 3u) ? n : 0u;
-        break;
     case 3u: /* quad strip */
-        g->stats->dropped_incomplete += (n < 4u) ? n : (n % 2u);
+        /* Stays at 2 after each emitted primitive; count only vertices that
+         * never joined a primitive. */
+        if (!g->prim_emitted) {
+            g->stats->dropped_incomplete += n;
+        }
         break;
     }
     g->prim_count = 0u;
     g->prim_tri_index = 0u;
+    g->prim_emitted = 0;
 }
 
 static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
@@ -351,6 +367,7 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
                                &g->prim_buf[2]))
                 return 0;
+            g->prim_emitted = 1;
             g->prim_count = 0u;
         }
         return 1;
@@ -366,6 +383,7 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
                                &g->prim_buf[3]))
                 return 0;
             g->stats->quads_split++;
+            g->prim_emitted = 1;
             g->prim_count = 0u;
         }
         return 1;
@@ -383,6 +401,7 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
                                    &g->prim_buf[2]))
                     return 0;
             }
+            g->prim_emitted = 1;
             g->prim_tri_index++;
             /* Roll the buffer: keep the last two vertices. */
             g->prim_buf[0] = g->prim_buf[1];
@@ -402,6 +421,7 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
                                &g->prim_buf[2]))
                 return 0;
             g->stats->quads_split++;
+            g->prim_emitted = 1;
             /* Roll the buffer: keep the last two vertices. */
             g->prim_buf[0] = g->prim_buf[2];
             g->prim_buf[1] = g->prim_buf[3];
@@ -456,7 +476,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             if (!stack_pop(g, n)) return TWLHD_GX_ERR_STACK;
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
     }
@@ -476,7 +495,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
             if (!stack_restore(g, params[0] & 0x1Fu))
                 return TWLHD_GX_ERR_STACK;
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -486,7 +504,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_identity(current_matrix(g));
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -496,7 +513,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_load_4x4(current_matrix(g), params);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -506,7 +522,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_load_4x3(current_matrix(g), params);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -518,7 +533,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
             matrix_load_4x4(&op, params);
             matrix_multiply(current_matrix(g), &op);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -528,7 +542,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_mult_4x3(current_matrix(g), params);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -538,7 +551,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_mult_3x3(current_matrix(g), params);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -548,7 +560,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_scale(current_matrix(g), params);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -558,7 +569,6 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         } else {
             matrix_translate(current_matrix(g), params);
             mark_matrix_dirty(g);
-            update_base_on_matrix_change(g);
         }
         break;
 
@@ -619,6 +629,11 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
 
     case TWLHD_V2_CMD_VTX_DIFF:
         g->stats->unsupported++;
+        if (g->in_begin) {
+            /* VTX_DIFF inside a primitive corrupts assembly; callers must know
+             * the resulting geometry is incomplete. */
+            g->stats->geometry_incomplete++;
+        }
         break;
 
     case TWLHD_V2_CMD_BEGIN_VTXS:
@@ -629,6 +644,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         g->begin_mode = params[0] & 0x3u;
         g->prim_count = 0u;
         g->prim_tri_index = 0u;
+        g->prim_emitted = 0;
         break;
 
     case TWLHD_V2_CMD_END_VTXS:
@@ -691,15 +707,13 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
 
     g.proj_stack.capacity = PROJ_STACK_CAP;
     g.pos_stack.capacity = POS_STACK_CAP;
-    matrix_identity(&g.proj_stack.base);
-    matrix_identity(&g.pos_stack.base);
 
     while (i < view->gxcm_count) {
         uint32_t word = twlhd_v2_gxcm_cmd_word(view, i);
         uint32_t id;
         uint8_t param_count;
         uint8_t entry_count;
-        uint32_t params[16];
+        uint32_t params[PARAM_BUF_SIZE];
         uint32_t j;
 
         if (word == TWLHD_V2_RAW_FIFO_BIT) {
@@ -710,6 +724,9 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
 
         id = word & TWLHD_V2_CMD_ID_MASK;
         if (!twlhd_v2_cmd_param_count(id, &param_count)) {
+            return TWLHD_GX_ERR_STREAM;
+        }
+        if (param_count > PARAM_BUF_SIZE) {
             return TWLHD_GX_ERR_STREAM;
         }
         entry_count = param_count ? param_count : 1u;

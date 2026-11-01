@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
     printf("stats commands=%lu vertices_in=%lu triangles_out=%lu "
            "quads_split=%lu dropped_incomplete=%lu ignored_outside_begin=%lu "
            "ignored_no_effect=%lu unsupported=%lu raw_fifo_skipped=%lu "
-           "stack_errors=%lu capacity_dropped=%lu\n",
+           "stack_errors=%lu capacity_dropped=%lu geometry_incomplete=%lu\n",
            (unsigned long)stats.commands, (unsigned long)stats.vertices_in,
            (unsigned long)stats.triangles_out, (unsigned long)stats.quads_split,
            (unsigned long)stats.dropped_incomplete,
@@ -113,7 +113,8 @@ int main(int argc, char **argv) {
            (unsigned long)stats.unsupported,
            (unsigned long)stats.raw_fifo_skipped,
            (unsigned long)stats.stack_errors,
-           (unsigned long)stats.capacity_dropped);
+           (unsigned long)stats.capacity_dropped,
+           (unsigned long)stats.geometry_incomplete);
 
     free(out);
     free(data);

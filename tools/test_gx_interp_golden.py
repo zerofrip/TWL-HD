@@ -22,6 +22,12 @@ CLI = os.path.join(
 )
 
 CLIP_TOL = 0.02
+# Tolerance explanation: the oracle uses double-precision Python math, while
+# the DS/libnds build the perspective, look-at and rotation matrices from
+# 20.12 fixed-point words. The fixed-point -> float conversion of those
+# trigonometric and fractional constants introduces small rounding differences.
+# The observed maximum clip-space deviation is ~0.0073, so 0.02 is a safe
+# upper bound.
 
 
 class GxInterpGoldenTest(unittest.TestCase):
@@ -50,6 +56,8 @@ class GxInterpGoldenTest(unittest.TestCase):
 
         viewport_line = lines[1]
         self.assertTrue(viewport_line.startswith("viewport "))
+        # The demo viewport is x1=0, y1=0, x2=255, y2=191.
+        self.assertEqual(viewport_line, "viewport 0 0 255 191 1")
 
         # Parse CLI vertices.
         cli_verts = []
@@ -96,6 +104,9 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertIn("triangles_out=12", stats_line)
         self.assertIn("quads_split=6", stats_line)
         self.assertIn("vertices_in=24", stats_line)
+        self.assertIn("dropped_incomplete=0", stats_line)
+        self.assertIn("stack_errors=0", stats_line)
+        self.assertIn("geometry_incomplete=0", stats_line)
 
 
 if __name__ == "__main__":

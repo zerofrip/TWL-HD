@@ -3,8 +3,8 @@
  * TWL-HD Phase 5A-1 - DS GX matrix/vertex interpreter.
  *
  * Converts a parsed v2 GXCM stream into a triangle list in DS clip space.
- * Allocation-free, pure C11, no libc beyond <stdint.h>, <stddef.h>, <string.h>
- * and <math.h>.
+ * Allocation-free, pure C11, no libc beyond <stdint.h>, <stddef.h> and
+ * <string.h>.
  *
  * HARDWARE UNVERIFIED: host-tested only.
  */
@@ -42,6 +42,8 @@ typedef struct {
     uint32_t raw_fifo_skipped;    /* RAW_FIFO opaque entries. */
     uint32_t stack_errors;        /* stack overflow/underflow attempts. */
     uint32_t capacity_dropped;    /* vertices dropped by out[] overflow. */
+    uint32_t geometry_incomplete; /* VTX_DIFF inside BEGIN..END: output may
+                                       miss expected geometry. */
 } TwlhdGxStats;
 
 typedef enum {
