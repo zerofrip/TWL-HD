@@ -18,5 +18,6 @@ arm7/build/
 
 # Phase 4D build stamps
 arm9v2/*.guard
+arm9v2/build-autodump/
 *.guard.nm
 

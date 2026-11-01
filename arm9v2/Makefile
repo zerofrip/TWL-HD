@@ -51,6 +51,30 @@ LIBDIRS		:=	$(LIBNDS)
 NM		:=	arm-none-eabi-nm
 
 #---------------------------------------------------------------------------------
+# Optional test build: dump /twlhd_frame_v2.bin at a fixed frame instead of
+# waiting for KEY_A. AUTODUMP_FRAME=0 (the default, and the empty value) keeps
+# the normal ROM byte-identical. The conditional must live at top level so the
+# build-directory sub-make (which inherits the variable through MAKEFLAGS)
+# resolves the same TARGET, BUILD and CFLAGS.
+#---------------------------------------------------------------------------------
+AUTODUMP_FRAME	?=	0
+AUTODUMP_FRAME_STRIPPED	:=	$(strip $(AUTODUMP_FRAME))
+ifeq ($(AUTODUMP_FRAME_STRIPPED),)
+AUTODUMP_FRAME_STRIPPED	:=	0
+endif
+ifneq ($(AUTODUMP_FRAME_STRIPPED),0)
+AUTODUMP_FRAME_OK := $(shell echo '$(AUTODUMP_FRAME_STRIPPED)' | grep -Eq '^[1-9][0-9]*$$' && test $(AUTODUMP_FRAME_STRIPPED) -le 65535 && echo ok)
+ifeq ($(AUTODUMP_FRAME_OK),)
+$(error AUTODUMP_FRAME must be empty, 0, or a positive decimal integer <= 65535 (got: $(AUTODUMP_FRAME)))
+endif
+TARGET		:=	twlhd-arm9v2-autodump
+BUILD		:=	build-autodump
+CFLAGS		+=	-DTWLHD_DEMO_AUTODUMP_FRAME=$(AUTODUMP_FRAME_STRIPPED)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_AUTODUMP_FRAME=$(AUTODUMP_FRAME_STRIPPED)
+endif
+
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
@@ -62,6 +86,12 @@ export VPATH	:=	$(foreach dir,$(SOURCES),$(CURDIR)/$(dir)) \
 			$(foreach dir,$(GRAPHICS),$(CURDIR)/$(dir))
 
 export DEPSDIR	:=	$(CURDIR)/$(BUILD)
+
+# Create the build directory during parsing so that dry-run invocations can
+# recurse into it. Skip this for clean, which removes the directory anyway.
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
+$(shell mkdir -p $(BUILD))
+endif
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
 CPPFILES	:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.cpp)))
@@ -109,7 +139,8 @@ $(BUILD):
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).arm9 $(TARGET).guard $(TARGET).guard.nm
+	@rm -fr $(BUILD) build-autodump $(TARGET).elf $(TARGET).nds $(TARGET).arm9 $(TARGET).guard $(TARGET).guard.nm
+	@rm -f twlhd-arm9v2-autodump.elf twlhd-arm9v2-autodump.nds twlhd-arm9v2-autodump.arm9 twlhd-arm9v2-autodump.guard twlhd-arm9v2-autodump.guard.nm
 
 #---------------------------------------------------------------------------------
 else

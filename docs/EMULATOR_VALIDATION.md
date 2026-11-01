@@ -1,0 +1,94 @@
+<!-- SPDX-License-Identifier: Apache-2.0 -->
+# Emulator validation of the Phase 4D v2 capture
+
+How to reproduce the headless DeSmuME validation of the `arm9v2` v2 capture demo, what it proves, and what it does not.
+DeSmuME is an **external, opt-in tool**: it is not vendored, not linked, and `make all` / `make test` never need it.
+
+## Labels
+
+- **EMULATOR VERIFIED** — the whole chain below ran on an emulator and the result matched. It is **not** HARDWARE VERIFIED.
+- The chain: real ARM9 demo code (autodump build) → `arm9v2/include/twlhd_gx_shim.hpp` register proxy → `common/twlhd_gx_record.c` →
+  `common/twlhd_v2_write.c` → libfat on the emulated CompactFlash → FAT image on the host → C parser (`tests/host/v2_dump_cli.c`) and
+  Python parser (`tools/twlhd_v2_dump.py`) → comparison with the host expected stream (`tools/emulator/compare_capture.py`).
+- A PASS shows that the capture pipeline and both parsers agree on real ARM9 code running on an emulated ARM9. It says nothing about real
+  GX FIFO timing, polygon/vertex RAM pressure, VBlank behaviour or libfat on a real SD card.
+
+## Result of the reference run (EMULATOR, 1 run on this machine, repeated: identical capture)
+
+| Item | Value |
+|---|---|
+| DeSmuME | a local build outside this repository, `git describe`: `release_0_9_13-429-gfc504ee0` |
+| Command | `DESMUME_CLI=<path> make emu-validate` → exit 0 |
+| Capture | `twlhd_frame_v2.bin`, 1152 bytes, sha256 `acbdb48e9c0f5a5159ca58bc116d3d863fb822c0a3a79b1ad55aff0ac7934fa5` (identical on a second run) |
+| Parsers | C and Python: `OK (entries=124 rsta=4)` |
+| Comparator | `PASS: 124 GXCM + 4 RSTA entries match for angle 61440` |
+
+Observed numeric deviations of that capture from the analytic values (measured, not assumed):
+
+| Matrix command | Max abs deviation | Tolerance used |
+|---|---|---|
+| 0x18 MTX_MULT_4x4 (perspective 70°, 256/192, 0.1, 100) | 0.00178 | 0.004 |
+| 0x19 MTX_MULT_4x3 (identity + z = −4) | 0.0 | 0.001 |
+| 0x1A MTX_MULT_3x3 (rotation X block, Y block at 61440) | 0.00017 | 0.002 |
+The tolerances are **empirical margins** (perspective about 2.2× and rotation about 12× the observed deviation; the look-at matrix matched exactly; one
+4.12 fixed-point quantum is 0.000244), not values derived from hardware. A swapped axis or flipped sign changes an element by 0.707 at this angle, so the check separates them by a wide margin.
+
+## What the comparator checks (`tools/emulator/compare_capture.py`, stdlib only, deterministic)
+
+1. v2 container parses; header flags are exactly FRAME_COMPLETE (no OVERFLOW); META backend = 1 (register proxy); META coverage = 0x7.
+2. GXCM command-id sequence is identical entry for entry, and every non-math value is byte-identical.
+3. Math commands are checked analytically, because the host mock cannot reproduce the DS divider/sqrt/trig tables:
+   perspective closed form (libnds `glFrustumf32` write order); look-at identity + translation; rotation element-wise against the fixed
+   libnds `glRotateXi` layout `[1,0,0, 0,c,s, 0,−s,c]` (first block) and `glRotateYi` layout `[c,0,−s, 0,1,0, s,0,c]` (second block), so
+   axis, direction and sign are all distinguished, plus orthonormality and determinant as an extra net.
+4. RSTA addr / gx_index / width and every value are identical, with one deliberate exception: libnds keeps the polygon id in the library global
+   `glCurClearColor` (seeded by `glInit()` on the DS, zero on the host), so the **first** write to `0x04000350` may differ only in the polygon-id
+   bits 24..29 (mask `0x3F000000`). Any other difference on that write, or any difference on a later `0x04000350` write, fails.
+
+## Mutation / negative tests (run by `make test`; 77 Python tests pass in total; 2 of them need the devkitPro environment and are skipped without it)
+
+`tools/test_emulator_compare.py` feeds the comparator wrong data and requires exit 1 with the right reason: value mismatch, command-sequence
+mismatch, perspective/look-at/rotation wrong, negative rotation angle, rotation blocks swapped, wrong header flags / META backend / coverage,
+entry-count mismatches, RSTA field/value mismatch, clear-colour handling (a polygon-id-only difference on the first write passes, a bit-30 difference
+on the first write fails, a polygon-id-only difference on the second write fails; a separate test shows that a mutant comparator applying the exception to every
+`0x04000350` write would wrongly ACCEPT that second-write data, which proves the data separates the two rules), truncated file, and tolerance pinning (perspective
++0.003 passes / +0.005 fails; look-at +0.0009 passes / +0.0011 fails). `tools/test_emulator_capture_script.py` drives
+`desmume_capture.sh` with fake emulators: SIGINT success path, SIGINT-ignoring emulator escalating to SIGKILL with a "FAT image may be corrupt"
+failure, early exit, the emulator's real exit status being reported after SIGINT, missing device log lines, invalid `DESMUME_TIMEOUT` and
+`DESMUME_INT_GRACE` values (each tested on its own), unset or non-executable `DESMUME_CLI`, a lightweight command-position scan (not a full shell parser) that finds no `timeout` command in the script and detects it in a set of
+synthetic snippets, bash syntax. The fake-emulator test where the emulator exits with status 7 guards against a hard-coded or sleeper-derived status;
+it does not reproduce the reap-order race in the grace phase. These show the validator rejects wrong data; they do not replace the real run.
+
+## Prerequisites and how to run
+
+- A `desmume-cli` you built yourself (DeSmuME is GPL-2.0-or-later; keep it outside this repository). Set `DESMUME_CLI=/path/to/desmume-cli`.
+- `mkfs.fat`, `7z`, `stdbuf`, bash ≥ 5.1 (`wait -n` with process ids), `python3`, a C compiler for the host tests, and the devkitPro/devkitARM environment
+  for the ROM. Note: `make test` also runs `tools/test_emulator_capture_script.py`, whose fake-emulator tests need `mkfs.fat`, `7z` and `stdbuf`
+  (they fail, not skip, when a tool is missing). No real DeSmuME is needed for `make test`.
+- `make emu-validate` builds `arm9v2` with `AUTODUMP_FRAME=240` into a **separate** ROM (`arm9v2/twlhd-arm9v2-autodump.nds`; the normal ROM is
+  unchanged), builds the host expected stream (`make emu-expected`, angle 61440), runs `tools/emulator/desmume_capture.sh`, then
+  `validate_with_parsers.sh`, then the comparator. It fails loudly if `DESMUME_CLI` is unset or not executable. It is never part of `all` or `test`.
+- `AUTODUMP_FRAME` must be empty, `0`, or a positive decimal integer ≤ 65535; anything else is a build error.
+
+## Emulator facts that shaped the harness
+
+These are observations from earlier runs with the build above (measured on this machine); this repository's tests do not re-check them.
+
+- `--cflash-image <file>` works (DLDI is auto-patched; the log must contain `Slot 2: MPCF Flash Card Device` and `AUTO-PATCHING DLDI`, which the
+  script requires). `--cflash-path` was silently ignored.
+- Headless operation: `SDL_VIDEODRIVER=offscreen`, `SDL_AUDIODRIVER=dummy`, and `DISPLAY`/`WAYLAND_DISPLAY` removed for the process.
+- The emulator must be stopped with SIGINT so it flushes the FAT image; a SIGKILLed run left a corrupt file entry. The script therefore has its own
+  INT → grace → KILL watchdog and treats a run that needed SIGKILL as a hard failure. It does not use `timeout`, because on this machine
+  `timeout` is uutils coreutils 0.10.0 and `-k` there prevented the `-s` signal from reaching the child.
+- Input injection is not used: `--play-movie` is ignored by `desmume-cli` (the GTK/GTK2/Windows frontends do execute it), so the demo is
+  built with an auto-dump frame instead of waiting for a key.
+
+## Limits
+
+One fixed scenario (the demo's rotation angle 61440, one frame). Not covered: other angles, real GX timing, overflow behaviour under load, other
+emulators, commercial software, and anything about the PICA200 renderer.
+
+## Licensing posture (not legal advice)
+
+DeSmuME (GPL-2.0-or-later) is used only as an external program. TWL-HD (Apache-2.0) neither links nor vendors it. Separate repositories alone are
+not assumed to settle licence compatibility; see `docs/EMULATOR_TRACER_FEASIBILITY.md`.

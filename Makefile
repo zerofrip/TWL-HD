@@ -1,4 +1,5 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean \
+	emu-expected emu-validate
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
@@ -139,6 +140,53 @@ tests/host/build/test_demo_frame: tests/host/test_demo_frame.cpp \
 		exit 1; \
 	fi
 	$(HOST_CXX) $(SHIM_CXXFLAGS) -o $@ $< $(HOST_V2_COMMON)
+
+# Expected-stream generator for tools/emulator/compare_capture.py. It runs the
+# same frame body with the same mock seam as the demo-frame test.
+tests/host/build/dump_demo_frame: tests/host/dump_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the expected-stream generator needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the expected-stream generator needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -o $@ $< $(HOST_V2_COMMON)
+
+# ---------------------------------------------------------------------------
+# Emulator validation (opt-in; NEVER part of `all` or `test`).
+#
+# Both targets need an external, unvendored DeSmuME CLI. `emu-validate` fails
+# loudly when DESMUME_CLI is missing instead of silently "passing".
+# ---------------------------------------------------------------------------
+EMU_DIR := tests/host/build/emu
+EMU_ANGLE := 61440
+
+emu-expected: tests/host/build/dump_demo_frame
+	@mkdir -p $(EMU_DIR)
+	./tests/host/build/dump_demo_frame $(EMU_ANGLE) $(EMU_DIR)/expected_frame.txt
+
+emu-validate:
+	@if [ -z "$(DESMUME_CLI)" ]; then \
+		echo "error: DESMUME_CLI is not set; point it at a desmume-cli binary (see docs/EMULATOR_VALIDATION.md)" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(DESMUME_CLI)" ]; then \
+		echo "error: DESMUME_CLI=$(DESMUME_CLI) is not executable" >&2; \
+		exit 1; \
+	fi
+	$(MAKE) -C arm9v2 AUTODUMP_FRAME=240
+	$(MAKE) emu-expected
+	tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump.nds $(EMU_DIR)/capture
+	tools/emulator/validate_with_parsers.sh $(EMU_DIR)/capture/twlhd_frame_v2.bin
+	python3 tools/emulator/compare_capture.py \
+		$(EMU_DIR)/capture/twlhd_frame_v2.bin \
+		$(EMU_DIR)/expected_frame.txt $(EMU_ANGLE)
 
 tests/host/build:
 	mkdir -p $@
