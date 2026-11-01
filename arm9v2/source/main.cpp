@@ -22,6 +22,11 @@
 #include "demo_frame.hpp"
 #include "twlhd_gx_record.h"
 
+/* Opt-in test build: dump the frame automatically (0 disables it). */
+#ifndef TWLHD_DEMO_AUTODUMP_FRAME
+#define TWLHD_DEMO_AUTODUMP_FRAME 0
+#endif
+
 /* Static, heap-free: ~270 KB total on the DS. */
 static uint8_t g_serialize[TWLHD_GX_REC_SERIALIZE_MAX];
 static int g_fat_ready;
@@ -121,6 +126,14 @@ int main(void) {
         if (keysDown() & KEY_A) {
             (void)dump_frame();
         }
+
+#if TWLHD_DEMO_AUTODUMP_FRAME > 0
+        if (frame == TWLHD_DEMO_AUTODUMP_FRAME) {
+            (void)dump_frame();
+            iprintf("AUTODUMP @ frame %d (test build)\n",
+                    TWLHD_DEMO_AUTODUMP_FRAME);
+        }
+#endif
 
         /* binary angle: 32768 == 360 degrees */
         angle += 256;
