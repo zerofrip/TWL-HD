@@ -340,6 +340,40 @@ static void test_multiply_side_non_commuting(void) {
     CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
 }
 
+static void test_proj_pos_product_order(void) {
+    /*
+     * clip = proj * pos.  proj = T(1,0,0), pos = S(2,1,1), vertex (1,1,1):
+     * proj*pos*v = T*S*v = (3,1,1,1).  The swapped product pos*proj gives
+     * (4,1,1,1), so every clip component is asserted.
+     */
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u); /* projection */
+    add_trans(&n, 0x1000u, 0u, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u); /* position */
+    add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0x1000, 0x1000);
+    add_vtx_16(&n, 0x1000, 0x1000, 0x1000);
+    add_vtx_16(&n, 0x1000, 0x1000, 0x1000);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_NEAR(g_out[0].clip[0], 3.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[2], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
+}
+
 static void test_load_4x3_and_3x3(void) {
     uint32_t n = 0u;
     TwlhdV2View view;
@@ -664,6 +698,69 @@ static void test_projection_stack_ignores_param(void) {
     CHECK_EQ_INT(r, TWLHD_GX_OK);
     CHECK_EQ_INT(g_out_count, 3u);
     CHECK_NEAR(g_out[0].clip[0], 2.0f, 0.0001f);
+}
+
+static void test_projection_stack_semantics(void) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    /* Projection stack is exactly one entry deep: a second PUSH overflows. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+    CHECK_EQ_INT(g_out_count, 0u);
+
+    /* POP on an empty projection stack is an underflow. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+    CHECK_EQ_INT(g_out_count, 0u);
+
+    /* PUSH, POP, PUSH succeeds: POP resets the projection stack pointer. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    CHECK_EQ_INT(g_out_count, 0u);
+
+    /* Two POPs after one PUSH: the second one underflows. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+    CHECK_EQ_INT(g_out_count, 0u);
 }
 
 static void test_clip_matrix_freshness_after_pop_restore(void) {
@@ -1034,6 +1131,34 @@ static void test_trans_and_scale_by_value(void) {
     CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
 }
 
+static void test_scale_non_unit_z(void) {
+    /* SCALE(1,1,3) must scale z as well: vertex (1,1,1) -> (1,1,3,1). */
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u); /* position */
+    add_scale(&n, 0x1000u, 0x1000u, 0x3000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0x1000, 0x1000);
+    add_vtx_16(&n, 0x1000, 0x1000, 0x1000);
+    add_vtx_16(&n, 0x1000, 0x1000, 0x1000);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_NEAR(g_out[0].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[2], 3.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Vertex form and primitive tests                                           */
 /* ------------------------------------------------------------------------- */
@@ -1283,6 +1408,32 @@ static void test_colour_latch(void) {
     CHECK_NEAR(g_out[9].rgba[1], 17.0f / 31.0f, 0.0001f);
     CHECK_NEAR(g_out[9].rgba[2], 4.0f / 31.0f, 0.0001f);
     CHECK_NEAR(g_out[9].rgba[3], 1.0f, 0.0001f);
+}
+
+static void test_default_colour(void) {
+    /* No COLOR command: latched colour defaults to opaque black. */
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_NEAR(g_out[0].rgba[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[2], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[3], 1.0f, 0.0001f);
 }
 
 static void test_quad_split(void) {
@@ -1760,6 +1911,63 @@ static void test_capacity_error(void) {
     }
 }
 
+static void test_stream_error_partial_output(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    /*
+     * Malformed streams are fed through build_view: the parser rejects both
+     * cases, but the interpreter contract promises partial output on error.
+     */
+
+    /* (a) Unknown command id after a complete triangle. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0, 0, 0x1000);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, 0x05u, 0u); /* not a valid command id */
+    build_view(n, &view);
+
+    g_out_count = 0xDEADBEEFu;
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STREAM);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.vertices_in, 3u);
+    CHECK_EQ_INT(g_st.commands, 5u);
+    CHECK_NEAR(g_out[0].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[2], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[1].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[2].clip[2], 1.0f, 0.0001f);
+
+    /* (b) Truncated MTX_LOAD_4x4: 16 entries announced, view ends early. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0, 0, 0x1000);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_LOAD_4x4, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_LOAD_4x4, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_LOAD_4x4, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_LOAD_4x4, 0u);
+    build_view(n, &view);
+
+    g_out_count = 0xDEADBEEFu;
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STREAM);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.vertices_in, 3u);
+    CHECK_EQ_INT(g_st.commands, 5u);
+    CHECK_NEAR(g_out[0].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
+}
+
 static void test_raw_fifo_and_unsupported(void) {
     uint32_t n = 0u;
     size_t size;
@@ -2176,5 +2384,15 @@ int main(void) {
     test_report("gx_interp/unterminated-begin");
     test_null_args();
     test_report("gx_interp/null-args");
+    test_stream_error_partial_output();
+    test_report("gx_interp/stream-error-partial-output");
+    test_projection_stack_semantics();
+    test_report("gx_interp/projection-stack-semantics");
+    test_scale_non_unit_z();
+    test_report("gx_interp/scale-non-unit-z");
+    test_proj_pos_product_order();
+    test_report("gx_interp/proj-pos-product-order");
+    test_default_colour();
+    test_report("gx_interp/default-colour");
     return test_exit_code();
 }
