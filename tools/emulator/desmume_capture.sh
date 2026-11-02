@@ -78,13 +78,16 @@ mkfs.fat -C "$image" 32768
 # Use exec inside the subshell so $! is the emulator's pid, not a shell.
 # bash cannot reset a SIGINT/SIGQUIT that was ignored on entry (trap - is a
 # no-op then), so the reset happens in the python launcher: every hop below
-# execs, keeping the final process (and $!) the emulator.
+# execs, keeping the final process (and $!) the emulator.  python3 also
+# ignores SIGPIPE/SIGXFSZ at startup and exec preserves SIG_IGN, so those are
+# reset too: otherwise the emulator inherits a changed output-pipe and
+# file-size-limit behaviour (it would get EFBIG instead of dying at the limit).
 (
     trap - INT QUIT
     exec env -u DISPLAY -u WAYLAND_DISPLAY \
         SDL_VIDEODRIVER=offscreen \
         SDL_AUDIODRIVER=dummy \
-        python3 -I -c 'import signal,os,sys; signal.signal(signal.SIGINT, signal.SIG_DFL); signal.signal(signal.SIGQUIT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
+        python3 -I -c 'import signal,os,sys; [signal.signal(getattr(signal,n),signal.SIG_DFL) for n in ("SIGINT","SIGQUIT","SIGXFSZ","SIGPIPE") if hasattr(signal,n)]; os.execvp(sys.argv[1], sys.argv[1:])' \
         stdbuf -oL -eL "$DESMUME_CLI" --cflash-image "$image" --disable-sound \
         --disable-limiter "$rom"
 ) > "$log" 2>&1 &
