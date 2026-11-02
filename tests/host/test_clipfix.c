@@ -71,6 +71,12 @@ int main(void) {
     const TwlhdGxViewport centre_box = {64, 48, 191, 143, 1};
     const TwlhdGxViewport bottom_half = {0, 96, 255, 191, 1};
     const TwlhdGxViewport wrapped = {200, 0, 100, 191, 1};
+    const TwlhdGxViewport y1_wrap_191 = {0, 191, 255, 191, 1};
+    const TwlhdGxViewport y1_wrap_192 = {0, 192, 255, 191, 1};
+    const TwlhdGxViewport y1_wrap_253 = {0, 253, 255, 191, 1};
+    const TwlhdGxViewport y1_wrap_255 = {0, 255, 255, 191, 1};
+    const TwlhdGxViewport y_wrap_height = {0, 150, 255, 50, 1};
+    const TwlhdGxViewport unpresent_nonfull = {10, 20, 100, 150, 0};
 
     static const float full_matrix[4][4] = {
         {0.0f, 1.0f, 0.0f, 0.0f},
@@ -91,6 +97,17 @@ int main(void) {
     static const float wrap_r0[4] = {0.0f, 1.0f, 0.0f, 0.0f};
     static const float wrap_r1[4] = {-0.8f * 157.0f / 256.0f, 0.0f, 0.0f,
                                      -0.8f * (557.0f / 256.0f - 1.0f)};
+    /* y1 > 191 wraps by -0x00FF; height stays the inclusive byte delta. */
+    static const float y1_191_r0[4] = {0.0f, 1.0f / 192.0f, 0.0f,
+                                       191.0f / 192.0f};
+    static const float y1_192_r0[4] = {0.0f, 256.0f / 192.0f, 0.0f,
+                                       -62.0f / 192.0f};
+    static const float y1_253_r0[4] = {0.0f, 195.0f / 192.0f, 0.0f,
+                                       -1.0f / 192.0f};
+    static const float y1_255_r0[4] = {0.0f, 193.0f / 192.0f, 0.0f,
+                                       1.0f / 192.0f};
+    static const float y_wrap_height_r0[4] = {0.0f, 157.0f / 192.0f, 0.0f,
+                                              265.0f / 192.0f};
 
     /* (a) NULL viewport means the full DS viewport; all 16 elements. */
     check_matrix(NULL, full_matrix, "clipfix/full-matrix-null");
@@ -123,6 +140,20 @@ int main(void) {
     /* (f) x2 < x1 wraps: width = (uint8_t)(100 - 200) + 1 = 157. */
     check_row_of(&wrapped, 0, wrap_r0, "clipfix/wrap-r0");
     check_row_of(&wrapped, 1, wrap_r1, "clipfix/wrap-r1");
+
+    /* (g) y1 > 191 wraps: y1 - 0x00FF, height from the raw bytes. */
+    check_row_of(&y1_wrap_191, 0, y1_191_r0, "clipfix/y1-wrap-191");
+    check_row_of(&y1_wrap_192, 0, y1_192_r0, "clipfix/y1-wrap-192");
+    check_row_of(&y1_wrap_253, 0, y1_253_r0, "clipfix/y1-wrap-253");
+    check_row_of(&y1_wrap_255, 0, y1_255_r0, "clipfix/y1-wrap-255");
+
+    /* (h) y2 < y1: height = (uint8_t)(50 - 150) + 1 = 157. */
+    check_row_of(&y_wrap_height, 0, y_wrap_height_r0,
+                 "clipfix/y-wrap-height-cast");
+
+    /* (i) `present` clear ignores the bytes even when they are not full. */
+    check_matrix(&unpresent_nonfull, full_matrix,
+                 "clipfix/full-matrix-unpresent-nonfull");
 
     return test_exit_code();
 }

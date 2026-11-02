@@ -18,10 +18,12 @@
  *     GFX3D_ViewportParse/transform maps clip space through the viewport
  *     rectangle, so the offset is (2*x1 + width)/256 - 1 and the half-extent
  *     is width/256 (likewise for y with 192).
- *   - citro3d Mtx_PerspTilt / Mtx_Persp bake a quarter turn into the
- *     projection: x' = y_std, y' = -x_std. That is the swap and the sign.
- *   - The 320x240 top-screen region inside the 400x240 target pillar-boxes
- *     the 256x192 image by 0.8 (256/320).
+ *   - Only citro3d Mtx_PerspTilt rotates the projection a quarter turn
+ *     (x' = y_std, y' = -x_std); Mtx_Persp does not rotate. Mtx_Persp is the
+ *     source of the [-w, 0] depth remap (the z row below).
+ *   - The 320x240 top-screen region sits inside the 400x240 target, so the
+ *     0.8 factor is 320/400, the share of the 400-pixel top-screen axis used
+ *     by the pillar-boxed region; 256/320 also hitting 0.8 is a coincidence.
  *   - citro3d projections target PICA200 clip z in [-w, 0] while the DS uses
  *     [-w, w], hence z' = (z - w) / 2 (-w maps to -w, +w maps to 0).
  *
@@ -41,6 +43,10 @@ extern "C" {
  * Write the row-major 4x4 clip fixup matrix for `vp` into `m`.
  *
  * m must point to at least 4 rows of 4 floats.
+ *
+ * m is row-major float[4][4]. citro3d's C3D_Mtx stores each row as an FVec
+ * whose components are reversed in memory (w, z, y, x), so the upload must
+ * set r[i].x/.y/.z/.w by name and must NOT memcpy this array.
  */
 void twlhd_clipfix_matrix(const TwlhdGxViewport *vp, float m[4][4]);
 
