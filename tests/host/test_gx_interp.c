@@ -49,6 +49,29 @@ static size_t build_file(uint32_t entry_count) {
     return size;
 }
 
+/*
+ * Some interpreter edge cases (SWAP not at end, no SWAP at all) are legal GX
+ * streams but rejected by the v2 parser/writer because a valid capture file
+ * must end with SWAP_BUFFERS.  This helper exposes entries directly to the
+ * interpreter without v2 validation.
+ */
+static void build_view(uint32_t entry_count, TwlhdV2View *view) {
+    uint32_t i;
+    for (i = 0; i < entry_count; i++) {
+        g_file[i * 8u + 0u] = (uint8_t)(g_entries[i].cmd_word & 0xFFu);
+        g_file[i * 8u + 1u] = (uint8_t)((g_entries[i].cmd_word >> 8) & 0xFFu);
+        g_file[i * 8u + 2u] = (uint8_t)((g_entries[i].cmd_word >> 16) & 0xFFu);
+        g_file[i * 8u + 3u] = (uint8_t)((g_entries[i].cmd_word >> 24) & 0xFFu);
+        g_file[i * 8u + 4u] = (uint8_t)(g_entries[i].value & 0xFFu);
+        g_file[i * 8u + 5u] = (uint8_t)((g_entries[i].value >> 8) & 0xFFu);
+        g_file[i * 8u + 6u] = (uint8_t)((g_entries[i].value >> 16) & 0xFFu);
+        g_file[i * 8u + 7u] = (uint8_t)((g_entries[i].value >> 24) & 0xFFu);
+    }
+    memset(view, 0, sizeof *view);
+    view->gxcm = g_file;
+    view->gxcm_count = entry_count;
+}
+
 static uint32_t g_out_count;
 
 /* ------------------------------------------------------------------------- */
@@ -643,6 +666,345 @@ static void test_projection_stack_ignores_param(void) {
     CHECK_NEAR(g_out[0].clip[0], 2.0f, 0.0001f);
 }
 
+static void test_clip_matrix_freshness_after_pop_restore(void) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    /* Position mode: scale x=2, emit a triangle, push, scale x=3, emit a
+     * triangle, pop 1, emit a triangle. The last triangle must match the
+     * first (sx=2), not the middle (sx=6). */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_scale(&n, 0x3000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 9u);
+    CHECK_NEAR(g_out[0].clip[0], 2.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[0], 6.0f, 0.0001f);
+    CHECK_NEAR(g_out[6].clip[0], 2.0f, 0.0001f);
+
+    /* Position mode: store 3, modify, emit a triangle, restore 3, emit a
+     * triangle (original value again). */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_STORE, 3u);
+    add_scale(&n, 0x4000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+
+    add_entry(&n, TWLHD_V2_CMD_MTX_RESTORE, 3u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_NEAR(g_out[0].clip[0], 8.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[0], 2.0f, 0.0001f);
+
+    /* Projection stack: push/pop of the projection matrix between vertices. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_scale(&n, 0x3000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 9u);
+    CHECK_NEAR(g_out[0].clip[0], 2.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[0], 6.0f, 0.0001f);
+    CHECK_NEAR(g_out[6].clip[0], 2.0f, 0.0001f);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Table-driven clip-matrix freshness test for every matrix-changing command */
+/* ------------------------------------------------------------------------- */
+
+typedef enum {
+    FRESH_IDENTITY,
+    FRESH_LOAD_4x4,
+    FRESH_LOAD_4x3,
+    FRESH_MULT_4x4,
+    FRESH_MULT_4x3,
+    FRESH_MULT_3x3,
+    FRESH_SCALE,
+    FRESH_TRANS,
+    FRESH_POP,
+    FRESH_RESTORE,
+    FRESH_PROJ_IDENTITY,
+    FRESH_PROJ_LOAD_4x4,
+    FRESH_PROJ_MULT_4x4,
+    FRESH_PROJ_TRANS
+} FreshnessOp;
+
+typedef struct {
+    const char *label;
+    uint32_t mode;
+    FreshnessOp op;
+    float first;
+    float second;
+} FreshnessCase;
+
+static void add_degenerate_triangle_at_x(uint32_t *n, int32_t x) {
+    add_vtx_16(n, x, 0, 0);
+    add_vtx_16(n, 0, 0, 0);
+    add_vtx_16(n, 0, 0, 0);
+}
+
+static void run_freshness_case(const FreshnessCase *c) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+    char report_name[128];
+
+    static const uint32_t scale4_4x4[16] = {
+        0x4000u, 0u, 0u, 0u,
+        0u, 0x1000u, 0u, 0u,
+        0u, 0u, 0x1000u, 0u,
+        0u, 0u, 0u, 0x1000u,
+    };
+    static const uint32_t scale3_4x4[16] = {
+        0x3000u, 0u, 0u, 0u,
+        0u, 0x1000u, 0u, 0u,
+        0u, 0u, 0x1000u, 0u,
+        0u, 0u, 0u, 0x1000u,
+    };
+    static const uint32_t scale4_4x3[12] = {
+        0x4000u, 0u, 0u,
+        0u, 0x1000u, 0u,
+        0u, 0u, 0x1000u,
+        0u, 0u, 0u,
+    };
+    static const uint32_t scale3_4x3[12] = {
+        0x3000u, 0u, 0u,
+        0u, 0x1000u, 0u,
+        0u, 0u, 0x1000u,
+        0u, 0u, 0u,
+    };
+    static const uint32_t scale3_3x3[9] = {
+        0x3000u, 0u, 0u,
+        0u, 0x1000u, 0u,
+        0u, 0u, 0x1000u,
+    };
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, c->mode);
+
+    /* Establish a known non-identity matrix and (for POP/RESTORE) stack state. */
+    switch (c->op) {
+    case FRESH_POP:
+        add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+        add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+        break;
+    case FRESH_RESTORE:
+        add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+        add_entry(&n, TWLHD_V2_CMD_MTX_STORE, 0u);
+        add_entry(&n, TWLHD_V2_CMD_MTX_IDENTITY, 0u);
+        break;
+    default:
+        add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+        break;
+    }
+
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u); /* triangle list */
+    add_degenerate_triangle_at_x(&n, 0x1000);   /* clears clip_dirty */
+
+    /* Issue the command under test. */
+    switch (c->op) {
+    case FRESH_IDENTITY:
+    case FRESH_PROJ_IDENTITY:
+        add_entry(&n, TWLHD_V2_CMD_MTX_IDENTITY, 0u);
+        break;
+    case FRESH_LOAD_4x4:
+    case FRESH_PROJ_LOAD_4x4:
+        add_load_4x4(&n, scale4_4x4);
+        break;
+    case FRESH_LOAD_4x3:
+        add_load_4x3(&n, scale4_4x3);
+        break;
+    case FRESH_MULT_4x4:
+    case FRESH_PROJ_MULT_4x4:
+        add_mult_4x4(&n, scale3_4x4);
+        break;
+    case FRESH_MULT_4x3:
+        add_mult_4x3(&n, scale3_4x3);
+        break;
+    case FRESH_MULT_3x3:
+        add_mult_3x3(&n, scale3_3x3);
+        break;
+    case FRESH_SCALE:
+        add_scale(&n, 0x3000u, 0x1000u, 0x1000u);
+        break;
+    case FRESH_TRANS:
+    case FRESH_PROJ_TRANS:
+        add_trans(&n, 0x1000u, 0u, 0u);
+        break;
+    case FRESH_POP:
+        add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+        break;
+    case FRESH_RESTORE:
+        add_entry(&n, TWLHD_V2_CMD_MTX_RESTORE, 0u);
+        break;
+    }
+
+    /* Second triangle: must use the new matrix. */
+    add_degenerate_triangle_at_x(&n, 0x1000);
+    /* Third triangle: must be identical to the second (stability). */
+    add_degenerate_triangle_at_x(&n, 0x1000);
+
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 9u);
+
+    CHECK_NEAR(g_out[0].clip[0], c->first, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[0], c->second, 0.0001f);
+    CHECK_NEAR(g_out[6].clip[0], c->second, 0.0001f);
+
+    /* The checked component must actually change; the other components stay
+     * at trivial values with the matrices chosen above. */
+    CHECK_NEAR(g_out[0].clip[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[2], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[3], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[2], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[3], 1.0f, 0.0001f);
+
+    snprintf(report_name, sizeof report_name,
+             "gx_interp/clip-freshness-every-matrix-command/%s", c->label);
+    test_report(report_name);
+}
+
+static void test_clip_matrix_freshness_every_matrix_command(void) {
+    static const FreshnessCase cases[] = {
+        /* Position matrix, mode 1 (position). */
+        { "identity/mode1",       1u, FRESH_IDENTITY,     2.0f, 1.0f },
+        { "load-4x4/mode1",       1u, FRESH_LOAD_4x4,     2.0f, 4.0f },
+        { "load-4x3/mode1",       1u, FRESH_LOAD_4x3,     2.0f, 4.0f },
+        { "mult-4x4/mode1",       1u, FRESH_MULT_4x4,     2.0f, 6.0f },
+        { "mult-4x3/mode1",       1u, FRESH_MULT_4x3,     2.0f, 6.0f },
+        { "mult-3x3/mode1",       1u, FRESH_MULT_3x3,     2.0f, 6.0f },
+        { "scale/mode1",          1u, FRESH_SCALE,        2.0f, 6.0f },
+        { "trans/mode1",          1u, FRESH_TRANS,        2.0f, 4.0f },
+        { "pop/mode1",            1u, FRESH_POP,          2.0f, 1.0f },
+        { "restore/mode1",        1u, FRESH_RESTORE,      1.0f, 2.0f },
+
+        /* Position matrix, mode 2 (modelview). */
+        { "identity/mode2",       2u, FRESH_IDENTITY,     2.0f, 1.0f },
+        { "load-4x4/mode2",       2u, FRESH_LOAD_4x4,     2.0f, 4.0f },
+        { "load-4x3/mode2",       2u, FRESH_LOAD_4x3,     2.0f, 4.0f },
+        { "mult-4x4/mode2",       2u, FRESH_MULT_4x4,     2.0f, 6.0f },
+        { "mult-4x3/mode2",       2u, FRESH_MULT_4x3,     2.0f, 6.0f },
+        { "mult-3x3/mode2",       2u, FRESH_MULT_3x3,     2.0f, 6.0f },
+        { "scale/mode2",          2u, FRESH_SCALE,        2.0f, 6.0f },
+        { "trans/mode2",          2u, FRESH_TRANS,        2.0f, 4.0f },
+        { "pop/mode2",            2u, FRESH_POP,          2.0f, 1.0f },
+        { "restore/mode2",        2u, FRESH_RESTORE,      1.0f, 2.0f },
+
+        /* Projection matrix, mode 0. */
+        { "identity/projection",  0u, FRESH_PROJ_IDENTITY, 2.0f, 1.0f },
+        { "load-4x4/projection",  0u, FRESH_PROJ_LOAD_4x4, 2.0f, 4.0f },
+        { "mult-4x4/projection",  0u, FRESH_PROJ_MULT_4x4, 2.0f, 6.0f },
+        { "trans/projection",     0u, FRESH_PROJ_TRANS,    2.0f, 4.0f },
+    };
+    uint32_t i;
+
+    for (i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        run_freshness_case(&cases[i]);
+    }
+}
+
+static void test_mode_switch_does_not_change_output(void) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_scale(&n, 0x2000u, 0x1000u, 0x1000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_degenerate_triangle_at_x(&n, 0x1000);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_degenerate_triangle_at_x(&n, 0x1000);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_NEAR(g_out[0].clip[0], 2.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[0], 2.0f, 0.0001f);
+}
+
 static void test_trans_and_scale_by_value(void) {
     uint32_t n = 0u;
     size_t size;
@@ -907,6 +1269,7 @@ static void test_colour_latch(void) {
     CHECK_NEAR(g_out[0].rgba[0], 1.0f, 0.0001f);
     CHECK_NEAR(g_out[0].rgba[1], 0.0f, 0.0001f);
     CHECK_NEAR(g_out[0].rgba[2], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[3], 1.0f, 0.0001f);
 
     CHECK_NEAR(g_out[3].rgba[0], 0.0f, 0.0001f);
     CHECK_NEAR(g_out[3].rgba[1], 1.0f, 0.0001f);
@@ -919,6 +1282,7 @@ static void test_colour_latch(void) {
     CHECK_NEAR(g_out[9].rgba[0], 20.0f / 31.0f, 0.0001f);
     CHECK_NEAR(g_out[9].rgba[1], 17.0f / 31.0f, 0.0001f);
     CHECK_NEAR(g_out[9].rgba[2], 4.0f / 31.0f, 0.0001f);
+    CHECK_NEAR(g_out[9].rgba[3], 1.0f, 0.0001f);
 }
 
 static void test_quad_split(void) {
@@ -1029,6 +1393,133 @@ static void test_quad_strip(void) {
     CHECK_NEAR(g_out[3].clip[1], 0.0f, 0.0001f);
     CHECK_NEAR(g_out[4].clip[0], 1.0f, 0.0001f);
     CHECK_NEAR(g_out[4].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[1], 1.0f, 0.0001f);
+}
+
+static void test_quad_strip_six_vertices(void) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 3u); /* quad strip */
+    /* Six distinct vertices so the roll order is value-checkable. */
+    add_vtx_16(&n, 0, 0, 0);       /* v0 */
+    add_vtx_16(&n, 0x1000, 0, 0);  /* v1 */
+    add_vtx_16(&n, 0, 0x1000, 0);  /* v2 */
+    add_vtx_16(&n, 0x1000, 0x1000, 0); /* v3 */
+    add_vtx_16(&n, 0, 0x2000, 0);  /* v4 */
+    add_vtx_16(&n, 0x1000, 0x2000, 0); /* v5 */
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 16u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 12u);
+    CHECK_EQ_INT(g_st.quads_split, 2u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 0u);
+
+    /* Quad 0: (0,1,3),(0,3,2). */
+    CHECK_NEAR(g_out[0].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].clip[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[1].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[1].clip[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[2].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[2].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[3].clip[1], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[4].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[4].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[1], 1.0f, 0.0001f);
+
+    /* Quad 1: (2,3,5),(2,5,4). */
+    CHECK_NEAR(g_out[6].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[6].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[7].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[7].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[8].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[8].clip[1], 2.0f, 0.0001f);
+    CHECK_NEAR(g_out[9].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[9].clip[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[10].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[10].clip[1], 2.0f, 0.0001f);
+    CHECK_NEAR(g_out[11].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[11].clip[1], 2.0f, 0.0001f);
+}
+
+static void test_quad_list_leftovers(void) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    /* 5 vertices: one complete quad plus one leftover. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u); /* quad list */
+    add_vtx_16(&n, 0, 0, 0);       /* v0 */
+    add_vtx_16(&n, 0x1000, 0, 0);  /* v1 */
+    add_vtx_16(&n, 0x1000, 0x1000, 0); /* v2 */
+    add_vtx_16(&n, 0, 0x1000, 0);  /* v3 */
+    add_vtx_16(&n, 0x2000, 0, 0);  /* v4 leftover */
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 1u);
+    CHECK_NEAR(g_out[0].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[1], 1.0f, 0.0001f);
+
+    /* 6 vertices: one complete quad plus two leftovers. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0, 0);
+    add_vtx_16(&n, 0x2000, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 2u);
+    CHECK_NEAR(g_out[0].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[1], 1.0f, 0.0001f);
+
+    /* 7 vertices: one complete quad plus three leftovers. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0, 0);
+    add_vtx_16(&n, 0x2000, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0x2000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 3u);
+    CHECK_NEAR(g_out[0].clip[0], 0.0f, 0.0001f);
     CHECK_NEAR(g_out[5].clip[0], 0.0f, 0.0001f);
     CHECK_NEAR(g_out[5].clip[1], 1.0f, 0.0001f);
 }
@@ -1431,9 +1922,152 @@ static void test_current_vertex_persistence(void) {
     CHECK_NEAR(g_out[2].clip[2], 7.0f, 0.0001f);
 }
 
+static void test_swap_stops_interpretation(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u); /* triangle list */
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    /* After SWAP_BUFFERS the interpreter must stop; this second triangle is
+     * ignored even though the stream is otherwise well-formed. */
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0x1000, 0);
+    add_vtx_16(&n, 0x1000, 0x2000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.triangles_out, 1u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 0u);
+    CHECK_NEAR(g_out[0].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[1].clip[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[2].clip[1], 1.0f, 0.0001f);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Negative / error tests                                                    */
 /* ------------------------------------------------------------------------- */
+
+static void test_pop_zero_and_negative_position(void) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+    uint32_t i;
+
+    /* POP 0 in position mode with a full stack (sp=31) must error. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    for (i = 0; i < 31u; i++) add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+
+    /* POP -1 (6-bit two's complement 0x3F) with a full stack must error. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    for (i = 0; i < 31u; i++) add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 0x3Fu);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+}
+
+static void test_unterminated_begin(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+
+    /* Triangle list: 1 leftover vertex dropped at end of stream. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 0u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 1u);
+
+    /* Triangle list: 2 leftover vertices dropped at end of stream. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 0u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 2u);
+
+    /* Quad list: 5 vertices -> 1 complete quad + 1 dropped. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0, 0);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 1u);
+    CHECK_NEAR(g_out[0].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[0], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[5].clip[1], 1.0f, 0.0001f);
+
+    /* Quad list: 6 vertices -> 1 complete quad + 2 dropped. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0, 0);
+    add_vtx_16(&n, 0x2000, 0x1000, 0);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 2u);
+
+    /* Quad list: 7 vertices -> 1 complete quad + 3 dropped. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0, 0);
+    add_vtx_16(&n, 0x2000, 0x1000, 0);
+    add_vtx_16(&n, 0x2000, 0x2000, 0);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 3u);
+}
 
 static void test_null_args(void) {
     TwlhdV2View view;
@@ -1485,6 +2119,11 @@ int main(void) {
     test_report("gx_interp/projection-isolation");
     test_projection_stack_ignores_param();
     test_report("gx_interp/projection-stack-ignores-param");
+    test_clip_matrix_freshness_after_pop_restore();
+    test_report("gx_interp/clip-matrix-freshness-after-pop-restore");
+    test_clip_matrix_freshness_every_matrix_command();
+    test_mode_switch_does_not_change_output();
+    test_report("gx_interp/mode-switch-does-not-change-output");
     test_trans_and_scale_by_value();
     test_report("gx_interp/trans-and-scale-by-value");
     test_rounding_negative_fraction();
@@ -1505,6 +2144,10 @@ int main(void) {
     test_report("gx_interp/triangle-strip-winding");
     test_quad_strip();
     test_report("gx_interp/quad-strip");
+    test_quad_strip_six_vertices();
+    test_report("gx_interp/quad-strip-six-vertices");
+    test_quad_list_leftovers();
+    test_report("gx_interp/quad-list-leftovers");
     test_strip_leftover_counts();
     test_report("gx_interp/strip-leftover-counts");
     test_incomplete_and_outside_begin();
@@ -1525,6 +2168,12 @@ int main(void) {
     test_report("gx_interp/signed-overflow-regression");
     test_current_vertex_persistence();
     test_report("gx_interp/current-vertex-persistence");
+    test_swap_stops_interpretation();
+    test_report("gx_interp/swap-stops-interpretation");
+    test_pop_zero_and_negative_position();
+    test_report("gx_interp/pop-zero-and-negative-position");
+    test_unterminated_begin();
+    test_report("gx_interp/unterminated-begin");
     test_null_args();
     test_report("gx_interp/null-args");
     return test_exit_code();
