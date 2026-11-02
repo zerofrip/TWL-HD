@@ -1,0 +1,29 @@
+; SPDX-License-Identifier: Apache-2.0
+;
+; TWL-HD Phase 5A-2 - DS clip-space vertex shader.
+;
+; Inputs:  v0 = DS clip-space position (vec4, w included), v1 = RGBA color.
+; Uniforms: clipfix (mat4), the DS clip space to PICA200 clip space fixup.
+; The interpreter has already applied the DS projection/modelview, so this
+; shader must not force w = 1.
+;
+; HARDWARE UNVERIFIED: compiled by picasso at build time, never executed in
+; the development sandbox. API conventions follow the official devkitPro
+; examples/3ds/graphics/gpu example shaders.
+
+.fvec clipfix[4]
+
+.out outpos position
+.out outclr color
+
+.alias inpos v0
+.alias inclr v1
+
+.proc main
+	dp4 outpos.x, clipfix[0], inpos
+	dp4 outpos.y, clipfix[1], inpos
+	dp4 outpos.z, clipfix[2], inpos
+	dp4 outpos.w, clipfix[3], inpos
+	mov outclr, inclr
+	end
+.end
