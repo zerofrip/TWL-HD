@@ -21,3 +21,4 @@ arm9v2/*.guard
 arm9v2/build-autodump/
 *.guard.nm
 
+arm11/build-diag/
