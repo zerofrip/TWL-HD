@@ -45,7 +45,7 @@ The tolerances are **empirical margins** (perspective about 2.2× and rotation a
    `glCurClearColor` (seeded by `glInit()` on the DS, zero on the host), so the **first** write to `0x04000350` may differ only in the polygon-id
    bits 24..29 (mask `0x3F000000`). Any other difference on that write, or any difference on a later `0x04000350` write, fails.
 
-## Mutation / negative tests (run by `make test`; 77 Python tests pass in total; 2 of them need the devkitPro environment and are skipped without it)
+## Mutation / negative tests (run by `make test`; 81 Python tests in total; 2 of them need the devkitPro environment and are skipped without it)
 
 `tools/test_emulator_compare.py` feeds the comparator wrong data and requires exit 1 with the right reason: value mismatch, command-sequence
 mismatch, perspective/look-at/rotation wrong, negative rotation angle, rotation blocks swapped, wrong header flags / META backend / coverage,
@@ -56,15 +56,19 @@ on the first write fails, a polygon-id-only difference on the second write fails
 `desmume_capture.sh` with fake emulators: SIGINT success path, SIGINT-ignoring emulator escalating to SIGKILL with a "FAT image may be corrupt"
 failure, early exit, the emulator's real exit status being reported after SIGINT, missing device log lines, invalid `DESMUME_TIMEOUT` and
 `DESMUME_INT_GRACE` values (each tested on its own), unset or non-executable `DESMUME_CLI`, a lightweight command-position scan (not a full shell parser) that finds no `timeout` command in the script and detects it in a set of
-synthetic snippets, bash syntax. The fake-emulator test where the emulator exits with status 7 guards against a hard-coded or sleeper-derived status;
-it does not reproduce the reap-order race in the grace phase. These show the validator rejects wrong data; they do not replace the real run.
+synthetic snippets, bash syntax. The same fake-emulator scenarios are also driven with the parent's SIGINT and SIGQUIT ignored (the `&`/`nohup`/
+supervisor launch environment), and one test reads the fake emulator's `/proc/self/status` `SigIgn` mask to require SIGINT and SIGQUIT at their
+default disposition when the script was started with them ignored. The fake-emulator test where the emulator exits with status 7 guards against a
+hard-coded or sleeper-derived status; it does not reproduce the reap-order race in the grace phase. These show the validator rejects wrong data;
+they do not replace the real run.
 
 ## Prerequisites and how to run
 
 - A `desmume-cli` you built yourself (DeSmuME is GPL-2.0-or-later; keep it outside this repository). Set `DESMUME_CLI=/path/to/desmume-cli`.
 - `mkfs.fat`, `7z`, `stdbuf`, bash ≥ 5.1 (`wait -n` with process ids), `python3`, a C compiler for the host tests, and the devkitPro/devkitARM environment
   for the ROM. Note: `make test` also runs `tools/test_emulator_capture_script.py`, whose fake-emulator tests need `mkfs.fat`, `7z` and `stdbuf`
-  (they fail, not skip, when a tool is missing). No real DeSmuME is needed for `make test`.
+  (they fail, not skip, when a tool is missing). `desmume_capture.sh` itself now requires `python3`: its `-I` launcher resets SIGINT/SIGQUIT to
+  SIG_DFL before exec'ing the emulator, and the script fails explicitly when `python3` is missing. No real DeSmuME is needed for `make test`.
 - `make emu-validate` builds `arm9v2` with `AUTODUMP_FRAME=240` into a **separate** ROM (`arm9v2/twlhd-arm9v2-autodump.nds`; the normal ROM is
   unchanged), builds the host expected stream (`make emu-expected`, angle 61440), runs `tools/emulator/desmume_capture.sh`, then
   `validate_with_parsers.sh`, then the comparator. It fails loudly if `DESMUME_CLI` is unset or not executable. It is never part of `all` or `test`.
@@ -80,6 +84,11 @@ These are observations from earlier runs with the build above (measured on this 
 - The emulator must be stopped with SIGINT so it flushes the FAT image; a SIGKILLed run left a corrupt file entry. The script therefore has its own
   INT → grace → KILL watchdog and treats a run that needed SIGKILL as a hard failure. It does not use `timeout`, because on this machine
   `timeout` is uutils coreutils 0.10.0 and `-k` there prevented the `-s` signal from reaching the child.
+- Background launchers (`&`, `nohup`, supervisors) start children with SIGINT/SIGQUIT ignored, and POSIX exec preserves SIG_IGN. bash cannot trap
+  or reset a signal that was ignored on entry (`trap - INT QUIT` is a no-op there), so the emulator inherited the ignore and had to be SIGKILLed.
+  The script therefore exec's the emulator through a `python3 -I` wrapper that sets SIGINT/SIGQUIT to SIG_DFL and then `execvp`s `stdbuf` →
+  `desmume-cli`; every hop is an exec, so `$!` stays the emulator pid. (BUILD/UNIT evidence: launched with SIGINT ignored, the 4 fake-emulator
+  SIGINT tests failed before this fix and pass after it, as do the added ignored-signal scenario and `SigIgn` disposition tests.)
 - Input injection is not used: `--play-movie` is ignored by `desmume-cli` (the GTK/GTK2/Windows frontends do execute it), so the demo is
   built with an auto-dump frame instead of waiting for a key.
 
