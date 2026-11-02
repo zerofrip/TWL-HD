@@ -49,12 +49,12 @@ HOST_LDFLAGS := $(HOST_SAN)
 HOST_COMMON := common/twlhd_frame_parse.c common/twlhd_vertex_convert.c \
 	common/twlhd_geometry_slots.c common/twlhd_attr_pad.c
 HOST_V2_COMMON := common/twlhd_v2_parse.c common/twlhd_v2_write.c \
-	common/twlhd_gx_record.c
+	common/twlhd_gx_record.c common/twlhd_gx_interp.c
 HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_geometry_slots.h common/twlhd_frame_format.h \
 	common/twlhd_v2_format.h common/twlhd_v2_parse.h \
 	common/twlhd_v2_write.h common/twlhd_gx_record.h \
-	common/twlhd_attr_pad.h tests/host/tests_host.h
+	common/twlhd_gx_interp.h common/twlhd_attr_pad.h tests/host/tests_host.h
 HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_converter \
 	tests/host/build/test_roundtrip \
@@ -64,6 +64,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_v2_write \
 	tests/host/build/test_gx_record \
 	tests/host/build/test_v2_compat \
+	tests/host/build/test_gx_interp \
 	tests/host/build/test_libnds_shim \
 	tests/host/build/test_demo_frame
 
@@ -108,6 +109,14 @@ tests/host/build/test_v2_compat: tests/host/test_v2_compat.c $(HOST_V2_COMMON) \
 		$(HOST_COMMON) $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_V2_COMMON) $(HOST_COMMON) \
 		$(HOST_LDFLAGS)
+
+tests/host/build/test_gx_interp: tests/host/test_gx_interp.c $(HOST_V2_COMMON) \
+		$(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/gx_interp_cli: tests/host/gx_interp_cli.c $(HOST_V2_COMMON) \
+		$(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_V2_COMMON) $(HOST_LDFLAGS)
 
 # The shim test executes real libnds header code on the host with mocked
 # hardware. It is UNIT VERIFIED, not a DS run, and needs devkitPro installed.
@@ -202,7 +211,7 @@ emu-validate:
 tests/host/build:
 	mkdir -p $@
 
-test: host-test
+test: host-test tests/host/build/gx_interp_cli
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:
