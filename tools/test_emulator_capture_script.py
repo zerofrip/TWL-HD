@@ -13,6 +13,7 @@ Runs under `make test`:
 import os
 import re
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -199,7 +200,7 @@ class EmulatorCaptureScriptTest(unittest.TestCase):
         os.chmod(self.fake_cli,
                  stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
 
-    def run_script(self, env=None, extra_timeout=30):
+    def run_script(self, env=None, extra_timeout=30, ignored_signals=()):
         base_env = os.environ.copy()
         base_env["DESMUME_TIMEOUT"] = "2"
         base_env["DESMUME_INT_GRACE"] = "2"
@@ -210,7 +211,9 @@ class EmulatorCaptureScriptTest(unittest.TestCase):
         return subprocess.run(
             ["bash", SCRIPT, self.rom, self.outdir],
             env=base_env, capture_output=True, text=True,
-            timeout=extra_timeout)
+            timeout=extra_timeout,
+            preexec_fn=lambda: [signal.signal(s, signal.SIG_IGN)
+                                for s in ignored_signals])
 
     def assert_no_fake_left(self):
         if not os.path.exists(self.pidfile):
@@ -298,6 +301,82 @@ class EmulatorCaptureScriptTest(unittest.TestCase):
                       completed.stderr)
         self.assert_no_fake_left()
 
+    def _assert_ignored_signal_scenario(self, body, fragment):
+        for ignored in ((signal.SIGINT,),
+                        (signal.SIGINT, signal.SIGQUIT)):
+            with self.subTest(ignored=ignored):
+                self.write_fake(body)
+                completed = self.run_script(ignored_signals=ignored)
+                self.assertEqual(completed.returncode, 1, completed.stderr)
+                self.assertIn(fragment, completed.stderr)
+                self.assert_no_fake_left()
+
+    def test_scenarios_pass_with_parent_sigint_ignored(self):
+        # Same scenarios as the four SIGINT tests above, but launched the way
+        # &/nohup/supervisors launch them: SIGINT (and SIGQUIT) ignored in
+        # the parent and therefore inherited as SIG_IGN. Pre-fix these fail
+        # because the emulator inherits the ignore and must be SIGKILLed.
+        both = ('echo "%s"\n' 'echo "%s"\n' % (SLOT2_LINE, DLDI_LINE))
+        scenarios = (
+            (both + 'trap "exit 0" INT\nwhile true; do :; done\n',
+             "twlhd_frame_v2.bin was not written to the FAT image"),
+            (both + 'exit 3\n', "DeSmuME exited with status 3"),
+            ('trap "exit 0" INT\nwhile true; do :; done\n',
+             "did not report both the Slot-2 MPCF device and"),
+            ('echo "%s"\ntrap "exit 0" INT\nwhile true; do :; done\n'
+             % SLOT2_LINE,
+             "did not report both the Slot-2 MPCF device and"),
+            (both + 'trap "exit 7" INT\nwhile true; do :; done\n',
+             "DeSmuME exited with status 7"),
+            # Complementary proof that INT is really delivered and handled.
+            (both + 'trap "exit 42" INT\nwhile true; do :; done\n',
+             "DeSmuME exited with status 42"),
+        )
+        for body, fragment in scenarios:
+            self._assert_ignored_signal_scenario(body, fragment)
+
+    def test_fake_emulator_starts_with_sigint_at_default_disposition(self):
+        # The fake emulator records its own inherited-ignore mask.  With the
+        # python launcher SIGINT/SIGQUIT (which background launch environments
+        # ignore) and SIGPIPE/SIGXFSZ (which python3 ignores at startup, and
+        # exec preserves SIG_IGN) must all be at SIG_DFL.  An unrelated ignore
+        # (SIGUSR1) must survive, proving the launcher does not reset
+        # everything.
+        # /proc bit layout: bit = signal - 1 (Linux x86-64).
+        default_bits = sum(1 << (signo - 1) for signo in (
+            signal.SIGINT, signal.SIGQUIT, signal.SIGXFSZ, signal.SIGPIPE))
+        usr1_bit = 1 << (signal.SIGUSR1 - 1)
+        cases = (
+            ("no parent ignores", ()),
+            ("parent ignores SIGINT+SIGQUIT",
+             (signal.SIGINT, signal.SIGQUIT)),
+            ("parent ignores SIGINT+SIGQUIT+SIGUSR1",
+             (signal.SIGINT, signal.SIGQUIT, signal.SIGUSR1)),
+        )
+        for label, ignored in cases:
+            with self.subTest(case=label):
+                self.write_fake(
+                    'grep "^SigIgn:" /proc/self/status '
+                    '> "${TWLHD_FAKE_PID_FILE}.sigign"\n'
+                    'trap "exit 0" INT\n'
+                    'while true; do :; done\n')
+                completed = self.run_script(ignored_signals=ignored)
+                self.assertEqual(completed.returncode, 1, completed.stderr)
+                self.assertIn("did not report both the Slot-2 MPCF device and",
+                              completed.stderr)
+                self.assert_no_fake_left()
+                with open(self.pidfile + ".sigign", "r",
+                          encoding="utf-8") as handle:
+                    line = handle.readline()
+                mask = int(line.split()[1], 16)
+                self.assertEqual(
+                    mask & default_bits, 0,
+                    "SIGINT/SIGQUIT/SIGPIPE/SIGXFSZ still ignored: %s" % line)
+                if signal.SIGUSR1 in ignored:
+                    self.assertEqual(
+                        mask & usr1_bit, usr1_bit,
+                        "SIGUSR1 ignore was reset (over-reset): %s" % line)
+
     def _assert_env_rejected(self, env_update, message):
         completed = self.run_script(env=env_update)
         self.assertEqual(completed.returncode, 2, completed.stderr)
@@ -338,6 +417,28 @@ class EmulatorCaptureScriptTest(unittest.TestCase):
         completed = self.run_script(env={"DESMUME_CLI": ""})
         self.assertEqual(completed.returncode, 1, completed.stderr)
         self.assertIn("DESMUME_CLI is not set", completed.stderr)
+
+    def test_missing_python3_fails_explicitly(self):
+        # PATH without python3: the tool check must fail with its own message.
+        # bash is invoked by absolute path because subprocess resolves a
+        # relative argv[0] through the PATH of the env it is given.
+        bindir = os.path.join(self.tmpdir, "bin")
+        os.mkdir(bindir)
+        for tool in ("mkfs.fat", "7z", "stdbuf"):
+            resolved = shutil.which(tool)
+            self.assertIsNotNone(resolved,
+                                 "required tool not found: %s" % tool)
+            os.symlink(resolved, os.path.join(bindir, tool))
+        env = os.environ.copy()
+        env["PATH"] = bindir
+        env["DESMUME_CLI"] = self.fake_cli
+        completed = subprocess.run(
+            [shutil.which("bash"), SCRIPT, self.rom, self.outdir],
+            env=env, capture_output=True, text=True, timeout=30)
+        self.assertEqual(completed.returncode, 1, completed.stderr)
+        self.assertIn("required tool not found: python3", completed.stderr)
+        self.assertFalse(os.path.exists(self.outdir))
+        self.assertFalse(os.path.exists(self.pidfile))
 
     def test_desmume_cli_not_executable(self):
         not_exec = os.path.join(self.tmpdir, "not-executable")
