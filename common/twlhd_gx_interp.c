@@ -227,6 +227,8 @@ static int stack_pop(GxInterp *g, int32_t n) {
         return 1;
     }
 
+    /* POP with n <= 0 in position mode is a deliberate stricter-than-DS
+     * error (the real GX FIFO ignores or wraps it). */
     if (n <= 0) {
         g->stats->stack_errors++;
         return 0;
@@ -346,10 +348,12 @@ static void flush_primitive(GxInterp *g) {
         break;
     case 2u: /* triangle strip */
     case 3u: /* quad strip */
-        /* Stays at 2 after each emitted primitive; count only vertices that
-         * never joined a primitive. */
+        /* After a primitive is emitted the last two vertices are kept as the
+         * rolling window, so only vertices beyond those two are leftover. */
         if (!g->prim_emitted) {
             g->stats->dropped_incomplete += n;
+        } else if (n > 2u) {
+            g->stats->dropped_incomplete += n - 2u;
         }
         break;
     }
