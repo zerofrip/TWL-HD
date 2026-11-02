@@ -10,6 +10,7 @@
 
 #include <stdint.h>
 
+#include "twlhd_gx_interp.h"
 #include "twlhd_vertex_convert.h"
 
 typedef enum {
@@ -43,6 +44,16 @@ int renderer_set_geometry(const TwlhdVertex *vertices, uint32_t vertex_count);
 
 /* Restores the deterministic built-in debug triangle. */
 int renderer_use_builtin_triangle(void);
+
+/* Stages a non-indexed triangle list of pre-computed DS clip-space vertices
+ * (stride 32 bytes: clip x,y,z,w followed by rgba). The clipfix matrix for
+ * `viewport` (NULL = full screen) is staged too. Like renderer_set_geometry(),
+ * the upload is deferred: it becomes active inside the next renderer_draw(),
+ * which then uses the clip-space shader path instead of the DEBUG path.
+ * A zero count clears the pending buffer and draws nothing. */
+int renderer_set_clip_scene(const TwlhdGxVertex *vertices,
+                            uint32_t vertex_count,
+                            const TwlhdGxViewport *viewport);
 
 /* Records clear + uniforms + draw into the current C3D frame. Must be called
  * between C3D_FrameBegin()/C3D_FrameEnd(). */
