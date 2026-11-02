@@ -728,15 +728,18 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
 
         id = word & TWLHD_V2_CMD_ID_MASK;
         if (!twlhd_v2_cmd_param_count(id, &param_count)) {
+            *out_vertex_count = g.out_count;
             return TWLHD_GX_ERR_STREAM;
         }
         if (param_count > PARAM_BUF_SIZE) {
+            *out_vertex_count = g.out_count;
             return TWLHD_GX_ERR_STREAM;
         }
         entry_count = param_count ? param_count : 1u;
 
         /* Guard against malformed views that escaped the parser. */
         if (i + entry_count > view->gxcm_count) {
+            *out_vertex_count = g.out_count;
             return TWLHD_GX_ERR_STREAM;
         }
 
