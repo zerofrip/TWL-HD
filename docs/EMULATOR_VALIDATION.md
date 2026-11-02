@@ -110,6 +110,9 @@ These are observations from earlier runs with the build above (measured on this 
   the 4 fake-emulator SIGINT tests failed before this fix and pass after it, as do the added ignored-signal scenario and `SigIgn` disposition
   tests; the stricter disposition test also requires an inherited SIGUSR1 ignore to survive, and the mutant evidence is that dropping the
   SIGPIPE/SIGXFSZ resets fails it while resetting every signal fails the SIGUSR1 case.)
+  Coverage caveat (measured by the independent review, EMULATOR): on this machine `stdbuf` is the uutils implementation, which itself resets SIGPIPE to the
+  default before starting the emulator, so removing only the SIGPIPE reset is not caught here (SIGXFSZ is still caught). With GNU `stdbuf` the SIGPIPE reset
+  is load-bearing; keep it. An earlier note that python3 "does not ignore SIGPIPE here" was wrong: it does, and `stdbuf` hides it.
 - Input injection is not used: `--play-movie` is ignored by `desmume-cli` (the GTK/GTK2/Windows frontends do execute it), so the demo is
   built with an auto-dump frame instead of waiting for a key.
 
