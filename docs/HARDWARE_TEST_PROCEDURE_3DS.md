@@ -247,3 +247,45 @@ In short:
   synthetic case completed; with padding disabled it hung (contrast).
 Not established: animation or long runs, textures, real DS captures, other vertex formats, and any DS-faithful rendering.
 Nothing in this section is an assistant-run observation.
+
+### Run 7 — Phase 5A-2 clip-space path (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run on 2026-11-03; evidence = photographs plus the owner's statement that "all tests ran
+normally and ended normally". The photographs are kept **outside** the repository in the owner's
+staging directory.
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-5a.3dsx` (main @ `1e9ed2d`) | `301da396fc9a4de1ba6378f559e8612ed53926b7629723c77316fc57ced33a8f` |
+| v2 frame `tests/host/fixtures/demo_frame_desmume_v2.bin` | `acbdb48e9c0f5a5159ca58bc116d3d863fb822c0a3a79b1ad55aff0ac7934fa5` |
+
+The v2 frame is a real DeSmuME capture of our own homebrew demo cube (124 GXCM + 4 RSTA).
+
+Results:
+- **T1 — built-in triangle (debug path, new build):** RGB triangle on the top screen, status
+  `ready`. OK (photo).
+- **T2 — v1 cube (debug path):** `SD: frame loaded, 36 verts -> 12 tris`, red/blue/magenta faces,
+  as in Run 6. OK (photo).
+- **T3 — v2 cube, first hardware use of the clip path** (second shader, 32-byte vertex with
+  declared bytes == stride, `clipfix` uniform): the bottom screen shows `mode: SD v2 (DS MATRICES)`,
+  `camera: DS matrices (v2 GXCM)`, `frame:241 gxcm:124 tris:12`, `vtx in: 24`, `render verts: 36`,
+  counters `stk0 cap0 inc0 uns0 vd0`, `SD: v2 loaded, 36 verts -> 12 tris`. The top screen shows the
+  cube seen from a corner: upper-left face red, upper-right yellow, lower cyan, not mirrored,
+  horizontally centred, vertical centre slightly above screen middle; same arrangement as the
+  Tanuki3DS emulator and the independent oracle. **No GPU hang.** Size measured roughly from the
+  photo ~142×147 screen px (emulator 143×144) — a photo estimate, not exact. (photo)
+- **T4 — Y after v2 (clip → debug):** built-in triangle, status `built-in triangle`. OK (photo).
+- **T5 — A again (debug → clip):** reported OK by the owner; **no separate photo**.
+- **T6 — truncated v2 file:** `v2 parse: ERR_SIZE`, built-in triangle stays, no freeze. OK (photo).
+
+Correction to an earlier draft of this procedure: it predicted black side bars. That was wrong —
+the clear colour covers the whole 400×240 top screen; only the geometry is confined to the centred
+320×240 area.
+
+**Conclusion:** HARDWARE OBSERVED: the clip-space path runs without a GPU hang for a 36-vertex v2 frame and draws the DS-matrix cube with the expected orientation/colour layout.
+
+**Not covered:** DS viewport +1 / y1-wrap behaviour; captures other than this demo cube; large
+frames on the clip path; many consecutive frames; long-run stability; textures/lighting/alpha
+(5B, not approved).
