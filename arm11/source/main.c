@@ -208,6 +208,9 @@ static int load_sd_frame(uint32_t *out_vertex_count,
         *out_vertex_count = vertex_count;
         *out_is_v2 = 1;
         *out_gxcm_count = g_v2view.gxcm_count;
+        *out_frame_index = g_v2view.frame_index;
+        *out_cmd_count = g_v2view.gxcm_count;
+        *out_parse = TWLHD_PARSE_OK;
 
         if (vertex_count == 0) {
             snprintf(g_status, sizeof g_status,
@@ -226,6 +229,33 @@ static int load_sd_frame(uint32_t *out_vertex_count,
     return 0;
 }
 
+/*
+ * Worst-case column counts for direct printf() lines in update_console().
+ * The bottom-screen console is 40 columns wide (0-39). status_line() is a
+ * separate helper that truncates its argument to 39 chars.
+ *
+ * | line                  | format                                  | worst-case string                         | cols |
+ * |-----------------------|-----------------------------------------|-------------------------------------------|------|
+ * | title                 | "TWL-HD Phase 4B/4C renderer\n"         | TWL-HD Phase 4B/4C renderer               | 27   |
+ * | status banner         | "HARDWARE UNVERIFIED (build-only)\n\n"   | HARDWARE UNVERIFIED (build-only)          | 33   |
+ * | mode                  | "mode:   %s\n"                          | mode:   SD FRAME (DEBUG CAMERA)           | 31   |
+ * | source                | "source: %s\n"                          | source: sdmc:/twlhd_frame.bin             | 29   |
+ * | camera (v2)           | "camera: DS matrices (v2 GXCM)\n\n"      | camera: DS matrices (v2 GXCM)             | 28   |
+ * | camera (v1)           | "camera: DEBUG CAMERA (fixed, not DS)\n\n" | camera: DEBUG CAMERA (fixed, not DS)    | 36   |
+ * | parse (v1 have_frame) | "parse:  %s\n"                          | parse:  ERR_CMD_COUNT                     | 21   |
+ * | parse (no frame)      | "parse:  -- (no SD frame)\n"             | parse:  -- (no SD frame)                  | 24   |
+ * | frame (v1 have_frame) | "frame:  %lu  cmds: %lu\n"               | frame:  999999  cmds: 999999              | 28   |
+ * | frame (v2 have_frame) | "frame:%lu gxcm:%lu tris:%lu\n"          | frame:999999 gxcm:999999 tris:999999      | 36   |
+ * | frame (no frame)      | "frame:  --  cmds: --\n"                 | frame:  --  cmds: --                      | 20   |
+ * | verts (v1)            | "in: %lu  tris: %lu\n"                   | in: 999999  tris: 999999                  | 23   |
+ * | verts (v2)            | "out: %lu  tris: %lu\n"                  | out: 999999  tris: 999999                 | 24   |
+ * | render verts          | "render verts: %lu\n"                    | render verts: 999999                      | 20   |
+ * | unsupported (v1)      | "uns mtx:%lu vp:%lu vtx:%lu unk:%lu\n"   | uns mtx:9999 vp:9999 vtx:9999 unk:9999    | 38   |
+ * | ignored (v1)          | "ignored: %lu outside-begin\n"            | ignored: 999999 outside-begin             | 28   |
+ * | dropped (v1)          | "dropped: %lu incomplete\n\n"             | dropped: 999999 incomplete                | 26   |
+ * | gx counters (v2)      | "stk%lu cap%lu inc%lu uns%lu vd%lu\n"    | stk9999 cap9999 inc9999 uns9999 vd9999    | 38   |
+ * | key legend            | "A=load SD  Y=builtin  START=exit\n"      | A=load SD  Y=builtin  START=exit          | 32   |
+ */
 static void update_console(void) {
     consoleClear();
     printf("TWL-HD Phase 4B/4C renderer\n");
@@ -239,45 +269,48 @@ static void update_console(void) {
     }
 
     if (g_scene.have_frame) {
-        printf("parse:  %s\n",
-               twlhd_parse_result_string(g_scene.parse_result));
         if (g_scene.is_v2) {
-            printf("frame:  %lu  gxcm: %lu\n",
-                   (unsigned long)g_scene.frame_index,
-                   (unsigned long)g_scene.gxcm_count);
+            printf("frame:%lu gxcm:%lu tris:%lu\n",
+                   (unsigned long)clamp_max(g_scene.frame_index),
+                   (unsigned long)clamp_max(g_scene.gxcm_count),
+                   (unsigned long)clamp_max(g_scene.gx_stats.triangles_out));
         } else {
+            printf("parse:  %s\n",
+                   twlhd_parse_result_string(g_scene.parse_result));
             printf("frame:  %lu  cmds: %lu\n",
-                   (unsigned long)g_scene.frame_index,
-                   (unsigned long)g_scene.cmd_count);
+                   (unsigned long)clamp_max(g_scene.frame_index),
+                   (unsigned long)clamp_max(g_scene.cmd_count));
         }
     } else {
         printf("parse:  -- (no SD frame)\n");
         printf("frame:  --  cmds: --\n");
     }
 
-    printf("input verts: %lu  tris: %lu\n",
-           (unsigned long)g_scene.input_vertices,
-           (unsigned long)g_scene.triangles);
-    printf("render verts: %lu\n",
-           (unsigned long)renderer_vertex_count());
-    printf("unsupported: mtx %lu vp %lu vtx %lu unk %lu\n",
-           (unsigned long)g_scene.stats.unsupported_matrix,
-           (unsigned long)g_scene.stats.unsupported_viewport,
-           (unsigned long)g_scene.stats.unsupported_vertex,
-           (unsigned long)g_scene.stats.unsupported_unknown);
-    printf("ignored: %lu outside-begin\n",
-           (unsigned long)g_scene.stats.ignored_outside_begin);
-    printf("dropped: %lu incomplete\n\n",
-           (unsigned long)g_scene.stats.dropped_incomplete);
-
     if (g_scene.is_v2) {
-        /* <=39 cols: "frame:999999 gxcm:999999 tris:999999" = 36 */
-        printf("frame:%lu gxcm:%lu tris:%lu\n",
-               (unsigned long)clamp_max(g_scene.frame_index),
-               (unsigned long)clamp_max(g_scene.gxcm_count),
+        printf("out: %lu  tris: %lu\n",
+               (unsigned long)clamp_max(g_scene.gx_stats.vertices_in),
                (unsigned long)clamp_max(g_scene.gx_stats.triangles_out));
-        /* <=39 cols: "e:9999 c:9999 i:9999 u:9999 d:9999" = 30 */
-        printf("e:%lu c:%lu i:%lu u:%lu d:%lu\n",
+    } else {
+        printf("in: %lu  tris: %lu\n",
+               (unsigned long)clamp_max(g_scene.input_vertices),
+               (unsigned long)clamp_max(g_scene.triangles));
+    }
+
+    printf("render verts: %lu\n",
+           (unsigned long)clamp_max(renderer_vertex_count()));
+
+    if (!g_scene.is_v2) {
+        printf("uns mtx:%lu vp:%lu vtx:%lu unk:%lu\n",
+               (unsigned long)clamp_4digit(g_scene.stats.unsupported_matrix),
+               (unsigned long)clamp_4digit(g_scene.stats.unsupported_viewport),
+               (unsigned long)clamp_4digit(g_scene.stats.unsupported_vertex),
+               (unsigned long)clamp_4digit(g_scene.stats.unsupported_unknown));
+        printf("ignored: %lu outside-begin\n",
+               (unsigned long)clamp_max(g_scene.stats.ignored_outside_begin));
+        printf("dropped: %lu incomplete\n\n",
+               (unsigned long)clamp_max(g_scene.stats.dropped_incomplete));
+    } else {
+        printf("stk%lu cap%lu inc%lu uns%lu vd%lu\n",
                (unsigned long)clamp_4digit(g_scene.gx_stats.stack_errors),
                (unsigned long)clamp_4digit(g_scene.gx_stats.capacity_dropped),
                (unsigned long)clamp_4digit(g_scene.gx_stats.dropped_incomplete),
@@ -419,7 +452,8 @@ int main(void) {
                     g_scene.input_vertices = pending_vertex_count;
                 }
             } else {
-                snprintf(g_status, sizeof g_status, "upload: %s",
+                snprintf(g_status, sizeof g_status, "%s: %s",
+                         pending_is_v2 ? "clip" : "upload",
                          renderer_result_string(result));
             }
             pending_load = 0;
