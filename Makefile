@@ -1,7 +1,10 @@
 .PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag \
-	emu-expected emu-validate
+	emu-expected emu-validate report-arm11-sha
 
-all: arm7 arm9 arm9v2 arm11 arm11_ucode
+all: arm7 arm9 arm9v2 arm11 arm11_ucode report-arm11-sha
+
+report-arm11-sha: arm11
+	@sha256sum arm11/twlhd-arm11.3dsx
 
 arm7:
 	$(MAKE) -C arm7
@@ -55,7 +58,7 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_v2_format.h common/twlhd_v2_parse.h \
 	common/twlhd_v2_write.h common/twlhd_gx_record.h \
 	common/twlhd_gx_interp.h common/twlhd_attr_pad.h \
-	common/twlhd_clipfix.h tests/host/tests_host.h
+	common/twlhd_clipfix.h common/twlhd_seq.h tests/host/tests_host.h
 HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_converter \
 	tests/host/build/test_roundtrip \
@@ -67,6 +70,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_v2_compat \
 	tests/host/build/test_gx_interp \
 	tests/host/build/test_clipfix \
+	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
 	tests/host/build/test_demo_frame \
 	tests/host/build/test_demo_frame_vp
@@ -120,6 +124,9 @@ tests/host/build/test_gx_interp: tests/host/test_gx_interp.c $(HOST_V2_COMMON) \
 tests/host/build/test_clipfix: tests/host/test_clipfix.c common/twlhd_clipfix.c \
 		$(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_clipfix.c $(HOST_LDFLAGS)
+
+tests/host/build/test_seq: tests/host/test_seq.c $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
 
 tests/host/build/gx_interp_cli: tests/host/gx_interp_cli.c $(HOST_V2_COMMON) \
 		$(HOST_HEADERS) | tests/host/build

@@ -22,6 +22,7 @@
 #include "twlhd_v2_parse.h"
 #include "twlhd_gx_interp.h"
 #include "twlhd_vertex_convert.h"
+#include "twlhd_seq.h"
 
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
@@ -53,6 +54,11 @@ static SceneInfo g_scene;
 static char g_status[96];
 static char g_transport_status[64];
 static int g_fs_ready;
+
+static int g_seq_on;
+static uint32_t g_seq_counter;
+static TwlhdSeqState g_seq_state;
+static char g_seq_path[32];
 
 static void set_builtin_scene(void) {
     uint32_t renderer_vertices = renderer_vertex_count();
@@ -121,7 +127,8 @@ static int load_v1(uint32_t *out_vertex_count,
     return 0;
 }
 
-static int load_sd_frame(uint32_t *out_vertex_count,
+static int load_sd_frame(const char *path,
+                         uint32_t *out_vertex_count,
                          TwlhdConvertStats *out_stats,
                          TwlhdParseResult *out_parse,
                          uint32_t *out_frame_index,
@@ -129,7 +136,8 @@ static int load_sd_frame(uint32_t *out_vertex_count,
                          int *out_is_v2,
                          TwlhdGxViewport *out_viewport,
                          TwlhdGxStats *out_gx_stats,
-                         uint32_t *out_gxcm_count) {
+                         uint32_t *out_gxcm_count,
+                         int v2_only) {
     FILE *file;
     long size;
     size_t read_bytes;
@@ -140,9 +148,9 @@ static int load_sd_frame(uint32_t *out_vertex_count,
         return -1;
     }
 
-    file = fopen(FRAME_PATH, "rb");
+    file = fopen(path, "rb");
     if (!file) {
-        snprintf(g_status, sizeof g_status, "SD: cannot open %s", FRAME_PATH);
+        snprintf(g_status, sizeof g_status, "SD: cannot open %s", path);
         return -1;
     }
 
@@ -173,13 +181,7 @@ static int load_sd_frame(uint32_t *out_vertex_count,
     fclose(file);
 
     format = twlhd_detect_format(g_frame_bytes, (size_t)size);
-    if (format == TWLHD_FILE_V1) {
-        if (load_v1(out_vertex_count, out_stats, out_parse,
-                    out_frame_index, out_cmd_count) != 0) {
-            return -1;
-        }
-        *out_is_v2 = 0;
-    } else if (format == TWLHD_FILE_V2) {
+    if (format == TWLHD_FILE_V2) {
         TwlhdV2Result v2_result;
         TwlhdGxResult gx_result;
         uint32_t vertex_count;
@@ -220,6 +222,12 @@ static int load_sd_frame(uint32_t *out_vertex_count,
                      "SD: v2 loaded, %u verts -> %u tris",
                      (unsigned)vertex_count, (unsigned)(vertex_count / 3u));
         }
+    } else if (!v2_only && format == TWLHD_FILE_V1) {
+        if (load_v1(out_vertex_count, out_stats, out_parse,
+                    out_frame_index, out_cmd_count) != 0) {
+            return -1;
+        }
+        *out_is_v2 = 0;
     } else {
         snprintf(g_status, sizeof g_status,
                  "SD: unknown format (size %u)", (unsigned)size);
@@ -238,6 +246,7 @@ static int load_sd_frame(uint32_t *out_vertex_count,
  * |-----------------------|-----------------------------------------|-------------------------------------------|------|
  * | title                 | "TWL-HD Phase 4B/4C renderer\n"         | TWL-HD Phase 4B/4C renderer               | 27   |
  * | status banner         | "HARDWARE UNVERIFIED (build-only)\n\n"   | HARDWARE UNVERIFIED (build-only)          | 32   |
+ * | seq status            | "seq %03u/%03u loop %lu\n"               | seq 063/064 loop 9999                     | 21   |
  * | mode                  | "mode:   %s\n"                          | mode:   SD FRAME (DEBUG CAMERA)           | 31   |
  * | mode (builtin)        | "mode:   %s\n"                          | mode:   BUILT-IN TRIANGLE                 | 25   |
  * | mode (failed)         | "mode:   %s\n"                          | mode:   RENDERER FAILED                   | 23   |
@@ -256,12 +265,18 @@ static int load_sd_frame(uint32_t *out_vertex_count,
  * | ignored (v1)          | "ignored: %lu outside-begin\n"            | ignored: 999999 outside-begin             | 29   |
  * | dropped (v1)          | "dropped: %lu incomplete\n\n"             | dropped: 999999 incomplete                | 26   |
  * | gx counters (v2)      | "stk%lu cap%lu inc%lu uns%lu vd%lu\n"    | stk9999 cap9999 inc9999 uns9999 vd9999    | 38   |
- * | key legend            | "A=load SD  Y=builtin  START=exit\n"      | A=load SD  Y=builtin  START=exit          | 32   |
+ * | key legend            | "A=load SD  Y=builtin  X=seq  START=exit\n" | A=load SD  Y=builtin  X=seq  START=exit  | 39   |
  */
 static void update_console(void) {
     consoleClear();
     printf("TWL-HD Phase 4B/4C renderer\n");
     printf("HARDWARE UNVERIFIED (build-only)\n\n");
+    if (g_seq_on) {
+        printf("seq %03u/%03u loop %lu\n",
+               (unsigned)clamp_4digit(g_seq_state.index),
+               (unsigned)clamp_4digit(g_seq_state.first_pass_count),
+               (unsigned long)clamp_4digit(g_seq_state.loop_count));
+    }
     printf("mode:   %s\n", g_scene.mode);
     printf("source: %s\n", g_scene.source);
     if (g_scene.is_v2) {
@@ -319,7 +334,7 @@ static void update_console(void) {
                (unsigned long)clamp_4digit(g_scene.gx_stats.geometry_incomplete));
     }
 
-    printf("A=load SD  Y=builtin  START=exit\n");
+    printf("A=load SD  Y=builtin  X=seq  START=exit\n");
     status_line(g_transport_status);
     status_line(g_status);
 }
@@ -338,6 +353,8 @@ int main(void) {
     uint32_t pending_gxcm_count = 0;
     TwlhdGxViewport pending_viewport;
     TwlhdGxStats pending_gx_stats;
+    const char *pending_source = NULL;
+    int seq_pending = 0;
 
     memset(&pending_stats, 0, sizeof pending_stats);
     memset(&pending_viewport, 0, sizeof pending_viewport);
@@ -388,18 +405,87 @@ int main(void) {
         if (keys & KEY_Y) {
             pending_builtin = 1;
             pending_load = 0;
+            g_seq_on = 0;
+        }
+
+        if (keys & KEY_X) {
+            if (g_seq_on) {
+                g_seq_on = 0;
+                snprintf(g_status, sizeof g_status, "seq off");
+            } else {
+                FILE *seq_file;
+
+                twlhd_seq_path(g_seq_path, sizeof g_seq_path, 0);
+                seq_file = fopen(g_seq_path, "rb");
+                if (!seq_file) {
+                    snprintf(g_status, sizeof g_status,
+                             "seq: no seq_000.bin");
+                } else {
+                    fclose(seq_file);
+                    g_seq_on = 1;
+                    g_seq_counter = SEQ_PERIOD - 1;
+                    twlhd_seq_reset(&g_seq_state);
+                    snprintf(g_status, sizeof g_status, "seq on");
+                }
+            }
+            update_console();
         }
 
         if (keys & KEY_A) {
-            if (load_sd_frame(&pending_vertex_count, &pending_stats,
-                              &pending_parse, &pending_frame_index,
-                              &pending_cmd_count, &pending_is_v2,
-                              &pending_viewport, &pending_gx_stats,
-                              &pending_gxcm_count) == 0) {
+            g_seq_on = 0;
+            if (load_sd_frame(FRAME_PATH, &pending_vertex_count,
+                              &pending_stats, &pending_parse,
+                              &pending_frame_index, &pending_cmd_count,
+                              &pending_is_v2, &pending_viewport,
+                              &pending_gx_stats, &pending_gxcm_count,
+                              0) == 0) {
                 pending_load = 1;
                 pending_builtin = 0;
+                pending_source = FRAME_PATH;
             }
             update_console();
+        }
+
+        if (g_seq_on) {
+            g_seq_counter++;
+            if (g_seq_counter >= SEQ_PERIOD) {
+                FILE *probe;
+                g_seq_counter = 0;
+
+                if (twlhd_seq_path(g_seq_path, sizeof g_seq_path,
+                                   g_seq_state.index) != 0) {
+                    /* Path format error (shouldn't happen) — treat as missing. */
+                    twlhd_seq_advance(&g_seq_state, 0);
+                    update_console();
+                } else {
+                    probe = fopen(g_seq_path, "rb");
+                    if (!probe) {
+                        /* File absent: wrap to 000, count a loop, seq stays ON. */
+                        twlhd_seq_advance(&g_seq_state, 0);
+                        snprintf(g_status, sizeof g_status, "seq: wrapped");
+                        update_console();
+                    } else {
+                        fclose(probe);
+                        /* File present: format/parse error turns seq OFF. */
+                        if (load_sd_frame(g_seq_path, &pending_vertex_count,
+                                          &pending_stats, &pending_parse,
+                                          &pending_frame_index,
+                                          &pending_cmd_count,
+                                          &pending_is_v2, &pending_viewport,
+                                          &pending_gx_stats,
+                                          &pending_gxcm_count, 1) == 0) {
+                            pending_load = 1;
+                            pending_builtin = 0;
+                            pending_source = g_seq_path;
+                            seq_pending = 1;
+                            twlhd_seq_advance(&g_seq_state, 1);
+                        } else {
+                            g_seq_on = 0;
+                            update_console();
+                        }
+                    }
+                }
+            }
         }
 
         if (C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) {
@@ -421,7 +507,9 @@ int main(void) {
             update_console();
         } else if (pending_load) {
             int result;
+            int was_seq = seq_pending;
 
+            seq_pending = 0;
             if (pending_is_v2) {
                 result = renderer_set_clip_scene(g_clip_vertices,
                                                  pending_vertex_count,
@@ -444,7 +532,7 @@ int main(void) {
                     g_scene.triangles = pending_stats.triangles;
                     g_scene.stats = pending_stats;
                 }
-                g_scene.source = FRAME_PATH;
+                g_scene.source = pending_source;
                 g_scene.have_frame = 1;
                 g_scene.parse_result = pending_parse;
                 g_scene.frame_index = pending_frame_index;
@@ -456,6 +544,9 @@ int main(void) {
                 snprintf(g_status, sizeof g_status, "%s: %s",
                          pending_is_v2 ? "clip" : "upload",
                          renderer_result_string(result));
+                if (was_seq) {
+                    g_seq_on = 0;
+                }
             }
             pending_load = 0;
             update_console();
