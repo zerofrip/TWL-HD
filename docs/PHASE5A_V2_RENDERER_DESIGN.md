@@ -43,8 +43,8 @@ transform is then done in `double`/`float`, which is acceptable for display (the
 
 ## 5. The PICA200 side (**CHECK** against citro3d source, then verify on hardware)
 - Depth: DS clip z ∈ [−w, w]; citro3d projections target z ∈ [−w, 0]. `clipfix` maps `z' = (z − w) / 2` (so −w→−w, +w→0).
-- Screen: the top screen is a 240×400 target presented rotated; citro3d's `Mtx_PerspTilt` bakes that rotation into the projection. `clipfix` must apply the same
-  quarter-turn (read `Mtx_PerspTilt` in the citro3d source and reproduce it; do not guess its sign).
+- Screen: the top screen is a 240×400 target presented rotated; citro3d's `Mtx_PerspTilt` bakes that rotation into the projection. **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** `clipfix` is believed to apply the citro3d quarter-turn (read `Mtx_PerspTilt` in the citro3d source and
+  reproduce it; do not guess its sign).
 - Viewport policy (decision): the DS 256×192 viewport is mapped to a **centred 4:3 region of the 400×240 top screen (320×240, 40 px pillar bars)** — aspect
   preserved, native 3DS resolution. Implemented inside `clipfix` (scale/offset in clip space, using the captured `VIEWPORT`), not with PICA scissor state,
   to keep the GPU path to one uniform.
@@ -86,12 +86,12 @@ documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode
 | Emulator (Tanuki3DS pixel sanity) | EMULATOR pending |
 | Hardware | HARDWARE not started |
 
-**39-column rule** (bottom-screen console is 40 columns wide): every `printf` in `update_console()` is either a literal string ≤39 chars, or routed through `status_line()` which truncates to 39 chars, or uses `clamp_max()`/`clamp_4digit()` helpers that enforce a numeric ceiling before formatting. Verified at worst-case digit counts.
+**39-column rule** (bottom-screen console is 40 columns wide): every `printf` in `update_console()` is either a literal string ≤39 chars, or routed through `status_line()` which truncates to 39 chars, or uses `clamp_max()`/`clamp_4digit()` helpers that enforce a numeric ceiling before formatting. Verified at worst-case digit counts by the worst-case table in `update_console()` header comment.
 
 **Known risks still unverified (EMULATOR/HARDWARE):**
-- Orientation/mirroring: `clipfix` applies the DS→PICA200 depth remap and the citro3d quarter-turn; actual screen orientation is unverified.
+- **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** `clipfix` applies the DS→PICA200 depth remap and the citro3d quarter-turn; actual screen orientation is unverified.
 - Pillarbox centring: DS 256×192 is mapped to a 320×240 centred region; pixel placement unverified.
 - Depth order: `GPU_GREATER`/`GPU_GEQUAL` choice for the remapped z is unverified.
-- DS viewport y1-wrap: GBATEK notes y1 is measured from the bottom; interpreter accounts for it but hardware behaviour is unverified.
+- **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** GBATEK notes DS viewport y1 is measured from the bottom; the interpreter accounts for it but hardware behaviour is unverified.
 
 Labels: BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel sanity (not hardware evidence). HARDWARE = run on real New 3DS (not done in 5A).
