@@ -832,9 +832,24 @@ int renderer_set_clip_scene(const TwlhdGxVertex *vertices,
     return TWLHD_RENDER_OK;
 }
 
+/* Promote the staged geometry buffer to active and update active_mode to
+ * match. This is the ONLY place active_mode is written besides the reset in
+ * renderer_shutdown(). */
+static void commit_pending_geometry(void) {
+    /* The active buffer and active_mode always change together — commit() is
+     * the ONLY place a pending buffer is promoted and the ONLY place
+     * active_mode is written, right beside it. Staging sets pending_mode only
+     * after the stage succeeded, so active_mode always describes the format of
+     * slots.active (DEBUG: TwlhdVertex = 48 B/vertex, CLIP: TwlhdGxVertex =
+     * 32 B/vertex); a failed set_geometry can never make the next draw run the
+     * 48 B DEBUG layout on the 32 B clip buffer. */
+    twlhd_geometry_slots_commit(&g_renderer.slots);
+    g_renderer.active_mode = g_renderer.pending_mode;
+}
+
 /* Existing DEBUG render path. Kept as the cut-pasted original body except
  * for the hoisted commit: commit is now done once in renderer_draw(). */
-static void draw_debug_internal(int committed) {
+static void draw_debug_internal(void) {
     LayoutMode target;
     int target_no_pad;
 
@@ -860,8 +875,11 @@ static void draw_debug_internal(int committed) {
     }
 
     if (target == LAYOUT_NORMAL) {
-        if (committed) {
+        if (g_renderer.slots.pending) {
             C3D_BufInfo *pending_buf_info;
+
+            renderer_trace("commit/BufInfo");
+            commit_pending_geometry();
 
             /* linearAlloc() memory is CPU-cached on 3DS; the GPU DMA/read path
              * does not snoop the CPU cache, so the memcpy in stage() can leave
@@ -1013,30 +1031,26 @@ static void draw_clip_internal(int committed) {
 }
 
 void renderer_draw(void) {
-    int committed = 0;
-
+    const RenderMode mode = g_renderer.slots.pending
+                                ? (RenderMode)g_renderer.pending_mode
+                                : (RenderMode)g_renderer.active_mode;
     if (!g_renderer.ready) return;
 
-    /* The active buffer and active_mode always change together — commit() is
-     * the ONLY place a pending buffer is promoted and the ONLY place
-     * active_mode is written, right beside it. Staging sets pending_mode only
-     * after the stage succeeded, so active_mode always describes the format of
-     * slots.active (DEBUG: TwlhdVertex = 48 B/vertex, CLIP: TwlhdGxVertex =
-     * 32 B/vertex); a failed set_geometry can never make the next draw run the
-     * 48 B DEBUG layout on the 32 B clip buffer. */
-    if (g_renderer.slots.pending) {
-        renderer_trace(g_renderer.pending_mode == RENDER_MODE_CLIP
-                           ? "clip commit/BufInfo" : "commit/BufInfo");
-        twlhd_geometry_slots_commit(&g_renderer.slots);
-        g_renderer.active_mode = g_renderer.pending_mode;
-        committed = 1;
-    }
-
-    if (g_renderer.active_mode == RENDER_MODE_CLIP) {
+    if (mode == RENDER_MODE_CLIP) {
+        int committed = 0;
+        if (g_renderer.slots.pending) {
+            renderer_trace("clip commit/BufInfo");
+            commit_pending_geometry();
+            committed = 1;
+        }
         draw_clip_internal(committed);
         return;
     }
-    draw_debug_internal(committed);
+    /* DEBUG path. A pending DEBUG buffer is only committed inside
+     * draw_debug_internal() when target == LAYOUT_NORMAL; non-NORMAL layouts
+     * never read slots.active, so a pending DEBUG buffer cannot be drawn with
+     * the wrong stride even if active_mode is CLIP. */
+    draw_debug_internal();
 }
 
 int renderer_is_ready(void) {
