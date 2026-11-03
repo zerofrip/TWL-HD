@@ -2,7 +2,7 @@
 
 Status: **DESIGN, approved to start (owner, 2026-11-01).** Scope fixed by the owner: offline rendering of v2 captures from **our own homebrew ROMs**
 on a real New 3DS. **Out of scope:** commercial-game GPU interception, real-time DS rendering, RTCom changes. Labels: BUILD / UNIT / EMULATOR / HARDWARE
-are kept separate; nothing here is HARDWARE VERIFIED, though the 5A-2 clip path is HARDWARE OBSERVED for one frame (Run 7). This document makes decisions; items marked **CHECK** must be verified against a source
+are kept separate; nothing here is HARDWARE VERIFIED, though the 5A-2 clip path is HARDWARE OBSERVED for one frame (Run 7) and for a non-default DS viewport on one frame (Run 8). This document makes decisions; items marked **CHECK** must be verified against a source
 (GBATEK, libnds, citro3d) during implementation before they are relied on.
 
 ## 1. Goal and non-goals
@@ -64,7 +64,7 @@ Errors (bad parse, interpreter limit exceeded) are shown, never silently ignored
 |---|---|---|---|
 | 5A-1 | `twlhd_gx_interp` + host tests (stack semantics, each matrix command, vertex forms, primitives, error paths) | UNIT; golden: the captured/generated demo frame → expected clip coordinates computed independently (Python/double) and cross-checked with an independent review | `make test` green, mutation checks, independent review PASS |
 | 5A-2 | ARM11 v2 path: loader dispatch, clip-space shader + `clipfix`, 32-byte vertex layout | BUILD; EMULATOR (Tanuki3DS: pixel sanity — bounding box inside the 4:3 region, expected face colours); *the emulator ignored the Phase 4 padding bug, so this is not hardware evidence* | builds clean; emulator shows a plausible cube; review PASS |
-| 5A-3 | Hardware run procedure (new owner approval required) | HARDWARE | **Met for one frame (Run 7, HARDWARE OBSERVED):** the cube rendered from a 36-vertex v2 frame with no GPU hang; see `HARDWARE_TEST_PROCEDURE_3DS.md` section 12. Not covered: stability, long runs, other captures, large frames, DS viewport +1/y1-wrap |
+| 5A-3 | Hardware run procedure (new owner approval required) | HARDWARE | **Met for one frame (Run 7, HARDWARE OBSERVED) and for one non-default DS viewport (Run 8, HARDWARE OBSERVED):** the cube rendered from a 36-vertex v2 frame with no GPU hang, and a (32,96)-(159,191) viewport placed it as the oracle/emulator predict (photo estimate); see `HARDWARE_TEST_PROCEDURE_3DS.md` section 12. Not covered: stability, long runs, other captures, large frames, the DS-side viewport +1/y1-wrap (not testable on the 3DS), viewports with y1 > 191 |
 | 5B (later, not approved) | normals/lighting, POLYGON_ATTR (cull/alpha), textures (needs `TXDS/TXDT/PLDT`), animation sequences | – | separate approval |
 Every GPU-touching change keeps the diagnostic habits that worked: explicit trace markers and a non-blocking completion probe in a diag build, and a
 documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode gate stays 0.
@@ -85,7 +85,7 @@ documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode
 | `arm11/source/renderer.c` — clip-space shader + render path | BUILD ✓ only (no unit tests; GPU path cannot be unit-tested on the host) |
 | `arm11/source/main.c` — v2 loader + status display | BUILD ✓ |
 | Emulator (Tanuki3DS pixel sanity) | EMULATOR ✓ (not hardware evidence) |
-| Hardware | HARDWARE OBSERVED (Run 7): clip path ran without a GPU hang on the demo cube; see HARDWARE_TEST_PROCEDURE_3DS.md section 12 |
+| Hardware | HARDWARE OBSERVED (Runs 7 and 8): clip path ran without a GPU hang on the demo cube, and a non-default DS viewport (32,96)-(159,191) placed the cube as predicted (photo estimate); see HARDWARE_TEST_PROCEDURE_3DS.md section 12 |
 
 The 5A-2 build was run in Tanuki3DS with the v2 capture loaded from `sdmc:/twlhd_frame.bin`; its 800x600 screen dump was inspected and the cube's bounding box measured at 311-490 × 53-233 versus 308-492 × 51-235 expected — within 3 px — with the expected face colours. The run is EMULATOR evidence only: it shows the capture, clip and draw path produces a plausible image and says nothing about GPU hangs, vertex/polygon RAM pressure or timing on real hardware.
 
@@ -95,9 +95,10 @@ The 5A-2 build was run in Tanuki3DS with the v2 capture loaded from `sdmc:/twlhd
 - **HARDWARE OBSERVED for one frame (Run 7):** `clipfix` applies the DS→PICA200 depth remap and the citro3d quarter-turn; the cube's screen orientation matched the emulator and the independent oracle on one 36-vertex v2 frame. Other frames unverified.
 - **HARDWARE OBSERVED for one frame (Run 7):** no mirroring — the cube's face layout was not mirrored on that frame.
 - **HARDWARE OBSERVED for one frame (Run 7):** pillarbox centring — the cube sat horizontally centred (vertical centre slightly above screen middle) on that frame; its ~142×147 px size is a photo estimate.
+- **HARDWARE OBSERVED for one frame (Run 8):** the `clipfix` viewport mapping (scale 0.5 plus offset) for a non-default DS viewport (32,96)-(159,191) placed the cube where the oracle and emulator predict, within a few px of a photo estimate. One viewport only, and the figure comes from a photo, not a precise measurement.
 - **UNVERIFIED:** depth order — `GPU_GREATER`/`GPU_GEQUAL` choice for the remapped z on far faces.
-- **UNVERIFIED:** GBATEK notes DS viewport y1 is measured from the bottom; the interpreter accounts for it but hardware behaviour (+1 size, y1 wrap) is unverified.
+- **UNVERIFIED:** GBATEK notes DS viewport y1 is measured from the bottom; the interpreter accounts for it, but the **DS-side** +1 size / y1-wrap behaviour (and viewports with y1 > 191) remains unverified — it cannot be exercised on the 3DS. The 3DS-side mapping for a non-default viewport is now HARDWARE OBSERVED (Run 8).
 
-Run 7 (HARDWARE OBSERVED, one 36-vertex v2 frame) covers orientation, no mirroring and pillarbox centring; the depth order of far faces and the DS viewport y1 wrap/+1 behaviour remain EMULATOR/unverified, and nothing beyond this one demo cube has been run on hardware.
+Run 7 (HARDWARE OBSERVED, one 36-vertex v2 frame) covers orientation, no mirroring and pillarbox centring; Run 8 (HARDWARE OBSERVED, one non-default DS viewport) covers the viewport scale/offset mapping. The depth order of far faces and the DS-side viewport y1 wrap/+1 behaviour remain EMULATOR/unverified, and nothing beyond this one demo cube has been run on hardware.
 
-Labels: BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel sanity (not hardware evidence). HARDWARE = run on real New 3DS; one run done in 5A (Run 7, HARDWARE OBSERVED, one 36-vertex v2 frame). Everything else remains unverified: DS viewport +1/y1-wrap, captures other than this demo cube, large frames on the clip path, many consecutive frames, long-run stability, and textures/lighting/alpha (5B, not approved).
+Labels: BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel sanity (not hardware evidence). HARDWARE = run on real New 3DS; two runs done in 5A (Runs 7 and 8, HARDWARE OBSERVED, one 36-vertex v2 frame each, Run 8 on a non-default DS viewport). Everything else remains unverified: the DS-side viewport +1/y1-wrap and viewports with y1 > 191, captures other than this demo cube, large frames on the clip path, many consecutive frames, long-run stability, and textures/lighting/alpha (5B, not approved).
