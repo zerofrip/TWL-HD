@@ -23,9 +23,15 @@
 
 #include "renderer.h"
 #include "twlhd_attr_pad.h"
+#include "twlhd_clipfix.h"
 #include "twlhd_geometry_slots.h"
 
+#include "twlhd_clip_vshader_shbin.h"
 #include "twlhd_vshader_shbin.h"
+
+/* The clip vertex layout is exactly two float4 loaders. */
+_Static_assert(sizeof(TwlhdGxVertex) == 32,
+               "TwlhdGxVertex must be 32 bytes for the clip vertex layout");
 
 #define RENDER_CLEAR_COLOR 0x101018FFu
 #define RENDER_FOV_DEGREES  45.0f
@@ -56,7 +62,20 @@ typedef struct {
     C3D_Mtx pending_modelview;
     int layout_mode;
     int layout_no_pad;
+    DVLB_s *clip_dvlb;
+    shaderProgram_s clip_program;
+    int clip_program_inited;
+    int u_loc_clipfix;
+    float clipfix_pending[4][4];
+    float clipfix_active[4][4];
+    int pending_mode;
+    int active_mode;
 } RendererState;
+
+typedef enum {
+    RENDER_MODE_DEBUG = 0,
+    RENDER_MODE_CLIP,
+} RenderMode;
 
 typedef enum {
     LAYOUT_NORMAL = 0,
@@ -542,6 +561,16 @@ void renderer_shutdown(void) {
         g_renderer.dvlb = NULL;
     }
 
+    if (g_renderer.clip_program_inited) {
+        shaderProgramFree(&g_renderer.clip_program);
+        g_renderer.clip_program_inited = 0;
+    }
+
+    if (g_renderer.clip_dvlb) {
+        DVLB_Free(g_renderer.clip_dvlb);
+        g_renderer.clip_dvlb = NULL;
+    }
+
     /* C3D_RenderTargetDelete drains the GPU queue, so the active buffer is
      * safe to free only after it returns. See upstream citro3d
      * renderqueue.c/base.c, read from the devkitPro/citro3d repository;
@@ -590,8 +619,11 @@ void renderer_shutdown(void) {
     g_renderer.vertex_count = 0;
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
+    g_renderer.u_loc_clipfix = -1;
     g_renderer.layout_mode = LAYOUT_NORMAL;
     g_renderer.layout_no_pad = 0;
+    g_renderer.pending_mode = RENDER_MODE_DEBUG;
+    g_renderer.active_mode = RENDER_MODE_DEBUG;
 }
 
 int renderer_init(void) {
@@ -604,6 +636,7 @@ int renderer_init(void) {
     memset(&g_renderer, 0, sizeof g_renderer);
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
+    g_renderer.u_loc_clipfix = -1;
     /* Refresh the debug flags after the RendererState wipe. This also keeps
      * the debug-flag API reachable in the normal (non-diag) ELF so that nm
      * reports it; the call is a no-op when the flags are zero. */
@@ -659,6 +692,37 @@ int renderer_init(void) {
         g_renderer.program.vertexShader, "modelview");
     if (g_renderer.u_loc_projection < 0 ||
         g_renderer.u_loc_modelview < 0) {
+        result = TWLHD_RENDER_ERR_UNIFORM;
+        goto fail;
+    }
+
+    renderer_trace("clip DVLB_ParseFile");
+    g_renderer.clip_dvlb = DVLB_ParseFile(
+        (u32 *)(void *)twlhd_clip_vshader_shbin,
+        (u32)twlhd_clip_vshader_shbin_size);
+    if (!g_renderer.clip_dvlb) {
+        result = TWLHD_RENDER_ERR_SHADER;
+        goto fail;
+    }
+
+    renderer_trace("clip shaderProgramInit");
+    if (R_FAILED(shaderProgramInit(&g_renderer.clip_program))) {
+        result = TWLHD_RENDER_ERR_SHADER;
+        goto fail;
+    }
+    g_renderer.clip_program_inited = 1;
+
+    renderer_trace("clip SetVsh");
+    if (R_FAILED(shaderProgramSetVsh(&g_renderer.clip_program,
+                                     &g_renderer.clip_dvlb->DVLE[0]))) {
+        result = TWLHD_RENDER_ERR_SHADER;
+        goto fail;
+    }
+
+    renderer_trace("clip uniform loc");
+    g_renderer.u_loc_clipfix = shaderInstanceGetUniformLocation(
+        g_renderer.clip_program.vertexShader, "clipfix");
+    if (g_renderer.u_loc_clipfix < 0) {
         result = TWLHD_RENDER_ERR_UNIFORM;
         goto fail;
     }
@@ -734,6 +798,7 @@ int renderer_set_geometry(const TwlhdVertex *vertices,
     }
 
     g_renderer.vertex_count = vertex_count;
+    g_renderer.pending_mode = RENDER_MODE_DEBUG;
 
     if (vertex_count != 0 && !(g_debug_flags & TWLHD_RDBG_ORTHO)) {
         update_camera(vertices, vertex_count);
@@ -745,11 +810,48 @@ int renderer_use_builtin_triangle(void) {
     return renderer_set_geometry(g_builtin_triangle, 3);
 }
 
-void renderer_draw(void) {
+int renderer_set_clip_scene(const TwlhdGxVertex *vertices,
+                            uint32_t vertex_count,
+                            const TwlhdGxViewport *viewport) {
+    size_t bytes;
+
+    if (!g_renderer.ready) return TWLHD_RENDER_ERR_NOT_READY;
+    if (!vertices && vertex_count != 0) return TWLHD_RENDER_ERR_NULL;
+
+    bytes = (size_t)vertex_count * sizeof(TwlhdGxVertex);
+
+    /* Same deferred-upload contract as renderer_set_geometry(): the active
+     * buffer may still be read by the in-flight frame. */
+    if (twlhd_geometry_slots_stage(&g_renderer.slots, vertices, bytes) != 0) {
+        return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
+    }
+
+    g_renderer.vertex_count = vertex_count;
+    g_renderer.pending_mode = RENDER_MODE_CLIP;
+    twlhd_clipfix_matrix(viewport, g_renderer.clipfix_pending);
+    return TWLHD_RENDER_OK;
+}
+
+/* Promote the staged geometry buffer to active and update active_mode to
+ * match. This is the ONLY place active_mode is written besides the reset in
+ * renderer_shutdown(). */
+static void commit_pending_geometry(void) {
+    /* The active buffer and active_mode always change together — commit() is
+     * the ONLY place a pending buffer is promoted and the ONLY place
+     * active_mode is written, right beside it. Staging sets pending_mode only
+     * after the stage succeeded, so active_mode always describes the format of
+     * slots.active (DEBUG: TwlhdVertex = 48 B/vertex, CLIP: TwlhdGxVertex =
+     * 32 B/vertex); a failed set_geometry can never make the next draw run the
+     * 48 B DEBUG layout on the 32 B clip buffer. */
+    twlhd_geometry_slots_commit(&g_renderer.slots);
+    g_renderer.active_mode = g_renderer.pending_mode;
+}
+
+/* Existing DEBUG render path. Kept as the cut-pasted original body except
+ * for the hoisted commit: commit is now done once in renderer_draw(). */
+static void draw_debug_internal(void) {
     LayoutMode target;
     int target_no_pad;
-
-    if (!g_renderer.ready) return;
 
     /* By documented precondition this runs between a successful
      * C3D_FrameBegin and C3D_FrameEnd. FrameBegin drains the previous frame's
@@ -777,7 +879,7 @@ void renderer_draw(void) {
             C3D_BufInfo *pending_buf_info;
 
             renderer_trace("commit/BufInfo");
-            twlhd_geometry_slots_commit(&g_renderer.slots);
+            commit_pending_geometry();
 
             /* linearAlloc() memory is CPU-cached on 3DS; the GPU DMA/read path
              * does not snoop the CPU cache, so the memcpy in stage() can leave
@@ -849,6 +951,106 @@ void renderer_draw(void) {
             }
         }
     }
+}
+
+/* Clip-space render path. RDBG flags are deliberately ignored here: they only
+ * describe the DEBUG view, and letting them alter this path would blur the two
+ * modes' semantics. AttrInfo/BufInfo/program/uniform are rebuilt on every clip
+ * draw so no DEBUG state can leak into a clip frame. */
+static void draw_clip_internal(int committed) {
+    C3D_AttrInfo *attr_info;
+    C3D_BufInfo *buf_info;
+    C3D_Mtx m4;
+    uint64_t perm = 0x10;
+    uint32_t components = 2;
+    int i;
+
+    if (twlhd_attr_pad_perm(32, 32, 2, 0x10u, &perm, &components) != 0 ||
+        components != 2 || perm != 0x10u) {
+        renderer_trace("clip pad fail");
+        return; /* refuse to draw with an unchecked layout this frame */
+    }
+
+    if (committed) {
+        GSPGPU_FlushDataCache(g_renderer.slots.active,
+                              (u32)g_renderer.slots.active_size);
+        memcpy(g_renderer.clipfix_active, g_renderer.clipfix_pending,
+               sizeof g_renderer.clipfix_active);
+    }
+
+    attr_info = C3D_GetAttrInfo();
+    AttrInfo_Init(attr_info);
+    AttrInfo_AddLoader(attr_info, 0, GPU_FLOAT, 4); /* v0 = clip xyzw */
+    AttrInfo_AddLoader(attr_info, 1, GPU_FLOAT, 4); /* v1 = rgba      */
+
+    buf_info = C3D_GetBufInfo();
+    BufInfo_Init(buf_info);
+    BufInfo_Add(buf_info, g_renderer.slots.active, 32, (s8)components, perm);
+
+    renderer_trace("RenderTargetClear");
+    C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
+                          RENDER_CLEAR_COLOR, 0);
+
+    C3D_FrameDrawOn(g_renderer.target);
+
+    /* HARD RULE: set render state explicitly on every clip frame;
+     * never rely on the DEBUG path having run first. */
+    C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+    C3D_CullFace(GPU_CULL_NONE);
+
+    /* TexEnv slot 0: pass primary vertex colour through unchanged (same as DEBUG path). */
+    {
+        C3D_TexEnv *env = C3D_GetTexEnv(0);
+        C3D_TexEnvInit(env);
+        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
+        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+    }
+
+    renderer_trace("clip program");
+    C3D_BindProgram(&g_renderer.clip_program);
+
+    renderer_trace("clip uniform");
+    /* C3D_Mtx rows are stored w,z,y,x; copy the row-major float[4][4] by name. */
+    for (i = 0; i < 4; i++) {
+        m4.r[i].x = g_renderer.clipfix_active[i][0];
+        m4.r[i].y = g_renderer.clipfix_active[i][1];
+        m4.r[i].z = g_renderer.clipfix_active[i][2];
+        m4.r[i].w = g_renderer.clipfix_active[i][3];
+    }
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_clipfix, &m4);
+
+    renderer_trace("clip DrawArrays");
+    if (g_renderer.slots.active && g_renderer.vertex_count) {
+        C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
+    }
+
+    /* This path clobbered the DEBUG AttrInfo/BufInfo; force the next DEBUG
+     * draw to rebuild them through apply_layout(). */
+    g_renderer.layout_mode = -1;
+    g_renderer.layout_no_pad = -1;
+}
+
+void renderer_draw(void) {
+    const RenderMode mode = g_renderer.slots.pending
+                                ? (RenderMode)g_renderer.pending_mode
+                                : (RenderMode)g_renderer.active_mode;
+    if (!g_renderer.ready) return;
+
+    if (mode == RENDER_MODE_CLIP) {
+        int committed = 0;
+        if (g_renderer.slots.pending) {
+            renderer_trace("clip commit/BufInfo");
+            commit_pending_geometry();
+            committed = 1;
+        }
+        draw_clip_internal(committed);
+        return;
+    }
+    /* DEBUG path. A pending DEBUG buffer is only committed inside
+     * draw_debug_internal() when target == LAYOUT_NORMAL; non-NORMAL layouts
+     * never read slots.active, so a pending DEBUG buffer cannot be drawn with
+     * the wrong stride even if active_mode is CLIP. */
+    draw_debug_internal();
 }
 
 int renderer_is_ready(void) {

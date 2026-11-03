@@ -43,8 +43,8 @@ transform is then done in `double`/`float`, which is acceptable for display (the
 
 ## 5. The PICA200 side (**CHECK** against citro3d source, then verify on hardware)
 - Depth: DS clip z ∈ [−w, w]; citro3d projections target z ∈ [−w, 0]. `clipfix` maps `z' = (z − w) / 2` (so −w→−w, +w→0).
-- Screen: the top screen is a 240×400 target presented rotated; citro3d's `Mtx_PerspTilt` bakes that rotation into the projection. `clipfix` must apply the same
-  quarter-turn (read `Mtx_PerspTilt` in the citro3d source and reproduce it; do not guess its sign).
+- Screen: the top screen is a 240×400 target presented rotated; citro3d's `Mtx_PerspTilt` bakes that rotation into the projection. **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** `clipfix` is believed to apply the citro3d quarter-turn (read `Mtx_PerspTilt` in the citro3d source and
+  reproduce it; do not guess its sign).
 - Viewport policy (decision): the DS 256×192 viewport is mapped to a **centred 4:3 region of the 400×240 top screen (320×240, 40 px pillar bars)** — aspect
   preserved, native 3DS resolution. Implemented inside `clipfix` (scale/offset in clip space, using the captured `VIEWPORT`), not with PICA scissor state,
   to keep the GPU path to one uniform.
@@ -75,3 +75,28 @@ documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode
 2. PICA200 depth/orientation conventions — mitigated by deriving from citro3d source and by the emulator pixel sanity, but only hardware settles them.
 3. Unknown hardware behaviour of the new vertex layout — mitigated by using only layouts whose declared bytes equal the stride.
 4. Scope creep toward lighting/textures — explicitly deferred (5B).
+
+## 9. 5A-2 status
+
+| Component | Status |
+|---|---|
+| `common/twlhd_gx_interp.c` — DS GX interpreter | BUILD ✓, UNIT ✓ (make test green) |
+| `common/twlhd_clipfix.c` — DS→PICA clip-space matrix | BUILD ✓, UNIT ✓ (test_clipfix: 20 checks) |
+| `arm11/source/renderer.c` — clip-space shader + render path | BUILD ✓ only (no unit tests; GPU path cannot be unit-tested on the host) |
+| `arm11/source/main.c` — v2 loader + status display | BUILD ✓ |
+| Emulator (Tanuki3DS pixel sanity) | EMULATOR ✓ (not hardware evidence) |
+| Hardware | HARDWARE not started |
+
+The 5A-2 build was run in Tanuki3DS with the v2 capture loaded from `sdmc:/twlhd_frame.bin`; its 800x600 screen dump was inspected and the cube's bounding box measured at 311-490 × 53-233 versus 308-492 × 51-235 expected — within 3 px — with the expected face colours. The run is EMULATOR evidence only: it shows the capture, clip and draw path produces a plausible image and says nothing about GPU hangs, vertex/polygon RAM pressure or timing on real hardware.
+
+**39-column rule** (bottom-screen console is 40 columns wide): every `printf` in `update_console()` is either a literal string ≤39 chars, or routed through `status_line()` which truncates to 39 chars, or uses `clamp_max()`/`clamp_4digit()` helpers that enforce a numeric ceiling before formatting. Worst-case column counts are documented in the `update_console()` header comment and were re-counted by an independent review (not machine-checked).
+
+**Known risks still unverified (EMULATOR/HARDWARE):**
+- **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** `clipfix` applies the DS→PICA200 depth remap and the citro3d quarter-turn; actual screen orientation is unverified.
+- Pillarbox centring: DS 256×192 is mapped to a 320×240 centred region; pixel placement unverified.
+- Depth order: `GPU_GREATER`/`GPU_GEQUAL` choice for the remapped z is unverified.
+- **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** GBATEK notes DS viewport y1 is measured from the bottom; the interpreter accounts for it but hardware behaviour is unverified.
+
+Orientation, no mirroring, pillarbox centring and depth order of the nearest faces match the expectation in the Tanuki3DS emulator only (EMULATOR); the DS viewport y1 wrap and +1 size behaviour are not checked by that run.
+
+Labels: BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel sanity (not hardware evidence). HARDWARE = run on real New 3DS (not done in 5A).
