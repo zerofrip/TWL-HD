@@ -127,6 +127,21 @@ u32 glCurClearColor = 0;
  * seam defined above. */
 #include "demo_frame.cpp"
 
+/* The expected VIEWPORT word is a literal chosen per test binary. A variant
+ * build passes TWLHD_TEST_EXPECT_VP_WORD together with the four
+ * TWLHD_DEMO_VP_* overrides; fail the build if those overrides are missing or
+ * changed, so the literal cannot silently stop matching the frame body. */
+#ifdef TWLHD_TEST_EXPECT_VP_WORD
+#if TWLHD_DEMO_VP_X1 != 32 || TWLHD_DEMO_VP_Y1 != 96 || \
+    TWLHD_DEMO_VP_X2 != 159 || TWLHD_DEMO_VP_Y2 != 191
+#error "TWLHD_TEST_EXPECT_VP_WORD needs TWLHD_DEMO_VP_* = 32,96,159,191"
+#endif
+#endif
+
+#ifndef TWLHD_TEST_EXPECT_VP_WORD
+#define TWLHD_TEST_EXPECT_VP_WORD 0xBFFF0000u
+#endif
+
 static TwlhdGxRecorder &g_rec = *twlhd_gx_rec_global();
 static uint8_t g_out[TWLHD_GX_REC_SERIALIZE_MAX];
 
@@ -327,6 +342,29 @@ static uint32_t count_entries(const TwlhdV2CmdEntry *entries, uint32_t count,
     return n;
 }
 
+/* The recorded VIEWPORT word is x1 | y1 << 8 | x2 << 16 | y2 << 24, packed by
+ * libnds glViewport. The expectation is the literal TWLHD_TEST_EXPECT_VP_WORD:
+ * the default build takes 0xBFFF0000u and the variant-viewport build passes
+ * -DTWLHD_TEST_EXPECT_VP_WORD=0xBF9F6020u, so the check is falsifiable. */
+static void test_viewport_word(void) {
+    uint32_t vp;
+    uint32_t expected;
+
+    mock_reset();
+    twlhd_gx_rec_init(&g_rec);
+    twlhd_gx_rec_arm(&g_rec);
+    twlhd_demo_draw_frame(256u);
+
+    vp = find_first_cmd(g_rec.gxcm, g_rec.gxcm_count, TWLHD_V2_CMD_VIEWPORT);
+    CHECK(vp != UINT32_MAX);
+
+    expected = TWLHD_TEST_EXPECT_VP_WORD;
+
+    if (vp != UINT32_MAX) {
+        CHECK_EQ_INT(g_rec.gxcm[vp].value, expected);
+    }
+}
+
 /* Assert the mutation is exactly the intended one: same length, last entry
  * SWAP_BUFFERS, 16 MTX_MULT_4x4 entries, and the required commands present.
  * Does NOT assert projection/identity here; each test states its own rule. */
@@ -457,6 +495,9 @@ static void test_ordering_rejects_mult_after_modelview(void) {
 int main(void) {
     test_frame_is_self_contained();
     test_report("demo-frame/self-contained");
+
+    test_viewport_word();
+    test_report("demo-frame/viewport-word");
 
     test_ordering_rejects_bad_projection_mode();
     test_report("demo-frame/ordering-rejects-bad-projection-mode");

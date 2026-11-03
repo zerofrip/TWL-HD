@@ -90,6 +90,13 @@ they do not replace the real run.
   unchanged), builds the host expected stream (`make emu-expected`, angle 61440), runs `tools/emulator/desmume_capture.sh`, then
   `validate_with_parsers.sh`, then the comparator. It fails loudly if `DESMUME_CLI` is unset or not executable. It is never part of `all` or `test`.
 - `AUTODUMP_FRAME` must be empty, `0`, or a positive decimal integer ≤ 65535; anything else is a build error.
+- `VP_X1`/`VP_Y1`/`VP_X2`/`VP_Y2` are an opt-in viewport override for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
+  All four must be set together as decimal integers with `0 ≤ x1 ≤ x2 ≤ 255` and `0 ≤ y1 ≤ y2 ≤ 191`; anything else is a build error, and
+  leaving them unset keeps the normal ROM unchanged. Example:
+  `make -C arm9v2 AUTODUMP_FRAME=120 VP_X1=32 VP_Y1=96 VP_X2=159 VP_Y2=191` builds
+  `arm9v2/twlhd-arm9v2-vp-autodump.nds` in `build-vp-autodump/`. A viewport-only build is named `twlhd-arm9v2-vp.nds`; the recorded
+  VIEWPORT word is `x1 | y1 << 8 | x2 << 16 | y2 << 24` (DS y is measured from the bottom), which `common/twlhd_clipfix.c` consumes
+  as captured. `make test` also builds a variant-viewport host binary and checks the recorded word against the same macros.
 
 ## Emulator facts that shaped the harness
 
