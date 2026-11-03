@@ -1,10 +1,7 @@
 .PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag \
-	emu-expected emu-validate report-arm11-sha
+	emu-expected emu-validate
 
-all: arm7 arm9 arm9v2 arm11 arm11_ucode report-arm11-sha
-
-report-arm11-sha: arm11
-	@sha256sum arm11/twlhd-arm11.3dsx
+all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
 arm7:
 	$(MAKE) -C arm7

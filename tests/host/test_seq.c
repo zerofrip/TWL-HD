@@ -15,6 +15,7 @@ int main(void) {
     /* (a) Reset puts everything at zero. */
     twlhd_seq_reset(&s);
     CHECK_EQ_INT(s.index, 0);
+    CHECK_EQ_INT(s.displayed, 0);
     CHECK_EQ_INT(s.loop_count, 0);
     CHECK_EQ_INT(s.first_pass_count, 0);
     test_report("seq/reset");
@@ -37,6 +38,7 @@ int main(void) {
         twlhd_seq_advance(&s, 1);
     }
     CHECK_EQ_INT(s.index, 63);
+    CHECK_EQ_INT(s.displayed, 62);
     CHECK_EQ_INT(s.loop_count, 0);
     CHECK_EQ_INT(s.first_pass_count, 0);
     test_report("seq/sequential-advance");
@@ -44,6 +46,7 @@ int main(void) {
     /* (e) Wrapping at 64 returns to 0 and counts one loop. */
     twlhd_seq_advance(&s, 1);
     CHECK_EQ_INT(s.index, 0);
+    CHECK_EQ_INT(s.displayed, 63);
     CHECK_EQ_INT(s.loop_count, 1);
     CHECK_EQ_INT(s.first_pass_count, SEQ_MAX_FRAMES);
     test_report("seq/wrap-at-max");
@@ -62,10 +65,12 @@ int main(void) {
         twlhd_seq_advance(&s, 1);
     }
     CHECK_EQ_INT(s.index, 5);
+    CHECK_EQ_INT(s.displayed, 4);
     twlhd_seq_advance(&s, 0);
     CHECK_EQ_INT(s.index, 0);
+    CHECK_EQ_INT(s.displayed, 4);
     CHECK_EQ_INT(s.loop_count, 1);
-    CHECK_EQ_INT(s.first_pass_count, 6);
+    CHECK_EQ_INT(s.first_pass_count, 5);
     test_report("seq/wrap-on-missing-file");
 
     /* (h) Missing first file (seq_000) guard: exists=0 at index 0 wraps. */
@@ -74,8 +79,9 @@ int main(void) {
     CHECK(strcmp(path, "sdmc:/twlhd_seq/seq_000.bin") == 0);
     twlhd_seq_advance(&s, 0);
     CHECK_EQ_INT(s.index, 0);
+    CHECK_EQ_INT(s.displayed, 0);
     CHECK_EQ_INT(s.loop_count, 1);
-    CHECK_EQ_INT(s.first_pass_count, 1);
+    CHECK_EQ_INT(s.first_pass_count, 0);
     test_report("seq/start-guard-missing-000");
 
     return test_exit_code();
