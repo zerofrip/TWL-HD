@@ -75,3 +75,23 @@ documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode
 2. PICA200 depth/orientation conventions — mitigated by deriving from citro3d source and by the emulator pixel sanity, but only hardware settles them.
 3. Unknown hardware behaviour of the new vertex layout — mitigated by using only layouts whose declared bytes equal the stride.
 4. Scope creep toward lighting/textures — explicitly deferred (5B).
+
+## 9. 5A-2 status
+
+| Component | Status |
+|---|---|
+| `common/twlhd_gx_interp.c` — DS GX interpreter | BUILD ✓, UNIT ✓ (make test green) |
+| `arm11/source/renderer.c` — clip path + clipfix | BUILD ✓ |
+| `arm11/source/main.c` — v2 loader + status display | BUILD ✓ |
+| Emulator (Tanuki3DS pixel sanity) | EMULATOR pending |
+| Hardware | HARDWARE not started |
+
+**39-column rule** (bottom-screen console is 40 columns wide): every `printf` in `update_console()` is either a literal string ≤39 chars, or routed through `status_line()` which truncates to 39 chars, or uses `clamp_max()`/`clamp_4digit()` helpers that enforce a numeric ceiling before formatting. Verified at worst-case digit counts.
+
+**Known risks still unverified (EMULATOR/HARDWARE):**
+- Orientation/mirroring: `clipfix` applies the DS→PICA200 depth remap and the citro3d quarter-turn; actual screen orientation is unverified.
+- Pillarbox centring: DS 256×192 is mapped to a 320×240 centred region; pixel placement unverified.
+- Depth order: `GPU_GREATER`/`GPU_GEQUAL` choice for the remapped z is unverified.
+- DS viewport y1-wrap: GBATEK notes y1 is measured from the bottom; interpreter accounts for it but hardware behaviour is unverified.
+
+Labels: BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel sanity (not hardware evidence). HARDWARE = run on real New 3DS (not done in 5A).
