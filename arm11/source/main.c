@@ -197,11 +197,11 @@ static int load_sd_frame(uint32_t *out_vertex_count,
                                        out_gx_stats);
         if (gx_result != TWLHD_GX_OK) {
             snprintf(g_status, sizeof g_status,
-                     "gx: %s e:%lu c:%lu i:%lu",
+                     "gx:%s s%lu c%lu i%lu",
                      twlhd_gx_result_string(gx_result),
-                     (unsigned long)out_gx_stats->stack_errors,
-                     (unsigned long)out_gx_stats->capacity_dropped,
-                     (unsigned long)out_gx_stats->dropped_incomplete);
+                     (unsigned long)clamp_4digit(out_gx_stats->stack_errors),
+                     (unsigned long)clamp_4digit(out_gx_stats->capacity_dropped),
+                     (unsigned long)clamp_4digit(out_gx_stats->dropped_incomplete));
             return -1;
         }
 
@@ -237,21 +237,23 @@ static int load_sd_frame(uint32_t *out_vertex_count,
  * | line                  | format                                  | worst-case string                         | cols |
  * |-----------------------|-----------------------------------------|-------------------------------------------|------|
  * | title                 | "TWL-HD Phase 4B/4C renderer\n"         | TWL-HD Phase 4B/4C renderer               | 27   |
- * | status banner         | "HARDWARE UNVERIFIED (build-only)\n\n"   | HARDWARE UNVERIFIED (build-only)          | 33   |
+ * | status banner         | "HARDWARE UNVERIFIED (build-only)\n\n"   | HARDWARE UNVERIFIED (build-only)          | 32   |
  * | mode                  | "mode:   %s\n"                          | mode:   SD FRAME (DEBUG CAMERA)           | 31   |
+ * | mode (builtin)        | "mode:   %s\n"                          | mode:   BUILT-IN TRIANGLE                 | 25   |
+ * | mode (failed)         | "mode:   %s\n"                          | mode:   RENDERER FAILED                   | 23   |
  * | source                | "source: %s\n"                          | source: sdmc:/twlhd_frame.bin             | 29   |
- * | camera (v2)           | "camera: DS matrices (v2 GXCM)\n\n"      | camera: DS matrices (v2 GXCM)             | 28   |
+ * | camera (v2)           | "camera: DS matrices (v2 GXCM)\n\n"      | camera: DS matrices (v2 GXCM)             | 29   |
  * | camera (v1)           | "camera: DEBUG CAMERA (fixed, not DS)\n\n" | camera: DEBUG CAMERA (fixed, not DS)    | 36   |
- * | parse (v1 have_frame) | "parse:  %s\n"                          | parse:  ERR_CMD_COUNT                     | 21   |
+ * | parse (v1 have_frame) | "parse:  %s\n"                          | parse:  ERR_PARAM_COUNT                   | 23   |
  * | parse (no frame)      | "parse:  -- (no SD frame)\n"             | parse:  -- (no SD frame)                  | 24   |
  * | frame (v1 have_frame) | "frame:  %lu  cmds: %lu\n"               | frame:  999999  cmds: 999999              | 28   |
  * | frame (v2 have_frame) | "frame:%lu gxcm:%lu tris:%lu\n"          | frame:999999 gxcm:999999 tris:999999      | 36   |
  * | frame (no frame)      | "frame:  --  cmds: --\n"                 | frame:  --  cmds: --                      | 20   |
- * | verts (v1)            | "in: %lu  tris: %lu\n"                   | in: 999999  tris: 999999                  | 23   |
- * | verts (v2)            | "out: %lu  tris: %lu\n"                  | out: 999999  tris: 999999                 | 24   |
+ * | verts (v1)            | "in: %lu  tris: %lu\n"                   | in: 999999  tris: 999999                  | 24   |
+ * | verts (v2)            | "vtx in: %lu\n"                          | vtx in: 999999                            | 14   |
  * | render verts          | "render verts: %lu\n"                    | render verts: 999999                      | 20   |
  * | unsupported (v1)      | "uns mtx:%lu vp:%lu vtx:%lu unk:%lu\n"   | uns mtx:9999 vp:9999 vtx:9999 unk:9999    | 38   |
- * | ignored (v1)          | "ignored: %lu outside-begin\n"            | ignored: 999999 outside-begin             | 28   |
+ * | ignored (v1)          | "ignored: %lu outside-begin\n"            | ignored: 999999 outside-begin             | 29   |
  * | dropped (v1)          | "dropped: %lu incomplete\n\n"             | dropped: 999999 incomplete                | 26   |
  * | gx counters (v2)      | "stk%lu cap%lu inc%lu uns%lu vd%lu\n"    | stk9999 cap9999 inc9999 uns9999 vd9999    | 38   |
  * | key legend            | "A=load SD  Y=builtin  START=exit\n"      | A=load SD  Y=builtin  START=exit          | 32   |
@@ -287,9 +289,8 @@ static void update_console(void) {
     }
 
     if (g_scene.is_v2) {
-        printf("out: %lu  tris: %lu\n",
-               (unsigned long)clamp_max(g_scene.gx_stats.vertices_in),
-               (unsigned long)clamp_max(g_scene.gx_stats.triangles_out));
+        printf("vtx in: %lu\n",
+               (unsigned long)clamp_max(g_scene.gx_stats.vertices_in));
     } else {
         printf("in: %lu  tris: %lu\n",
                (unsigned long)clamp_max(g_scene.input_vertices),

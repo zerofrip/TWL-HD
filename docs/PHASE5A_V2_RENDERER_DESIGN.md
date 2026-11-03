@@ -81,7 +81,7 @@ documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode
 | Component | Status |
 |---|---|
 | `common/twlhd_gx_interp.c` — DS GX interpreter | BUILD ✓, UNIT ✓ (make test green) |
-| `arm11/source/renderer.c` — clip path + clipfix | BUILD ✓ |
+| `arm11/source/renderer.c` — clip path + clipfix | BUILD ✓, UNIT ✓ (test_clipfix: 20 checks) |
 | `arm11/source/main.c` — v2 loader + status display | BUILD ✓ |
 | Emulator (Tanuki3DS pixel sanity) | EMULATOR pending |
 | Hardware | HARDWARE not started |
