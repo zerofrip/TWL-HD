@@ -73,13 +73,33 @@ static void draw_cube(void) {
     glEnd();
 }
 
+/*
+ * Viewport is a build-time option (VP_X1/VP_Y1/VP_X2/VP_Y2 in the Makefile) so
+ * a non-default-viewpoint capture can be produced. The packed GFX_VIEWPORT word
+ * is x1 | y1 << 8 | x2 << 16 | y2 << 24 (DS y is measured from the bottom).
+ * The defaults keep the normal ROM byte-identical.
+ */
+#ifndef TWLHD_DEMO_VP_X1
+#define TWLHD_DEMO_VP_X1 0
+#endif
+#ifndef TWLHD_DEMO_VP_Y1
+#define TWLHD_DEMO_VP_Y1 0
+#endif
+#ifndef TWLHD_DEMO_VP_X2
+#define TWLHD_DEMO_VP_X2 255
+#endif
+#ifndef TWLHD_DEMO_VP_Y2
+#define TWLHD_DEMO_VP_Y2 191
+#endif
+
 void twlhd_demo_draw_frame(unsigned angle) {
     /* Re-issue all state needed to replay this frame independently. */
     glEnable(GL_ANTIALIAS);
     glClearColor(0, 0, 0, 31);
     glClearPolyID(63);
     glClearDepth(GL_MAX_DEPTH);
-    glViewport(0, 0, 255, 191);
+    glViewport(TWLHD_DEMO_VP_X1, TWLHD_DEMO_VP_Y1,
+               TWLHD_DEMO_VP_X2, TWLHD_DEMO_VP_Y2);
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();

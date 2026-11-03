@@ -327,6 +327,31 @@ static uint32_t count_entries(const TwlhdV2CmdEntry *entries, uint32_t count,
     return n;
 }
 
+/* The recorded VIEWPORT word is x1 | y1 << 8 | x2 << 16 | y2 << 24, packed by
+ * libnds glViewport. Computing the expectation from the same macros the frame
+ * body uses makes this check valid for both the default and the variant build. */
+static void test_viewport_word(void) {
+    uint32_t vp;
+    uint32_t expected;
+
+    mock_reset();
+    twlhd_gx_rec_init(&g_rec);
+    twlhd_gx_rec_arm(&g_rec);
+    twlhd_demo_draw_frame(256u);
+
+    vp = find_first_cmd(g_rec.gxcm, g_rec.gxcm_count, TWLHD_V2_CMD_VIEWPORT);
+    CHECK(vp != UINT32_MAX);
+
+    expected = (uint32_t)TWLHD_DEMO_VP_X1 |
+               ((uint32_t)TWLHD_DEMO_VP_Y1 << 8) |
+               ((uint32_t)TWLHD_DEMO_VP_X2 << 16) |
+               ((uint32_t)TWLHD_DEMO_VP_Y2 << 24);
+
+    if (vp != UINT32_MAX) {
+        CHECK_EQ_INT(g_rec.gxcm[vp].value, expected);
+    }
+}
+
 /* Assert the mutation is exactly the intended one: same length, last entry
  * SWAP_BUFFERS, 16 MTX_MULT_4x4 entries, and the required commands present.
  * Does NOT assert projection/identity here; each test states its own rule. */
@@ -457,6 +482,9 @@ static void test_ordering_rejects_mult_after_modelview(void) {
 int main(void) {
     test_frame_is_self_contained();
     test_report("demo-frame/self-contained");
+
+    test_viewport_word();
+    test_report("demo-frame/viewport-word");
 
     test_ordering_rejects_bad_projection_mode();
     test_report("demo-frame/ordering-rejects-bad-projection-mode");
