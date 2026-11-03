@@ -289,3 +289,46 @@ the clear colour covers the whole 400×240 top screen; only the geometry is conf
 **Not covered:** DS viewport +1 / y1-wrap behaviour; captures other than this demo cube; large
 frames on the clip path; many consecutive frames; long-run stability; textures/lighting/alpha
 (5B, not approved).
+
+### Run 8 — Phase 5A-2 clip path with a non-default DS viewport (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run on 2026-11-03; evidence = photographs. The photographs are kept **outside** the
+repository in the owner's staging directory.
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-5a.3dsx` (main @ `16bfa41`; same 3dsx hash as Run 7, different commit) | `301da396fc9a4de1ba6378f559e8612ed53926b7629723c77316fc57ced33a8f` |
+| CONTROL `twlhd_frame_v2_ctl_full.bin` | `79f90bc2…cbf4` |
+| VARIANT `twlhd_frame_v2_vp.bin` | `e78d12e0…f6e2` |
+
+Both frames are DeSmuME captures of the demo cube (frame 120, same rotation), 1152 B,
+124 GXCM + 4 RSTA, byte-identical except the 3 bytes of the VIEWPORT word (offsets 52–54).
+The CONTROL has viewport (0,0)-(255,191); the VARIANT has viewport (32,96)-(159,191)
+(word `0xBF9F6020`), built with
+`make -C arm9v2 AUTODUMP_FRAME=120 VP_X1=32 VP_Y1=96 VP_X2=159 VP_Y2=191`.
+Because only the 3 viewport bytes differ, any picture change is attributable to the viewport.
+
+Results:
+- **T1 — built-in triangle (debug path, new build):** OK (photo).
+- **T2 — CONTROL frame, viewport (0,0)-(255,191):** bottom screen shows `mode: SD v2 (DS MATRICES)`,
+  `frame:121 gxcm:124 tris:12`, `vtx in: 24`, `render verts: 36`, counters `stk0 cap0 inc0 uns0 vd0`,
+  `SD: v2 loaded, 36 verts -> 12 tris`. Top screen: red upper-left face, yellow right, cyan lower,
+  not mirrored. Photo-estimated ~125 px wide, centre x ~192, y ~45–173; the oracle/emulator gives
+  x 128–254, y 43–170. The photo is oblique, so the estimate is not exact. (photo)
+- **T3 — VARIANT frame, viewport (32,96)-(159,191):** same bottom text, same zero counters. Same cube
+  at about half size (~63 px wide), upper-left: photo-estimated x 124–188, y 24–87 versus
+  oracle/emulator x 124–187, y 22–85 — within a few px. Same colours and orientation.
+  **No GPU hang.** (photo)
+- **T4 — Y after T3 (clip → debug):** built-in triangle again OK (photo); the following A press was
+  reported OK by the owner, **no photo**.
+
+**Conclusion:** HARDWARE OBSERVED for one frame and one non-default viewport: the 3DS draws the
+`clipfix` mapping for viewport (32,96)-(159,191) (scale 0.5 plus offset) as the oracle and emulator
+predict, within photo measurement error of a few px.
+
+**Not covered:** real-DS behaviour of viewport +1 / y1 wrap (not testable on the 3DS; stays
+EMULATOR(DeSmuME)/unverified); viewports with y1 > 191; captures other than this demo cube;
+large frames on the clip path; many consecutive frames; long-run stability; textures/lighting/alpha
+(5B, not approved).
