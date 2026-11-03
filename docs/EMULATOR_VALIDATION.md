@@ -96,7 +96,10 @@ they do not replace the real run.
   `make -C arm9v2 AUTODUMP_FRAME=120 VP_X1=32 VP_Y1=96 VP_X2=159 VP_Y2=191` builds
   `arm9v2/twlhd-arm9v2-vp-autodump.nds` in `build-vp-autodump/`. A viewport-only build is named `twlhd-arm9v2-vp.nds`; the recorded
   VIEWPORT word is `x1 | y1 << 8 | x2 << 16 | y2 << 24` (DS y is measured from the bottom), which `common/twlhd_clipfix.c` consumes
-  as captured. `make test` also builds a variant-viewport host binary and checks the recorded word against the same macros.
+  as captured. `make test` also builds a variant-viewport host binary and checks the recorded VIEWPORT word against fixed literal
+  words (default `0xBFFF0000u`; variant `0xBF9F6020u` passed via `-DTWLHD_TEST_EXPECT_VP_WORD`). When switching `AUTODUMP_FRAME`
+  values in the same working tree, `arm9v2/build-autodump` (and `build-vp-autodump`) must be removed first, because make does not
+  rebuild when only the `-D` flags change (this caused a stale-capture mistake).
 
 ## Emulator facts that shaped the harness
 
