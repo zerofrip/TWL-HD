@@ -81,17 +81,22 @@ documented recovery procedure. No RTCom gate is touched; the DS-side RTCom ucode
 | Component | Status |
 |---|---|
 | `common/twlhd_gx_interp.c` — DS GX interpreter | BUILD ✓, UNIT ✓ (make test green) |
-| `arm11/source/renderer.c` — clip path + clipfix | BUILD ✓, UNIT ✓ (test_clipfix: 20 checks) |
+| `common/twlhd_clipfix.c` — DS→PICA clip-space matrix | BUILD ✓, UNIT ✓ (test_clipfix: 20 checks) |
+| `arm11/source/renderer.c` — clip-space shader + render path | BUILD ✓ only (no unit tests; GPU path cannot be unit-tested on the host) |
 | `arm11/source/main.c` — v2 loader + status display | BUILD ✓ |
-| Emulator (Tanuki3DS pixel sanity) | EMULATOR pending |
+| Emulator (Tanuki3DS pixel sanity) | EMULATOR ✓ (not hardware evidence) |
 | Hardware | HARDWARE not started |
 
-**39-column rule** (bottom-screen console is 40 columns wide): every `printf` in `update_console()` is either a literal string ≤39 chars, or routed through `status_line()` which truncates to 39 chars, or uses `clamp_max()`/`clamp_4digit()` helpers that enforce a numeric ceiling before formatting. Verified at worst-case digit counts by the worst-case table in `update_console()` header comment.
+The 5A-2 build was run in Tanuki3DS with the v2 capture loaded from `sdmc:/twlhd_frame.bin`; its 800x600 screen dump was inspected and the cube's bounding box measured at 311-490 × 53-233 versus 308-492 × 51-235 expected — within 3 px — with the expected face colours. The run is EMULATOR evidence only: it shows the capture, clip and draw path produces a plausible image and says nothing about GPU hangs, vertex/polygon RAM pressure or timing on real hardware.
+
+**39-column rule** (bottom-screen console is 40 columns wide): every `printf` in `update_console()` is either a literal string ≤39 chars, or routed through `status_line()` which truncates to 39 chars, or uses `clamp_max()`/`clamp_4digit()` helpers that enforce a numeric ceiling before formatting. Worst-case column counts are documented in the `update_console()` header comment and were re-counted by an independent review (not machine-checked).
 
 **Known risks still unverified (EMULATOR/HARDWARE):**
 - **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** `clipfix` applies the DS→PICA200 depth remap and the citro3d quarter-turn; actual screen orientation is unverified.
 - Pillarbox centring: DS 256×192 is mapped to a 320×240 centred region; pixel placement unverified.
 - Depth order: `GPU_GREATER`/`GPU_GEQUAL` choice for the remapped z is unverified.
 - **UNVERIFIED CLAIM — verify on EMULATOR/HARDWARE:** GBATEK notes DS viewport y1 is measured from the bottom; the interpreter accounts for it but hardware behaviour is unverified.
+
+Orientation, no mirroring, pillarbox centring and depth order of the nearest faces match the expectation in the Tanuki3DS emulator only (EMULATOR); the DS viewport y1 wrap and +1 size behaviour are not checked by that run.
 
 Labels: BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel sanity (not hardware evidence). HARDWARE = run on real New 3DS (not done in 5A).
