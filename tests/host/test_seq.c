@@ -29,6 +29,9 @@ int main(void) {
 
     /* (c) Truncation on a too-small buffer is reported as an error. */
     CHECK_EQ_INT(twlhd_seq_path(path, 10, 0), -1);
+    CHECK_EQ_INT(twlhd_seq_path(path, 27, 0), -1);
+    CHECK_EQ_INT(twlhd_seq_path(path, 28, 0), 0);
+    CHECK(strcmp(path, "sdmc:/twlhd_seq/seq_000.bin") == 0);
     test_report("seq/path-truncation");
 
     /* (d) Sequential advance 0 -> 1 -> ... -> 63. */
@@ -83,6 +86,22 @@ int main(void) {
     CHECK_EQ_INT(s.loop_count, 1);
     CHECK_EQ_INT(s.first_pass_count, 0);
     test_report("seq/start-guard-missing-000");
+
+    /* (i) First-wrap frame count is preserved across later wraps. */
+    twlhd_seq_reset(&s);
+    for (i = 0; i < 5; i++) {
+        twlhd_seq_advance(&s, 1);
+    }
+    twlhd_seq_advance(&s, 0);
+    CHECK_EQ_INT(s.loop_count, 1);
+    CHECK_EQ_INT(s.first_pass_count, 5);
+    for (i = 0; i < 64; i++) {
+        twlhd_seq_advance(&s, 1);
+    }
+    CHECK_EQ_INT(s.index, 0);
+    CHECK_EQ_INT(s.loop_count, 2);
+    CHECK_EQ_INT(s.first_pass_count, 5);
+    test_report("seq/first-wrap-count-preserved");
 
     return test_exit_code();
 }

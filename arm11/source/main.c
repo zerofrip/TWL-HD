@@ -477,9 +477,10 @@ int main(void) {
                                           &pending_gxcm_count, 1) == 0) {
                             pending_load = 1;
                             pending_builtin = 0;
-                            memcpy(g_seq_source, g_seq_path,
-                                   sizeof g_seq_source);
-                            pending_source = g_seq_source;
+                            /* g_seq_path is unchanged until apply runs in the
+                             * same loop iteration, so it can serve as the
+                             * pending source buffer. */
+                            pending_source = g_seq_path;
                             seq_pending = 1;
                             twlhd_seq_advance(&g_seq_state, 1);
                         } else {
@@ -535,7 +536,13 @@ int main(void) {
                     g_scene.triangles = pending_stats.triangles;
                     g_scene.stats = pending_stats;
                 }
-                g_scene.source = pending_source;
+                if (was_seq) {
+                    memcpy(g_seq_source, pending_source,
+                           sizeof g_seq_source);
+                    g_scene.source = g_seq_source;
+                } else {
+                    g_scene.source = pending_source;   /* A-button: FRAME_PATH literal */
+                }
                 g_scene.have_frame = 1;
                 g_scene.parse_result = pending_parse;
                 g_scene.frame_index = pending_frame_index;
