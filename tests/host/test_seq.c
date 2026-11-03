@@ -103,5 +103,18 @@ int main(void) {
     CHECK_EQ_INT(s.first_pass_count, 5);
     test_report("seq/first-wrap-count-preserved");
 
+    /* (j) Two missing-file wraps at different indices; first-pass count is kept. */
+    twlhd_seq_reset(&s);
+    for (i = 0; i < 5; i++) { twlhd_seq_advance(&s, 1); }
+    twlhd_seq_advance(&s, 0);
+    CHECK_EQ_INT(s.first_pass_count, 5);
+    CHECK_EQ_INT(s.loop_count, 1);
+    for (i = 0; i < 3; i++) { twlhd_seq_advance(&s, 1); }
+    twlhd_seq_advance(&s, 0);
+    CHECK_EQ_INT(s.index, 0);
+    CHECK_EQ_INT(s.loop_count, 2);
+    CHECK_EQ_INT(s.first_pass_count, 5);   /* mutant if(1) here yields 3 */
+    test_report("seq/two-missing-wraps");
+
     return test_exit_code();
 }
