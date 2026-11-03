@@ -75,6 +75,38 @@ CXXFLAGS	+=	-DTWLHD_DEMO_AUTODUMP_FRAME=$(AUTODUMP_FRAME_STRIPPED)
 endif
 
 #---------------------------------------------------------------------------------
+# Optional viewport build: VP_X1/VP_Y1/VP_X2/VP_Y2 override the demo's
+# glViewport so a non-default-viewpoint capture can be produced. All four must
+# be set together; when none are set TARGET, BUILD and CFLAGS stay untouched so
+# the default ROM is byte-identical. This block runs after the AUTODUMP block,
+# so AUTODUMP_FRAME and the viewport compose into one variant ROM.
+#---------------------------------------------------------------------------------
+VP_X1_STRIPPED	:=	$(strip $(VP_X1))
+VP_Y1_STRIPPED	:=	$(strip $(VP_Y1))
+VP_X2_STRIPPED	:=	$(strip $(VP_X2))
+VP_Y2_STRIPPED	:=	$(strip $(VP_Y2))
+VP_SET_COUNT	:=	$(words $(VP_X1_STRIPPED) $(VP_Y1_STRIPPED) $(VP_X2_STRIPPED) $(VP_Y2_STRIPPED))
+ifeq ($(VP_SET_COUNT),0)
+else ifneq ($(VP_SET_COUNT),4)
+$(error VP_X1, VP_Y1, VP_X2 and VP_Y2 must all be set together (got: $(VP_X1), $(VP_Y1), $(VP_X2), $(VP_Y2)))
+else
+VP_OK := $(shell echo '$(VP_X1_STRIPPED)' | grep -Eq '^[0-9]+$$' && echo '$(VP_Y1_STRIPPED)' | grep -Eq '^[0-9]+$$' && echo '$(VP_X2_STRIPPED)' | grep -Eq '^[0-9]+$$' && echo '$(VP_Y2_STRIPPED)' | grep -Eq '^[0-9]+$$' && test $(VP_X1_STRIPPED) -le $(VP_X2_STRIPPED) && test $(VP_Y1_STRIPPED) -le $(VP_Y2_STRIPPED) && test $(VP_X2_STRIPPED) -le 255 && test $(VP_Y2_STRIPPED) -le 191 && echo ok)
+ifeq ($(VP_OK),)
+$(error VP_X1/VP_Y1/VP_X2/VP_Y2 must be decimal integers with 0 <= x1 <= x2 <= 255 and 0 <= y1 <= y2 <= 191 (got: $(VP_X1), $(VP_Y1), $(VP_X2), $(VP_Y2)))
+endif
+TARGET		:=	twlhd-arm9v2-vp
+BUILD		:=	build-vp
+VP_FLAGS	:=	-DTWLHD_DEMO_VP_X1=$(VP_X1_STRIPPED) -DTWLHD_DEMO_VP_Y1=$(VP_Y1_STRIPPED) -DTWLHD_DEMO_VP_X2=$(VP_X2_STRIPPED) -DTWLHD_DEMO_VP_Y2=$(VP_Y2_STRIPPED)
+CFLAGS		+=	$(VP_FLAGS)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the defines too.
+CXXFLAGS	+=	$(VP_FLAGS)
+ifneq ($(AUTODUMP_FRAME_STRIPPED),0)
+TARGET		:=	twlhd-arm9v2-vp-autodump
+BUILD		:=	build-vp-autodump
+endif
+endif
+
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
@@ -141,6 +173,8 @@ clean:
 	@echo clean ...
 	@rm -fr $(BUILD) build-autodump $(TARGET).elf $(TARGET).nds $(TARGET).arm9 $(TARGET).guard $(TARGET).guard.nm
 	@rm -f twlhd-arm9v2-autodump.elf twlhd-arm9v2-autodump.nds twlhd-arm9v2-autodump.arm9 twlhd-arm9v2-autodump.guard twlhd-arm9v2-autodump.guard.nm
+	@rm -fr build-vp build-vp-autodump
+	@rm -f twlhd-arm9v2-vp*.elf twlhd-arm9v2-vp*.nds twlhd-arm9v2-vp*.arm9 twlhd-arm9v2-vp*.guard twlhd-arm9v2-vp*.guard.nm twlhd-arm9v2-vp*.map
 
 #---------------------------------------------------------------------------------
 else
