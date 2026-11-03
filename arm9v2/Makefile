@@ -76,7 +76,7 @@ endif
 
 #---------------------------------------------------------------------------------
 # Optional viewport build: VP_X1/VP_Y1/VP_X2/VP_Y2 override the demo's
-# glViewport so a non-default-viewpoint capture can be produced. All four must
+# glViewport so a non-default-viewport capture can be produced. All four must
 # be set together; when none are set TARGET, BUILD and CFLAGS stay untouched so
 # the default ROM is byte-identical. This block runs after the AUTODUMP block,
 # so AUTODUMP_FRAME and the viewport compose into one variant ROM.
