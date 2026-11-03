@@ -75,7 +75,7 @@ static void draw_cube(void) {
 
 /*
  * Viewport is a build-time option (VP_X1/VP_Y1/VP_X2/VP_Y2 in the Makefile) so
- * a non-default-viewpoint capture can be produced. The packed GFX_VIEWPORT word
+ * a non-default-viewport capture can be produced. The packed GFX_VIEWPORT word
  * is x1 | y1 << 8 | x2 << 16 | y2 << 24 (DS y is measured from the bottom).
  * The defaults keep the normal ROM byte-identical.
  */

@@ -184,7 +184,8 @@ tests/host/build/test_demo_frame_vp: tests/host/test_demo_frame.cpp \
 		exit 1; \
 	fi
 	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_VP_X1=32 -DTWLHD_DEMO_VP_Y1=96 \
-		-DTWLHD_DEMO_VP_X2=159 -DTWLHD_DEMO_VP_Y2=191 -o $@ $< $(HOST_V2_COMMON)
+		-DTWLHD_DEMO_VP_X2=159 -DTWLHD_DEMO_VP_Y2=191 \
+		-DTWLHD_TEST_EXPECT_VP_WORD=0xBF9F6020u -o $@ $< $(HOST_V2_COMMON)
 
 # Expected-stream generator for tools/emulator/compare_capture.py. It runs the
 # same frame body with the same mock seam as the demo-frame test.

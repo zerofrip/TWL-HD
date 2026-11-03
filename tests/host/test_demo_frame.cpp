@@ -127,6 +127,21 @@ u32 glCurClearColor = 0;
  * seam defined above. */
 #include "demo_frame.cpp"
 
+/* The expected VIEWPORT word is a literal chosen per test binary. A variant
+ * build passes TWLHD_TEST_EXPECT_VP_WORD together with the four
+ * TWLHD_DEMO_VP_* overrides; fail the build if those overrides are missing or
+ * changed, so the literal cannot silently stop matching the frame body. */
+#ifdef TWLHD_TEST_EXPECT_VP_WORD
+#if TWLHD_DEMO_VP_X1 != 32 || TWLHD_DEMO_VP_Y1 != 96 || \
+    TWLHD_DEMO_VP_X2 != 159 || TWLHD_DEMO_VP_Y2 != 191
+#error "TWLHD_TEST_EXPECT_VP_WORD needs TWLHD_DEMO_VP_* = 32,96,159,191"
+#endif
+#endif
+
+#ifndef TWLHD_TEST_EXPECT_VP_WORD
+#define TWLHD_TEST_EXPECT_VP_WORD 0xBFFF0000u
+#endif
+
 static TwlhdGxRecorder &g_rec = *twlhd_gx_rec_global();
 static uint8_t g_out[TWLHD_GX_REC_SERIALIZE_MAX];
 
@@ -328,8 +343,9 @@ static uint32_t count_entries(const TwlhdV2CmdEntry *entries, uint32_t count,
 }
 
 /* The recorded VIEWPORT word is x1 | y1 << 8 | x2 << 16 | y2 << 24, packed by
- * libnds glViewport. Computing the expectation from the same macros the frame
- * body uses makes this check valid for both the default and the variant build. */
+ * libnds glViewport. The expectation is the literal TWLHD_TEST_EXPECT_VP_WORD:
+ * the default build takes 0xBFFF0000u and the variant-viewport build passes
+ * -DTWLHD_TEST_EXPECT_VP_WORD=0xBF9F6020u, so the check is falsifiable. */
 static void test_viewport_word(void) {
     uint32_t vp;
     uint32_t expected;
@@ -342,10 +358,7 @@ static void test_viewport_word(void) {
     vp = find_first_cmd(g_rec.gxcm, g_rec.gxcm_count, TWLHD_V2_CMD_VIEWPORT);
     CHECK(vp != UINT32_MAX);
 
-    expected = (uint32_t)TWLHD_DEMO_VP_X1 |
-               ((uint32_t)TWLHD_DEMO_VP_Y1 << 8) |
-               ((uint32_t)TWLHD_DEMO_VP_X2 << 16) |
-               ((uint32_t)TWLHD_DEMO_VP_Y2 << 24);
+    expected = TWLHD_TEST_EXPECT_VP_WORD;
 
     if (vp != UINT32_MAX) {
         CHECK_EQ_INT(g_rec.gxcm[vp].value, expected);
