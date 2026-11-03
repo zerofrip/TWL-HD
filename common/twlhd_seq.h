@@ -22,6 +22,7 @@ extern "C" {
 
 typedef struct {
     uint32_t index;           /* next frame to load, 0 .. SEQ_MAX_FRAMES-1 */
+    uint32_t displayed;       /* last successfully loaded frame */
     uint32_t loop_count;      /* increments every time playback wraps */
     uint32_t first_pass_count; /* 0 until the first wrap, then frames in pass */
 } TwlhdSeqState;
@@ -29,6 +30,7 @@ typedef struct {
 /* Reset playback to the first frame. */
 static inline void twlhd_seq_reset(TwlhdSeqState *s) {
     s->index = 0;
+    s->displayed = 0;
     s->loop_count = 0;
     s->first_pass_count = 0;
 }
@@ -63,13 +65,14 @@ static inline int twlhd_seq_path(char *buf, size_t size, uint32_t index) {
 static inline void twlhd_seq_advance(TwlhdSeqState *s, int file_exists) {
     if (!file_exists) {
         if (s->first_pass_count == 0) {
-            s->first_pass_count = s->index + 1;
+            s->first_pass_count = s->index;
         }
         s->index = 0;
         s->loop_count++;
         return;
     }
 
+    s->displayed = s->index;
     if (s->index + 1 >= SEQ_MAX_FRAMES) {
         if (s->first_pass_count == 0) {
             s->first_pass_count = SEQ_MAX_FRAMES;

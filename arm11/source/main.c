@@ -59,6 +59,7 @@ static int g_seq_on;
 static uint32_t g_seq_counter;
 static TwlhdSeqState g_seq_state;
 static char g_seq_path[32];
+static char g_seq_source[32];
 
 static void set_builtin_scene(void) {
     uint32_t renderer_vertices = renderer_vertex_count();
@@ -273,7 +274,7 @@ static void update_console(void) {
     printf("HARDWARE UNVERIFIED (build-only)\n\n");
     if (g_seq_on) {
         printf("seq %03u/%03u loop %lu\n",
-               (unsigned)clamp_4digit(g_seq_state.index),
+               (unsigned)clamp_4digit(g_seq_state.displayed),
                (unsigned)clamp_4digit(g_seq_state.first_pass_count),
                (unsigned long)clamp_4digit(g_seq_state.loop_count));
     }
@@ -476,7 +477,9 @@ int main(void) {
                                           &pending_gxcm_count, 1) == 0) {
                             pending_load = 1;
                             pending_builtin = 0;
-                            pending_source = g_seq_path;
+                            memcpy(g_seq_source, g_seq_path,
+                                   sizeof g_seq_source);
+                            pending_source = g_seq_source;
                             seq_pending = 1;
                             twlhd_seq_advance(&g_seq_state, 1);
                         } else {
