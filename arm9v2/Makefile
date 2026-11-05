@@ -107,6 +107,28 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
+# Optional multi-cube build: CUBES=1..170 draws that many cubes in a 17-column
+# grid. Unset (or 1) leaves TARGET, BUILD and CFLAGS untouched so the default
+# ROM is byte-identical. This block runs after the AUTODUMP and VP blocks, so
+# the suffixes compose (e.g. twlhd-arm9v2-autodump-c64 in
+# build-autodump-c64).
+#---------------------------------------------------------------------------------
+CUBES_STRIPPED	:=	$(strip $(CUBES))
+ifneq ($(CUBES_STRIPPED),)
+CUBES_OK := $(shell echo '$(CUBES_STRIPPED)' | grep -Eq '^[1-9][0-9]*$$' && test $(CUBES_STRIPPED) -le 170 && echo ok)
+ifeq ($(CUBES_OK),)
+$(error CUBES must be empty or a decimal integer in 1..170 (got: $(CUBES)))
+endif
+ifneq ($(CUBES_STRIPPED),1)
+TARGET		:=	$(TARGET)-c$(CUBES_STRIPPED)
+BUILD		:=	$(BUILD)-c$(CUBES_STRIPPED)
+CFLAGS		+=	-DTWLHD_DEMO_CUBES=$(CUBES_STRIPPED)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_CUBES=$(CUBES_STRIPPED)
+endif
+endif
+
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
@@ -123,6 +145,14 @@ export DEPSDIR	:=	$(CURDIR)/$(BUILD)
 # recurse into it. Skip this for clean, which removes the directory anyway.
 ifeq ($(filter clean,$(MAKECMDGOALS)),)
 $(shell mkdir -p $(BUILD))
+
+# make cannot see -D changes in the object prerequisites, so record the define
+# set in the variant BUILD directory and drop stale objects when it changes.
+TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1)
+ifneq ($(strip $(TWLHD_FLAGS_STAMP)),$(strip $(shell cat $(BUILD)/flags.stamp 2>/dev/null)))
+$(shell rm -f $(BUILD)/*.o $(BUILD)/*.d)
+endif
+$(file >$(BUILD)/flags.stamp,$(strip $(TWLHD_FLAGS_STAMP)))
 endif
 
 CFILES		:=	$(foreach dir,$(SOURCES),$(notdir $(wildcard $(dir)/*.c)))
@@ -175,6 +205,8 @@ clean:
 	@rm -f twlhd-arm9v2-autodump.elf twlhd-arm9v2-autodump.nds twlhd-arm9v2-autodump.arm9 twlhd-arm9v2-autodump.guard twlhd-arm9v2-autodump.guard.nm
 	@rm -fr build-vp build-vp-autodump
 	@rm -f twlhd-arm9v2-vp*.elf twlhd-arm9v2-vp*.nds twlhd-arm9v2-vp*.arm9 twlhd-arm9v2-vp*.guard twlhd-arm9v2-vp*.guard.nm twlhd-arm9v2-vp*.map
+	@rm -fr build-c* build-*c*
+	@rm -f twlhd-arm9v2*c*.elf twlhd-arm9v2*c*.nds twlhd-arm9v2*c*.arm9 twlhd-arm9v2*c*.guard twlhd-arm9v2*c*.guard.nm twlhd-arm9v2*c*.map
 
 #---------------------------------------------------------------------------------
 else

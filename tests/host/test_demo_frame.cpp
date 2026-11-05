@@ -59,6 +59,7 @@ static void mock_write(uint32_t addr, uint32_t width, uint32_t value);
 #include <nds/arm9/videoGL.h>
 
 #include "demo_frame.hpp"
+#include "twlhd_gx_interp.h"
 #include "tests_host.h"
 
 #define MOCK_SLOTS 256u
@@ -140,6 +141,16 @@ u32 glCurClearColor = 0;
 
 #ifndef TWLHD_TEST_EXPECT_VP_WORD
 #define TWLHD_TEST_EXPECT_VP_WORD 0xBFFF0000u
+#endif
+
+/* The expected cube count is a literal chosen per test binary. A variant build
+ * passes TWLHD_TEST_EXPECT_CUBES together with the matching
+ * -DTWLHD_DEMO_CUBES; fail the build if the define is missing or changed, so
+ * the literal cannot silently stop matching the frame body. */
+#ifdef TWLHD_TEST_EXPECT_CUBES
+#if TWLHD_DEMO_CUBES != TWLHD_TEST_EXPECT_CUBES
+#error "TWLHD_TEST_EXPECT_CUBES needs -DTWLHD_DEMO_CUBES=<same value>"
+#endif
 #endif
 
 static TwlhdGxRecorder &g_rec = *twlhd_gx_rec_global();
@@ -282,7 +293,9 @@ static void test_frame_is_self_contained(void) {
 
     /* Cube: one BEGIN_VTXS with quad primitive, 24 VTX_16 vertices. */
     CHECK(has_cmd_word(TWLHD_V2_CMD_BEGIN_VTXS));
+#ifndef TWLHD_TEST_EXPECT_CUBES
     CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_VTX_16), 24u * 2u);
+#endif
     CHECK(has_cmd_word(TWLHD_V2_CMD_NORMAL));
     CHECK(has_cmd_word(TWLHD_V2_CMD_COLOR));
 
@@ -364,6 +377,59 @@ static void test_viewport_word(void) {
         CHECK_EQ_INT(g_rec.gxcm[vp].value, expected);
     }
 }
+
+#if TWLHD_DEMO_CUBES == 170 || TWLHD_DEMO_CUBES == 2
+/* Literal expectations for the multi-cube build: one cube records 24 vertices
+ * as 48 VTX_16 writes (glVertex3v16 writes two 32-bit words per vertex), and
+ * interprets to 6 quads -> 12 triangles -> 36 vertices. */
+static TwlhdGxVertex g_interp_out[6144u];
+
+static void test_cubes_variant(void) {
+    TwlhdV2View view;
+    TwlhdGxViewport vp;
+    TwlhdGxStats stats;
+    size_t size = 0;
+    uint32_t out_vertices = 0;
+    uint32_t expected_vtx16;
+    uint32_t expected_in;
+    uint32_t expected_out;
+
+#if TWLHD_DEMO_CUBES == 170
+    expected_vtx16 = 8160u;
+    expected_in = 4080u;
+    expected_out = 6120u;
+#else
+    expected_vtx16 = 96u;
+    expected_in = 48u;
+    expected_out = 72u;
+#endif
+
+    mock_reset();
+    twlhd_gx_rec_init(&g_rec);
+    twlhd_gx_rec_arm(&g_rec);
+
+    twlhd_demo_draw_frame(256u);
+
+    CHECK_EQ_INT(twlhd_gx_rec_flags(&g_rec),
+                 TWLHD_V2_FLAG_FRAME_COMPLETE);
+    CHECK(!twlhd_gx_rec_overflowed(&g_rec));
+    CHECK(g_rec.gxcm_count < 16384u);
+    CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_VTX_16), expected_vtx16);
+
+    CHECK_EQ_INT(twlhd_gx_rec_serialize(&g_rec, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK(size < 1048576u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+
+    CHECK_EQ_INT(twlhd_gx_interpret(&view, g_interp_out, 6144u, &out_vertices,
+                                    &vp, &stats),
+                 TWLHD_GX_OK);
+    CHECK_EQ_INT(out_vertices, expected_out);
+    CHECK_EQ_INT(stats.vertices_in, expected_in);
+    CHECK_EQ_INT(stats.stack_errors, 0u);
+    CHECK_EQ_INT(stats.capacity_dropped, 0u);
+}
+#endif
 
 /* Assert the mutation is exactly the intended one: same length, last entry
  * SWAP_BUFFERS, 16 MTX_MULT_4x4 entries, and the required commands present.
@@ -493,6 +559,11 @@ static void test_ordering_rejects_mult_after_modelview(void) {
 }
 
 int main(void) {
+#ifdef TWLHD_TEST_EXPECT_CUBES
+    test_cubes_variant();
+    test_report("demo-frame/cubes");
+#endif
+
     test_frame_is_self_contained();
     test_report("demo-frame/self-contained");
 
