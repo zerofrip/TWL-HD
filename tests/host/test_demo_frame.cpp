@@ -384,6 +384,137 @@ static void test_viewport_word(void) {
  * interprets to 6 quads -> 12 triangles -> 36 vertices. */
 static TwlhdGxVertex g_interp_out[6144u];
 
+/* Hand-derived literals for the multi-cube grid. Nothing here calls the
+ * production formulas: inttof32(n) is exact and mulf32(a, b) == (a*b)>>12 is
+ * exact, so
+ *   half_spacing = floattof32(0.42) >> 1 == ((s32)(0.42 * 4096)) >> 1 == 860
+ *   x = (2*col - 16) * 860, y = (2*row - (CUBE_ROWS-1)) * 860
+ *   cube scale   = floattof32(0.12) == (s32)(0.12 * 4096) == 491
+ * The truncation is the point: 0.42 -> 1720 (not 1721), 0.12 -> 491 (not
+ * 492). A cube spans 2 * 491 == 982 in x and y, below the 1720 grid spacing,
+ * so neighbours cannot overlap. */
+#define CUBE_COLS 17u
+#if TWLHD_DEMO_CUBES == 170
+#define CUBE_ROWS 10u
+#else
+#define CUBE_ROWS 1u
+#endif
+#define CUBE_PER_ROW (TWLHD_DEMO_CUBES / CUBE_ROWS)
+#define CUBE_DISTINCT_X (TWLHD_DEMO_CUBES < 17 ? TWLHD_DEMO_CUBES : 17)
+
+static const int32_t g_cube_x[CUBE_COLS] = {
+    -13760, -12040, -10320, -8600, -6880, -5160, -3440, -1720, 0,
+    1720, 3440, 5160, 6880, 8600, 10320, 12040, 13760
+};
+
+static const int32_t g_cube_y[CUBE_ROWS] = {
+#if TWLHD_DEMO_CUBES == 170
+    -7740, -6020, -4300, -2580, -860, 860, 2580, 4300, 6020, 7740
+#else
+    0
+#endif
+};
+
+#if TWLHD_DEMO_CUBES == 170
+static const int32_t g_cube_xy[TWLHD_DEMO_CUBES][2] = {
+    /* row 0: y = -7740 */
+    {-13760, -7740}, {-12040, -7740}, {-10320, -7740}, {-8600, -7740},
+    {-6880, -7740}, {-5160, -7740}, {-3440, -7740}, {-1720, -7740},
+    {0, -7740}, {1720, -7740}, {3440, -7740}, {5160, -7740},
+    {6880, -7740}, {8600, -7740}, {10320, -7740}, {12040, -7740},
+    {13760, -7740},
+    /* row 1: y = -6020 */
+    {-13760, -6020}, {-12040, -6020}, {-10320, -6020}, {-8600, -6020},
+    {-6880, -6020}, {-5160, -6020}, {-3440, -6020}, {-1720, -6020},
+    {0, -6020}, {1720, -6020}, {3440, -6020}, {5160, -6020},
+    {6880, -6020}, {8600, -6020}, {10320, -6020}, {12040, -6020},
+    {13760, -6020},
+    /* row 2: y = -4300 */
+    {-13760, -4300}, {-12040, -4300}, {-10320, -4300}, {-8600, -4300},
+    {-6880, -4300}, {-5160, -4300}, {-3440, -4300}, {-1720, -4300},
+    {0, -4300}, {1720, -4300}, {3440, -4300}, {5160, -4300},
+    {6880, -4300}, {8600, -4300}, {10320, -4300}, {12040, -4300},
+    {13760, -4300},
+    /* row 3: y = -2580 */
+    {-13760, -2580}, {-12040, -2580}, {-10320, -2580}, {-8600, -2580},
+    {-6880, -2580}, {-5160, -2580}, {-3440, -2580}, {-1720, -2580},
+    {0, -2580}, {1720, -2580}, {3440, -2580}, {5160, -2580},
+    {6880, -2580}, {8600, -2580}, {10320, -2580}, {12040, -2580},
+    {13760, -2580},
+    /* row 4: y = -860 */
+    {-13760, -860}, {-12040, -860}, {-10320, -860}, {-8600, -860},
+    {-6880, -860}, {-5160, -860}, {-3440, -860}, {-1720, -860},
+    {0, -860}, {1720, -860}, {3440, -860}, {5160, -860},
+    {6880, -860}, {8600, -860}, {10320, -860}, {12040, -860},
+    {13760, -860},
+    /* row 5: y = 860 */
+    {-13760, 860}, {-12040, 860}, {-10320, 860}, {-8600, 860},
+    {-6880, 860}, {-5160, 860}, {-3440, 860}, {-1720, 860},
+    {0, 860}, {1720, 860}, {3440, 860}, {5160, 860},
+    {6880, 860}, {8600, 860}, {10320, 860}, {12040, 860},
+    {13760, 860},
+    /* row 6: y = 2580 */
+    {-13760, 2580}, {-12040, 2580}, {-10320, 2580}, {-8600, 2580},
+    {-6880, 2580}, {-5160, 2580}, {-3440, 2580}, {-1720, 2580},
+    {0, 2580}, {1720, 2580}, {3440, 2580}, {5160, 2580},
+    {6880, 2580}, {8600, 2580}, {10320, 2580}, {12040, 2580},
+    {13760, 2580},
+    /* row 7: y = 4300 */
+    {-13760, 4300}, {-12040, 4300}, {-10320, 4300}, {-8600, 4300},
+    {-6880, 4300}, {-5160, 4300}, {-3440, 4300}, {-1720, 4300},
+    {0, 4300}, {1720, 4300}, {3440, 4300}, {5160, 4300},
+    {6880, 4300}, {8600, 4300}, {10320, 4300}, {12040, 4300},
+    {13760, 4300},
+    /* row 8: y = 6020 */
+    {-13760, 6020}, {-12040, 6020}, {-10320, 6020}, {-8600, 6020},
+    {-6880, 6020}, {-5160, 6020}, {-3440, 6020}, {-1720, 6020},
+    {0, 6020}, {1720, 6020}, {3440, 6020}, {5160, 6020},
+    {6880, 6020}, {8600, 6020}, {10320, 6020}, {12040, 6020},
+    {13760, 6020},
+    /* row 9: y = 7740 */
+    {-13760, 7740}, {-12040, 7740}, {-10320, 7740}, {-8600, 7740},
+    {-6880, 7740}, {-5160, 7740}, {-3440, 7740}, {-1720, 7740},
+    {0, 7740}, {1720, 7740}, {3440, 7740}, {5160, 7740},
+    {6880, 7740}, {8600, 7740}, {10320, 7740}, {12040, 7740},
+    {13760, 7740}
+};
+#else
+static const int32_t g_cube_xy[TWLHD_DEMO_CUBES][2] = {
+    {-13760, 0},
+    {-12040, 0}
+};
+#endif
+
+/* Every 32-bit port write is one gxcm entry, so a call to glTranslatef32 or
+ * glScalef32 records exactly three consecutive MTX_TRANS / MTX_SCALE entries.
+ * Collect each such run; returns the number of runs found. */
+static uint32_t collect_xyz_runs(uint32_t cmd, int32_t out[][3],
+                                 uint32_t max_groups) {
+    uint32_t i = 0u;
+    uint32_t groups = 0u;
+
+    while (i < g_rec.gxcm_count) {
+        if (g_rec.gxcm[i].cmd_word != cmd) {
+            i++;
+            continue;
+        }
+        if (i + 2u >= g_rec.gxcm_count ||
+            g_rec.gxcm[i + 1u].cmd_word != cmd ||
+            g_rec.gxcm[i + 2u].cmd_word != cmd) {
+            i++;
+            continue;
+        }
+        if (groups < max_groups) {
+            out[groups][0] = (int32_t)g_rec.gxcm[i].value;
+            out[groups][1] = (int32_t)g_rec.gxcm[i + 1u].value;
+            out[groups][2] = (int32_t)g_rec.gxcm[i + 2u].value;
+        }
+        groups++;
+        i += 3u;
+    }
+    return groups;
+}
+
 static void test_cubes_variant(void) {
     TwlhdV2View view;
     TwlhdGxViewport vp;
@@ -428,6 +559,188 @@ static void test_cubes_variant(void) {
     CHECK_EQ_INT(stats.vertices_in, expected_in);
     CHECK_EQ_INT(stats.stack_errors, 0u);
     CHECK_EQ_INT(stats.capacity_dropped, 0u);
+
+    /* ------------------------------------------------------------------
+     * Literal-expectation layout checks over the recorded stream.
+     *
+     * Per cube the multi-cube path records one PUSH/POP pair, one MTX_TRANS
+     * run (translate), one MTX_SCALE run and one BEGIN/END pair. The path
+     * itself records one preamble translate (0,0,0) and scale (1,1,1) before
+     * the loop (demo_frame.cpp:157-158), so there are CUBES+1 runs of each.
+     * ------------------------------------------------------------------ */
+    {
+        int32_t trans[256][3];
+        int32_t scal[256][3];
+        int32_t xs[TWLHD_DEMO_CUBES];
+        int32_t ys[TWLHD_DEMO_CUBES];
+        uint32_t trans_groups;
+        uint32_t scale_groups;
+        uint32_t i;
+        uint32_t k;
+
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_PUSH),
+                     TWLHD_DEMO_CUBES);
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_POP),
+                     TWLHD_DEMO_CUBES);
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_TRANS),
+                     3u * (TWLHD_DEMO_CUBES + 1u));
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_SCALE),
+                     3u * (TWLHD_DEMO_CUBES + 1u));
+
+        trans_groups = collect_xyz_runs(TWLHD_V2_CMD_MTX_TRANS, trans, 256u);
+        scale_groups = collect_xyz_runs(TWLHD_V2_CMD_MTX_SCALE, scal, 256u);
+        CHECK_EQ_INT(trans_groups, TWLHD_DEMO_CUBES + 1u);
+        CHECK_EQ_INT(scale_groups, TWLHD_DEMO_CUBES + 1u);
+
+        if (trans_groups == TWLHD_DEMO_CUBES + 1u) {
+            /* Preamble group 0 is the (0,0,0) translate. */
+            CHECK_EQ_INT(trans[0][0], 0);
+            CHECK_EQ_INT(trans[0][1], 0);
+            CHECK_EQ_INT(trans[0][2], 0);
+
+            for (i = 0u; i < TWLHD_DEMO_CUBES; i++) {
+                CHECK_EQ_INT(trans[i + 1u][0], g_cube_xy[i][0]);
+                CHECK_EQ_INT(trans[i + 1u][1], g_cube_xy[i][1]);
+                CHECK_EQ_INT(trans[i + 1u][2], 0);
+                xs[i] = trans[i + 1u][0];
+                ys[i] = trans[i + 1u][1];
+            }
+
+            /* Grid structure: every literal x/y appears, each row holds
+             * exactly CUBE_PER_ROW cubes and no (x,y) pair repeats. Under
+             * `i % 16` the last column collapses onto the first; under
+             * `i / 16` the row set gains an 11th, out-of-table value. */
+            {
+                uint8_t seen_x[CUBE_COLS] = {0};
+                uint32_t per_row[CUBE_ROWS] = {0};
+                uint32_t distinct_x = 0u;
+
+                for (i = 0u; i < TWLHD_DEMO_CUBES; i++) {
+                    uint32_t col = CUBE_COLS;
+                    uint32_t row = CUBE_ROWS;
+
+                    for (k = 0u; k < CUBE_COLS; k++) {
+                        if (xs[i] == g_cube_x[k]) {
+                            col = k;
+                            break;
+                        }
+                    }
+                    for (k = 0u; k < CUBE_ROWS; k++) {
+                        if (ys[i] == g_cube_y[k]) {
+                            row = k;
+                            break;
+                        }
+                    }
+                    CHECK(col < CUBE_COLS);
+                    CHECK(row < CUBE_ROWS);
+                    if (col < CUBE_COLS && !seen_x[col]) {
+                        seen_x[col] = 1u;
+                        distinct_x++;
+                    }
+                    if (row < CUBE_ROWS) per_row[row]++;
+                }
+
+                CHECK_EQ_INT(distinct_x, CUBE_DISTINCT_X);
+                for (k = 0u; k < CUBE_ROWS; k++) {
+                    CHECK_EQ_INT(per_row[k], CUBE_PER_ROW);
+                }
+
+                for (i = 0u; i < TWLHD_DEMO_CUBES; i++) {
+                    for (k = i + 1u; k < TWLHD_DEMO_CUBES; k++) {
+                        CHECK(!(xs[i] == xs[k] && ys[i] == ys[k]));
+                    }
+                }
+
+                /* Neighbours are one spacing apart: +1720 along a row and
+                 * +1720 down a column, with no cross-axis drift. */
+                for (i = 0u; i + 1u < TWLHD_DEMO_CUBES; i++) {
+                    if ((i % CUBE_COLS) + 1u == CUBE_COLS) continue;
+                    CHECK_EQ_INT(xs[i + 1u] - xs[i], 1720);
+                    CHECK_EQ_INT(ys[i + 1u] - ys[i], 0);
+                }
+                for (i = 0u; i + CUBE_COLS < TWLHD_DEMO_CUBES; i++) {
+                    CHECK_EQ_INT(ys[i + CUBE_COLS] - ys[i], 1720);
+                    CHECK_EQ_INT(xs[i + CUBE_COLS] - xs[i], 0);
+                }
+            }
+        }
+
+        if (scale_groups == TWLHD_DEMO_CUBES + 1u) {
+            CHECK_EQ_INT(scal[0][0], 4096);
+            CHECK_EQ_INT(scal[0][1], 4096);
+            CHECK_EQ_INT(scal[0][2], 4096);
+            for (i = 0u; i < TWLHD_DEMO_CUBES; i++) {
+                CHECK_EQ_INT(scal[i + 1u][0], 491);
+                CHECK_EQ_INT(scal[i + 1u][1], 491);
+                CHECK_EQ_INT(scal[i + 1u][2], 491);
+            }
+        }
+    }
+
+    /* ------------------------------------------------------------------
+     * Interpreted-space checks.
+     *
+     * The host seam stubs normalizef32() to a no-op and crossf32() without
+     * its 4.12 shift, so the stubbed gluLookAtf32 y axis overflows to zero
+     * and every interpreted clip[1] is 0. x survives, so centroids/extents
+     * are compared on raw clip[0] (a monotone affine image of world x); row
+     * separation is covered by the translation-group checks above.
+     * ------------------------------------------------------------------ */
+    if (out_vertices == 36u * TWLHD_DEMO_CUBES) {
+        double cx[TWLHD_DEMO_CUBES];
+        double bx0[TWLHD_DEMO_CUBES];
+        double bx1[TWLHD_DEMO_CUBES];
+        uint32_t distinct = 0u;
+        uint32_t i;
+        uint32_t k;
+
+        for (i = 0u; i < TWLHD_DEMO_CUBES; i++) {
+            double sum = 0.0;
+            double lo = 0.0;
+            double hi = 0.0;
+
+            for (k = 0u; k < 36u; k++) {
+                double x = g_interp_out[36u * i + k].clip[0];
+
+                sum += x;
+                if (k == 0u || x < lo) lo = x;
+                if (k == 0u || x > hi) hi = x;
+            }
+            cx[i] = sum / 36.0;
+            bx0[i] = lo;
+            bx1[i] = hi;
+        }
+
+        /* One distinct x centroid per grid column (17 for c170, 2 for c2).
+         * `i % 16` collapses two columns and leaves one fewer. */
+        for (i = 0u; i < TWLHD_DEMO_CUBES; i++) {
+            uint32_t duplicate = 0u;
+
+            for (k = 0u; k < i; k++) {
+                if (cx[i] - cx[k] < 0.001 && cx[k] - cx[i] < 0.001) {
+                    duplicate = 1u;
+                    break;
+                }
+            }
+            if (!duplicate) distinct++;
+        }
+        CHECK_EQ_INT(distinct, CUBE_DISTINCT_X);
+
+        /* Cubes in the same row must not overlap on the interpreted x axis.
+         * With floattof32(0.02) the 982-wide cubes overlap their neighbour. */
+        for (i = 0u; i + 1u < TWLHD_DEMO_CUBES; i++) {
+            if ((i % CUBE_COLS) + 1u == CUBE_COLS) continue;
+            CHECK(bx1[i] < bx0[i + 1u]);
+            CHECK(cx[i + 1u] > cx[i]);
+        }
+
+        /* Same column, next row: same x extent (y is not observable here). */
+        for (i = 0u; i + CUBE_COLS < TWLHD_DEMO_CUBES; i++) {
+            CHECK_NEAR(cx[i + CUBE_COLS], cx[i], 0.001);
+            CHECK_NEAR(bx0[i + CUBE_COLS], bx0[i], 0.001);
+            CHECK_NEAR(bx1[i + CUBE_COLS], bx1[i], 0.001);
+        }
+    }
 }
 #endif
 
