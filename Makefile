@@ -70,7 +70,9 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
 	tests/host/build/test_demo_frame \
-	tests/host/build/test_demo_frame_vp
+	tests/host/build/test_demo_frame_vp \
+	tests/host/build/test_demo_frame_c170 \
+	tests/host/build/test_demo_frame_c2
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -190,6 +192,40 @@ tests/host/build/test_demo_frame_vp: tests/host/test_demo_frame.cpp \
 	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_VP_X1=32 -DTWLHD_DEMO_VP_Y1=96 \
 		-DTWLHD_DEMO_VP_X2=159 -DTWLHD_DEMO_VP_Y2=191 \
 		-DTWLHD_TEST_EXPECT_VP_WORD=0xBF9F6020u -o $@ $< $(HOST_V2_COMMON)
+
+# Same frame body compiled with a multi-cube build, so the test checks the
+# recorded per-cube command counts and the interpreter output (BUILD/UNIT only).
+tests/host/build/test_demo_frame_c170: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the multi-cube test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the multi-cube test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_CUBES=170 \
+		-DTWLHD_TEST_EXPECT_CUBES=170 -o $@ $< $(HOST_V2_COMMON)
+
+tests/host/build/test_demo_frame_c2: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the multi-cube test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the multi-cube test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_CUBES=2 \
+		-DTWLHD_TEST_EXPECT_CUBES=2 -o $@ $< $(HOST_V2_COMMON)
 
 # Expected-stream generator for tools/emulator/compare_capture.py. It runs the
 # same frame body with the same mock seam as the demo-frame test.

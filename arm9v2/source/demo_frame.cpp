@@ -92,7 +92,16 @@ static void draw_cube(void) {
 #define TWLHD_DEMO_VP_Y2 191
 #endif
 
+/*
+ * Number of demo cubes (1..170) drawn in a 17-column grid, build-time option
+ * (CUBES=<n> in the Makefile). The default keeps the normal ROM byte-identical.
+ */
+#ifndef TWLHD_DEMO_CUBES
+#define TWLHD_DEMO_CUBES 1
+#endif
+
 void twlhd_demo_draw_frame(unsigned angle) {
+#if TWLHD_DEMO_CUBES <= 1
     /* Re-issue all state needed to replay this frame independently. */
     glEnable(GL_ANTIALIAS);
     glClearColor(0, 0, 0, 31);
@@ -119,4 +128,52 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glPopMatrix(1);
 
     glFlush(0); /* records SWAP_BUFFERS (0x50) and disarms */
+#else
+    int i;
+    int col;
+    int row;
+    int rows;
+    s32 x;
+    s32 y;
+    s32 half_spacing;
+
+    /* Re-issue all state needed to replay this frame independently. */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(TWLHD_DEMO_VP_X1, TWLHD_DEMO_VP_Y1,
+               TWLHD_DEMO_VP_X2, TWLHD_DEMO_VP_Y2);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(70, 256.0 / 192.0, 0.1, 100.0);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
+    glRotateXi((int)angle);
+    glRotateYi((int)angle);
+    glTranslatef32(0, 0, 0);
+    glScalef32(inttof32(1), inttof32(1), inttof32(1));
+
+    rows = (TWLHD_DEMO_CUBES + 16) / 17;
+    half_spacing = floattof32(0.42) >> 1;
+    for (i = 0; i < TWLHD_DEMO_CUBES; i++) {
+        col = i % 17;
+        row = i / 17;
+        x = mulf32(inttof32(2 * col - 16), half_spacing);
+        y = mulf32(inttof32(2 * row - (rows - 1)), half_spacing);
+        glPushMatrix();
+        glTranslatef32(x, y, 0);
+        glRotateXi((int)angle);
+        glRotateYi((int)angle);
+        glScalef32(floattof32(0.12), floattof32(0.12), floattof32(0.12));
+        glPolyFmt(POLY_ALPHA(31)); /* mirrors the single-cube path */
+        draw_cube();
+        glPopMatrix(1);
+    }
+
+    glFlush(0); /* records SWAP_BUFFERS (0x50) and disarms */
+#endif
 }
