@@ -332,3 +332,45 @@ predict, within photo measurement error of a few px.
 EMULATOR(DeSmuME)/unverified); viewports with y1 > 191; captures other than this demo cube;
 large frames on the clip path; many consecutive frames; long-run stability; textures/lighting/alpha
 (5B, not approved).
+
+### Run 9 — Phase 5A sequence playback (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run on 2026-11-04/05; evidence = photographs kept **outside** the repository in the owner's
+staging directory.
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-seq.3dsx` (main @ `c40960f`) | `b7b14cff7f4783ca73dc90af44ecfdb5b57c7af9c432b2b6f1b6904a978d5e16` |
+
+The sequence is 8 v2 frames `seq_000`–`seq_007`, 1152 B each: DeSmuME captures of the demo cube at
+DS frames 30, 60, …, 240. Even indices use the full viewport; odd indices use the viewport
+(32,96)-(159,191). The frames were copied to the SD folder `twlhd_seq/` and played with the **X**
+key at about 3 frames/s; each step re-parses, re-interprets and re-uploads the clip-scene vertex
+buffer. Playback wraps to `000` when the next file is missing.
+
+Results:
+- **T1 — built-in triangle:** OK (photo); the key legend shows `X=seq`.
+- **T2 — A, single v2 frame (refactored load path):** bottom screen shows `mode: SD v2 (DS MATRICES)`,
+  `frame:121 gxcm:124 tris:12`, `render verts: 36`, counters `stk0 cap0 inc0 uns0 vd0`,
+  `SD: v2 loaded, 36 verts -> 12 tris`; full-viewport cube. OK (photo).
+- **T3 — X sequence playback (three photos in one run):** `seq 003/008 loop 6` (small cube,
+  upper-left), `seq 001/008 loop 13` (small red face, upper-left), `seq 000/008 loop 25` (large
+  magenta face); counters zero. 25 passes ≈ 2.7 s/pass ≈ 67 s continuous (~200 re-uploads), no GPU
+  hang, no visible glitches in the photos; sizes alternate full/small as expected. (photos)
+- **T4 — A during playback:** playback stops and the single frame from `sdmc:/twlhd_frame.bin`
+  stays. OK (photo).
+- **T5 — Y:** built-in triangle, playback stopped. OK (photo). The X-restart and X-again (freeze)
+  steps were reported OK by the owner, **no photos**.
+- **T6 — truncated `seq_003` (error path), and optional T7 (no `seq_000.bin`):** owner statement
+  only, **no photos**.
+
+**Conclusion:** HARDWARE OBSERVED: sequence playback with per-frame re-parse, re-interpretation and
+vertex-buffer re-upload on the clip path ran ~67 s (25 passes of 8 frames) with no GPU hang and no
+visible glitches; the A and Y paths were unchanged; picture positions are consistent with the
+emulator/oracle at photo level only (not pixel-exact).
+
+**Not covered:** large frames (many vertices) on the clip path; runs much longer than ~1 minute;
+captures other than the demo cube; DS-side viewport +1/y1-wrap; textures/lighting/alpha (5B, not
+approved); T6/T7 and the X-restart/X-freeze steps have no photos.
