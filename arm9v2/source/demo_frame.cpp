@@ -152,8 +152,6 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
-    glRotateXi((int)angle);
-    glRotateYi((int)angle);
     glTranslatef32(0, 0, 0);
     glScalef32(inttof32(1), inttof32(1), inttof32(1));
 

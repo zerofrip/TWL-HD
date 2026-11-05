@@ -566,7 +566,10 @@ static void test_cubes_variant(void) {
      * Per cube the multi-cube path records one PUSH/POP pair, one MTX_TRANS
      * run (translate), one MTX_SCALE run and one BEGIN/END pair. The path
      * itself records one preamble translate (0,0,0) and scale (1,1,1) before
-     * the loop (demo_frame.cpp:157-158), so there are CUBES+1 runs of each.
+     * the loop (demo_frame.cpp:155-156), so there are CUBES+1 runs of each.
+     * The preamble records no shared rotation: only the per-cube
+     * rotateX/rotateY pair rotates, so the 17x10 grid is not rotated as one
+     * slab around the camera-space origin.
      * ------------------------------------------------------------------ */
     {
         int32_t trans[256][3];
@@ -742,6 +745,83 @@ static void test_cubes_variant(void) {
         }
     }
 }
+
+/* --------------------------------------------------------------------------
+ * Angle-sensitive capture checks.
+ *
+ * The per-cube block is the only place that rotates: a shared
+ * glRotateXi/glRotateYi pair after gluLookAtf32 would rotate the whole grid as
+ * one slab around the camera-space origin and emit 18 extra MTX_MULT_3x3
+ * entries before the first MTX_PUSH. Each glRotateXi/glRotateYi records exactly
+ * nine 0x1A words, so the fixed stream holds 18 * CUBES of them, all after the
+ * first PUSH. The camera contributes 12 MTX_MULT_4x3 words (gluLookAtf32) and
+ * no MTX_MULT_3x3.
+ *
+ * TWLHD_TEST_FRUSTUM_MARGIN is measured, not derived: with the host math stubs
+ * the lookAt side row is unnormalised, so the largest observed |clip0|/|clip3|
+ * is ~2753.7 at angles 0/7680/30720 for both c170 and c2 (|clip1| is 0). A
+ * literal above that locks the harness without flaking. Examples of the mutant
+ * (shared pair re-added) die on the entry-position/count checks, not here: the
+ * linear host trig only contracts, so its geometry stays bounded.
+ * -------------------------------------------------------------------------- */
+#define TWLHD_TEST_FRUSTUM_MARGIN 3072.0
+
+static void test_cubes_angle_sensitive(void) {
+    static const unsigned angles[] = {0u, 7680u, 30720u};
+    TwlhdV2View view;
+    TwlhdGxViewport vp;
+    TwlhdGxStats stats;
+    size_t size = 0;
+    uint32_t out_vertices = 0;
+    uint32_t a;
+
+    for (a = 0u; a < sizeof angles / sizeof angles[0]; a++) {
+        uint32_t first_push;
+        uint32_t first_rot;
+        uint32_t i;
+
+        mock_reset();
+        twlhd_gx_rec_init(&g_rec);
+        twlhd_gx_rec_arm(&g_rec);
+
+        twlhd_demo_draw_frame(angles[a]);
+
+        first_push = find_first_cmd(g_rec.gxcm, g_rec.gxcm_count,
+                                    TWLHD_V2_CMD_MTX_PUSH);
+        first_rot = find_first_cmd(g_rec.gxcm, g_rec.gxcm_count,
+                                   TWLHD_V2_CMD_MTX_MULT_3x3);
+        CHECK(first_push != UINT32_MAX);
+        CHECK(first_rot != UINT32_MAX);
+        CHECK(first_rot > first_push);
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_MULT_3x3),
+                     18u * TWLHD_DEMO_CUBES);
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_MULT_4x3), 12u);
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_MTX_PUSH),
+                     TWLHD_DEMO_CUBES);
+
+        CHECK_EQ_INT(twlhd_gx_rec_serialize(&g_rec, g_out, sizeof g_out,
+                                            &size),
+                     TWLHD_V2_OK);
+        CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+        CHECK_EQ_INT(twlhd_gx_interpret(&view, g_interp_out, 6144u,
+                                        &out_vertices, &vp, &stats),
+                     TWLHD_GX_OK);
+        CHECK_EQ_INT(out_vertices, 36u * TWLHD_DEMO_CUBES);
+        CHECK_EQ_INT(stats.stack_errors, 0u);
+        CHECK_EQ_INT(stats.capacity_dropped, 0u);
+
+        if (out_vertices == 36u * TWLHD_DEMO_CUBES) {
+            for (i = 0u; i < out_vertices; i++) {
+                double w = fabs((double)g_interp_out[i].clip[3]);
+
+                CHECK(fabs((double)g_interp_out[i].clip[0]) <=
+                      w * TWLHD_TEST_FRUSTUM_MARGIN);
+                CHECK(fabs((double)g_interp_out[i].clip[1]) <=
+                      w * TWLHD_TEST_FRUSTUM_MARGIN);
+            }
+        }
+    }
+}
 #endif
 
 /* Assert the mutation is exactly the intended one: same length, last entry
@@ -875,6 +955,9 @@ int main(void) {
 #ifdef TWLHD_TEST_EXPECT_CUBES
     test_cubes_variant();
     test_report("demo-frame/cubes");
+
+    test_cubes_angle_sensitive();
+    test_report("demo-frame/cubes-angle");
 #endif
 
     test_frame_is_self_contained();
