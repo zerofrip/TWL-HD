@@ -179,9 +179,11 @@ static void test_source_files(const char *path) {
     const char *clip;
     const char *debug;
     const char *console;
+    const char *setter;
     static char clip_body[65536];
     static char debug_body[65536];
     static char console_body[65536];
+    static char set_body[65536];
 
     CHECK(f != NULL);
     if (!f) {
@@ -212,6 +214,14 @@ static void test_source_files(const char *path) {
         CHECK_EQ_INT(count_substr(buf, "g_diag_mode ="), 1);
         CHECK_EQ_INT(count_substr(buf, "g_diag_mode = mode;"), 1);
         CHECK_EQ_INT(count_substr(buf, "mode > TWLHD_DIAG_MODE_COUNT - 1"), 1);
+
+        setter = extract_function(buf, "renderer_set_diag_mode(unsigned mode)",
+                                  "renderer_set_diag_mode", set_body,
+                                  sizeof(set_body));
+        if (setter != NULL) {
+            CHECK_EQ_INT(count_substr(setter, "g_diag_mode"), 1);
+        }
+        CHECK_EQ_INT(count_substr(buf, "g_diag_mode"), 4);
 
         clip = extract_function(buf, "static void draw_clip_internal(",
                                 "draw_clip_internal", clip_body,

@@ -74,10 +74,10 @@ LIBDIRS		:=	$(CTRULIB)
 
 # Build ID stamp for the ARM11 3DSX. Shown on the bottom-screen console so the
 # owner can verify the right .3dsx started. Short git hash (always used, even on
-# a dirty tree) with a "-diag" suffix; missing git resolves to "unknown".
+# a dirty tree) with a "-diag" suffix; missing git resolves to "nogit-diag".
 TWLHD_GIT_HASH := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null)
 ifeq ($(strip $(TWLHD_GIT_HASH)),)
-TWLHD_BUILD_ID_STR := unknown
+TWLHD_BUILD_ID_STR := nogit-diag
 else
 TWLHD_BUILD_ID_STR := $(TWLHD_GIT_HASH)-diag
 endif
