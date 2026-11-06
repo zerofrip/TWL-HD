@@ -98,8 +98,14 @@ they do not replace the real run.
   VIEWPORT word is `x1 | y1 << 8 | x2 << 16 | y2 << 24` (DS y is measured from the bottom), which `common/twlhd_clipfix.c` consumes
   as captured. `make test` also builds a variant-viewport host binary and checks the recorded VIEWPORT word against fixed literal
   words (default `0xBFFF0000u`; variant `0xBF9F6020u` passed via `-DTWLHD_TEST_EXPECT_VP_WORD`). When switching `AUTODUMP_FRAME`
-  values in the same working tree, `arm9v2/build-autodump` (and `build-vp-autodump`) must be removed first, because make does not
-  rebuild when only the `-D` flags change (this caused a stale-capture mistake).
+  (or any other `-D` option) in the same working tree, the Makefile records the define set in `<BUILD>/flags.stamp` and removes stale
+  objects automatically, so the old manual `rm -rf arm9v2/build-autodump` step is no longer needed.
+- `CUBES=<n>` draws `n` demo cubes (1..170) in a 17-column grid for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
+  The value must be a decimal integer in 1..170; anything else is a build error, and leaving it unset (or `1`) keeps the normal ROM
+  unchanged. Example: `make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64` builds `arm9v2/twlhd-arm9v2-autodump-c64.nds` in
+  `build-autodump-c64/`. The limit of 170 is 6120 clip vertices (≤ the ARM11 `CLIP_VERTEX_CAPACITY` of 6144), fewer than 16384
+  recorder entries, and below the 1 MiB v2 file size. `make test` also builds `-DTWLHD_DEMO_CUBES=170` and `=2` host binaries that
+  check the recorded VTX_16 count and the interpreter's vertex output against fixed literals.
 
 ## Emulator facts that shaped the harness
 
@@ -130,6 +136,27 @@ These are observations from earlier runs with the build above (measured on this 
 
 One fixed scenario (the demo's rotation angle 61440, one frame). Not covered: other angles, real GX timing, overflow behaviour under load, other
 emulators, commercial software, and anything about the PICA200 renderer.
+
+## Multi-cube captures (CUBES) in DeSmuME: measured behaviour (EMULATOR)
+
+EMULATOR: DeSmuME 0.9.14, interpreter, JIT off by default. Measured by the supervisor (sequential runs, DESMUME_TIMEOUT 120, 60 for AF=10, clean rebuilds). The root cause of the failures below is NOT identified (unexplained); no cause is asserted here.
+
+| n | AF=120 | AF=10 |
+|---|---|---|
+| 2 | 1912 B ok | not measured |
+| 32 | 23272 B ok | not measured |
+| 64 | no capture (ARM OP_BKPT) | 46056 B ok |
+| 100 | no capture (undef instr) | 71688 B ok |
+| 128 | 91624 B ok (11433 entries) | not measured |
+| 129 | 92336 B ok (undef instr after write) | not measured |
+| 169 | no capture (undef instr) | 120816 B ok |
+| 170 | no capture (undef instr) | 121528 B ok |
+
+AF=10 captures parse OK (entries: 100=8941, 169=15082, 170=15171; rsta=4 each); n=64 also OK at AF=60 (46056 B). tests/host/build/gx_interp_cli reports result=OK on the 100/169/170 captures. The recorder overflow limit (16384 entries) and ARM11 clip buffer (6144 output vertices) are not exceeded at n=170 (15171 entries; 6120 output vertices).
+
+gdb (arm9gdb) on the n=64 AF=120 ROM reached the reset vector (0x01FF853C, bkpt) shortly after twlhd_gx_rec_serialize returned; twlhd_v2_parse returned ERR_GXCM_GROUP (17) on the in-ROM buffer in one breakpointed run while both host parsers accept the same bytes; adding breakpoints changes behaviour. Cause: unexplained; follow-up item.
+
+Default builds (CUBES unset) are unaffected: make emu-validate PASS 124 GXCM + 4 RSTA at angle 61440. EMULATOR evidence only; not HARDWARE VERIFIED.
 
 ## Licensing posture (not legal advice)
 
