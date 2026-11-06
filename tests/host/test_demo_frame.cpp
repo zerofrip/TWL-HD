@@ -837,10 +837,33 @@ static void test_cubes_angle_sensitive(void) {
 #endif
 
 #ifdef TWLHD_TEST_EXPECT_SCENE
-/* Same measured host-stub bound as the cube path (see the comment at the
- * TWLHD_TEST_FRUSTUM_MARGIN definition above); the scene vertices are inside
- * the unit cube, so the same literal bounds all of them. */
-#define TWLHD_TEST_FRUSTUM_MARGIN 3072.0
+/* Frustum bound for the scene path. The device-formula (analytic) NDC bound is
+ *   |clip_x| / |w| <= (1.25 / 2.75) * cot(35 deg) / (256/192) ~= 0.487
+ * (worst strip vertex x = 2560/4096 * 2 = 1.25 from the origin; camera at z = 4
+ * so nearest w = 2.75; the x projection factor is cot(35 deg)/aspect ~=
+ * 1.42815/1.33333 ~= 1.0711). That 0.487 is the answer for the device and the
+ * emulator validation, not what the host interpreter measures: the host math
+ * seam breaks the "same linear factor" argument by distorting clip[0] and
+ * clip[3] (w) differently, so the interpreted ratio is ~960, not ~0.487.
+ *
+ * In interpreter terms (twlhd_gx_interp.c:297-322: matrices are 20.12 and the
+ * transform divides by 4096 once): crossf32() drops its >>12 shift, so the
+ * gluLookAtf32 side vector is 4096x unit length (side[0] = |up|*|forward|*4096
+ * = 1*4*4096 = 2^26); normalizef32() is a no-op, so forward stays 4.0 (camera
+ * at z = 4) and eye.forward = 16 instead of 4; tanLerp() returns 1.0, so the
+ * perspective x-row is divf32(2*0.1, 2*0.1*4/3) = 3071 (~0.75) instead of
+ * cot(35 deg)/aspect ~= 1.0711. clip[0] therefore carries the 4096x side
+ * artifact and the 4x forward artifact, while clip[3] (w) carries only the 4x
+ * forward artifact (w = 16, not 4), so
+ *   |clip0| / |clip3| = (3071 * 2^26 * 8192 * x_raw) / (4096^3 * 16)
+ *                     = 3071 * x_raw / 8192
+ * with x_raw the UNSCALED vertex x (the 2x scale is already in the matrix).
+ * The largest |x_raw| is the strip's 2560/4096 = 5/8, giving 3071 * 5/16 ~=
+ * 959.69 (the triangle list's 2243/4096 gives ~840.9). The linear sinLerp/
+ * cosLerp rotation at the other angles only contracts (sin^2 + cos^2 < 1), so
+ * angle 0 is the worst case. Round up with headroom; the MTX_SCALE literal
+ * above, not this guard, is what kills the scale mutants. */
+#define TWLHD_TEST_FRUSTUM_MARGIN 1000.0
 
 /* Expectations for the primitive-scene builds. VTX_16 is two 32-bit writes per
  * vertex; the output index literals are written by hand from the interpreter's
@@ -899,7 +922,7 @@ static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
 static TwlhdGxVertex g_scene_out[64];
 
 static void test_scene_variant(void) {
-    static const unsigned angles[] = {0u, 7680u, 30720u};
+    static const unsigned angles[] = {0u, 7680u, 15360u, 23040u, 30720u};
     TwlhdV2View view;
     TwlhdGxViewport vp;
     TwlhdGxStats stats;
@@ -925,6 +948,23 @@ static void test_scene_variant(void) {
         CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_VTX_16),
                      SCENE_IN_VERTICES * 2u);
         CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_COLOR), SCENE_IN_VERTICES);
+
+        /* The scene path records exactly one glScalef32 (2,2,2), which is
+         * three consecutive MTX_SCALE words each inttof32(2) == 2 * 4096 ==
+         * 8192. This literal kills the scale-1 (4096) and scale-3 (12288)
+         * mutants; the frustum bound below is the extra documented guard. */
+        {
+            uint32_t scale_words = 0u;
+            uint32_t e;
+
+            for (e = 0u; e < g_rec.gxcm_count; e++) {
+                if (g_rec.gxcm[e].cmd_word == TWLHD_V2_CMD_MTX_SCALE) {
+                    CHECK_EQ_INT(g_rec.gxcm[e].value, 8192u);
+                    scale_words++;
+                }
+            }
+            CHECK_EQ_INT(scale_words, 3u);
+        }
 
         begin = find_first_cmd(g_rec.gxcm, g_rec.gxcm_count,
                                TWLHD_V2_CMD_BEGIN_VTXS);
