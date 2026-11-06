@@ -276,3 +276,32 @@ What stays UNVERIFIED:
 - Wireframe/outline-only drawing is still NOT implemented.
 - Everything visual: this is HARDWARE UNVERIFIED until an approved run; Run 15
   approval is still required.
+
+### 5B-0c / Run 16 diagnostic build — BUILD/UNIT only
+
+Status: implemented BUILD/UNIT only as of 2026-11-07; HARDWARE UNVERIFIED until
+owner run.
+
+Purpose: bisect why the explicit alpha blend (5B-0b) showed no effect on the
+real console in Runs 14/15 (alpha 16/31 and 4/31 quads drew opaque; alpha-0 quad
+absent). The Run-16 build adds:
+
+- A compile-time `TWLHD_BUILD_ID` (git short hash + `-diag`, or `unknown`) shown
+  on the bottom console so the owner can confirm the right `.3dsx` started.
+- A B-key-cycled clip-path diagnostic mode with three states:
+  - **Mode 0 "normal"**: explicit alpha blend, TexEnv passes primary vertex
+    colour/alpha unchanged — identical in effect to the current build.
+  - **Mode 1 "alpha-as-gray"**: opaque blend, RGB = source alpha
+    (grey = raw fragment alpha), output alpha forced to 1.0 via constant. If
+    the fragment alpha differs from the vertex alpha, this mode reveals it.
+  - **Mode 2 "const-alpha-0.5"**: explicit alpha blend, RGB = primary colour,
+    alpha forced to 0.5 via constant. If the blend registers are ineffective,
+    this mode will still draw opaque despite the forced alpha.
+- Pure-data header `arm11/include/twlhd_diag_config.h` plus host tests with a
+  mutation table.
+
+HARDWARE UNVERIFIED: this is BUILD/UNIT only. The supervisor runs EMULATOR
+checks; the owner runs the hardware test. Mode 0 is designed to be pixel-identical
+to the current build on the emulator (Tanuki3DS screenshot comparison unchanged)
+so any console difference is isolated to real-hardware blend-register behaviour
+or fragment-alpha interpretation.

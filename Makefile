@@ -77,7 +77,8 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_demo_frame_s2 \
 	tests/host/build/test_demo_frame_s3 \
 	tests/host/build/test_demo_frame_s4 \
-	tests/host/build/test_blend_config
+	tests/host/build/test_blend_config \
+	tests/host/build/test_diag_config
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -143,6 +144,19 @@ tests/host/build/test_blend_config: tests/host/test_blend_config.c \
 		$(HOST_HEADERS) arm11/include/twlhd_blend_config.h | tests/host/build
 	@if [ -z "$(DEVKITPRO)" ]; then \
 		echo "error: DEVKITPRO is not set; the blend-config test needs the libctru headers" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include \
+		-I$(DEVKITPRO)/libctru/include -o $@ $< $(HOST_LDFLAGS)
+
+# Diagnostic-config test compiles the real libctru GPU enums header on the host
+# and asserts the three clip-path diagnostic modes. It also structurally checks
+# main.c and renderer.c for the expected call-site counts and literal strings.
+tests/host/build/test_diag_config: tests/host/test_diag_config.c \
+		$(HOST_HEADERS) arm11/include/twlhd_diag_config.h \
+		arm11/source/main.c arm11/source/renderer.c | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the diag-config test needs the libctru headers" >&2; \
 		exit 1; \
 	fi
 	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include \

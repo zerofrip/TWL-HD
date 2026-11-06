@@ -25,6 +25,7 @@
 #include "twlhd_attr_pad.h"
 #include "twlhd_blend_config.h"
 #include "twlhd_clipfix.h"
+#include "twlhd_diag_config.h"
 #include "twlhd_geometry_slots.h"
 
 #include "twlhd_clip_vshader_shbin.h"
@@ -101,6 +102,11 @@ static TwlhdRendererTraceFn g_trace;
  * the memset() at the top of renderer_init(). */
 static uint32_t g_debug_flags;
 
+/* Clip-path diagnostic mode. Deliberately outside RendererState so it survives
+ * the memset() at the top of renderer_init() and persists across B-key cycles
+ * and frame loads. Default 0 leaves the normal render path unchanged. */
+static unsigned g_diag_mode;
+
 /* Positions-only buffer used when TWLHD_RDBG_OFFICIAL_ATTR is set, matching
  * the official simple_tri attribute/buffer layout. */
 static void *g_official_buf;
@@ -138,6 +144,17 @@ __attribute__((noinline, used)) void renderer_set_debug_flags(uint32_t flags) {
 
 __attribute__((noinline, used)) uint32_t renderer_get_debug_flags(void) {
     return g_debug_flags;
+}
+
+__attribute__((noinline, used)) void renderer_set_diag_mode(unsigned mode) {
+    if (mode > TWLHD_DIAG_MODE_COUNT - 1) mode = 0;
+    g_diag_mode = mode;
+    /* Reference the getter so the API pair stays together and reachable. */
+    (void)renderer_get_diag_mode();
+}
+
+__attribute__((noinline, used)) unsigned renderer_get_diag_mode(void) {
+    return g_diag_mode;
 }
 
 __attribute__((noinline, used)) void renderer_set_debug_stride(uint32_t bytes) {
@@ -1013,19 +1030,38 @@ static void draw_clip_internal(int committed) {
     C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
     C3D_CullFace(GPU_CULL_NONE);
     {
-        TwlhdBlendConfig blend = twlhd_blend_config_alpha();
+        const TwlhdDiagConfig *diag = twlhd_diag_config(g_diag_mode);
         TwlhdAlphaTestConfig at = twlhd_alpha_test_disabled();
-        C3D_AlphaBlend(blend.colorEq, blend.alphaEq, blend.srcColor,
-                       blend.dstColor, blend.srcAlpha, blend.dstAlpha);
-        C3D_AlphaTest(at.enable, at.func, at.ref);
-    }
 
-    /* TexEnv slot 0: pass primary vertex colour through unchanged (same as DEBUG path). */
-    {
-        C3D_TexEnv *env = C3D_GetTexEnv(0);
-        C3D_TexEnvInit(env);
-        C3D_TexEnvSrc(env, C3D_Both, GPU_PRIMARY_COLOR, 0, 0);
-        C3D_TexEnvFunc(env, C3D_Both, GPU_REPLACE);
+        /* Mode 0: alpha blend + primary colour/alpha (identical to old path).
+         * Mode 1: opaque + grey=fragment-alpha (alpha leak / fragment-vs-vertex
+         *         alpha check).
+         * Mode 2: alpha blend + constant alpha 0x80 (blend-register check). */
+        C3D_AlphaBlend(diag->blend.colorEq, diag->blend.alphaEq,
+                       diag->blend.srcColor, diag->blend.dstColor,
+                       diag->blend.srcAlpha, diag->blend.dstAlpha);
+        C3D_AlphaTest(at.enable, at.func, at.ref);
+
+        /* TexEnv slot 0: drive both RGB and Alpha from the selected config.
+         * GPU_REPLACE uses only operand 1; sources 2/3 and operands 2/3 are set
+         * to the default values (0 == GPU_PRIMARY_COLOR / GPU_TEVOP_A_SRC_ALPHA)
+         * so the packed register writes stay uniform across modes. */
+        {
+            C3D_TexEnv *env = C3D_GetTexEnv(0);
+            C3D_TexEnvInit(env);
+            C3D_TexEnvSrc(env, C3D_RGB, diag->rgb_src, diag->rgb_src,
+                          diag->rgb_src);
+            C3D_TexEnvOpRgb(env, diag->rgb_op[0], diag->rgb_op[1],
+                            diag->rgb_op[2]);
+            C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
+            C3D_TexEnvSrc(env, C3D_Alpha, diag->alpha_src, 0, 0);
+            C3D_TexEnvOpAlpha(env, diag->alpha_op, 0, 0);
+            C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+            /* Constant colour is written every frame so a mode-1/2 constant
+             * cannot leak into mode 0 and vice-versa. Byte layout: R is LSB,
+             * alpha is bits 24-31 (citro3d C3D_TexEnvColor convention). */
+            C3D_TexEnvColor(env, diag->constant_color);
+        }
     }
 
     renderer_trace("clip program");
