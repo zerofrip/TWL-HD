@@ -620,3 +620,75 @@ cull; lighting; textures; the `(alpha + 1) / 32` scale versus `/31`; DS
 translucent-polygon depth/draw-order rules; runs longer than those photographed.
 5B-0b must set the blend state explicitly and decide the alpha-0 / wireframe
 handling; a further hardware run needs its own approval.
+
+### Run 15 — Phase 5B-0b explicit blend/alpha-test state (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 9 photographs kept **outside** the repository in the owner's
+staging directory (`evidence/run15_01..09`); report dated 2026-11-07 ("全テスト正常動作正常終了です").
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-blend.3dsx` (main @ `454c15d`) | `045829945864665f…` |
+| single-cube frame `twlhd_frame_v2_ctl_full.bin` | `79f90bc2…` |
+| scene1 triangle list (SCENE option, AUTODUMP_FRAME=10) | `e32d766b…` |
+| 170-cube frame `twlhd_frame_v2_c170.bin` (CUBES option, AUTODUMP_FRAME=10) | `4904e26d…` |
+| scene4 alpha frame `twlhd_frame_v2_scene4_alpha.bin` (SCENE=4) | `2decd74dead1044f…` (1128 B) |
+
+Build: NEW ARM11 `twlhd-arm11-blend.3dsx` (main @ `454c15d`, SHA-256
+`045829945864665f…`): `arm11/source/renderer.c` sets the blend state
+explicitly (clip path: ADD, SRC_ALPHA, ONE_MINUS_SRC_ALPHA for colour and
+alpha; built-in-triangle path: opaque ONE/ZERO) and the alpha test explicitly
+disabled (`arm11/include/twlhd_blend_config.h`). Frames as in Run 14:
+`ctl_full` (`79f90bc2…`), scene1 (`e32d766b…`), c170 (`4904e26d…`),
+scene4_alpha (`2decd74dead1044f…`, quads alpha 31/16/4/0 =
+red/green/blue/white).
+
+Results:
+- **T1 — built-in RGB triangle (alpha-1.0 regression):** OK (photo).
+- **T2 — triangle list:** `SD: v2 loaded, 24 verts -> 8 tris` (gxcm 136), opaque. OK (photo).
+- **T3 — 170-cube grid:** `SD: v2 loaded, 6120 verts -> 2040 tris`, opaque grid;
+  all as in Runs 10/13/14. OK (photo). The single-cube A-load photo was not sent separately.
+- **T4 — alpha frame (SCENE=4):** `24 verts -> 8 tris` (gxcm 121, vtx in 16):
+  same picture as Run 14: red, green and blue quads visible, NO white (alpha 0)
+  quad. Measured colours from the photos (average of a 25×25 px patch; camera
+  shifted; background about (89-113, 99-128, 148-178)): photo 02 blue
+  (82,104,239), red (229,74,47), green (49,219,30), white-quad area
+  (96,106,157) = background; photo 05 blue (79,108,239), red (232,65,31),
+  green (50,215,27); photo 08 (sequence) blue (82,115,237), red (235,82,30),
+  green (35,221,28). Run 14 for comparison: blue (76,104,236), red
+  (232,77,43), green (50,221,33). A blend with the weights 0.53/0.16 would
+  give about green (41,182,71) and blue (74,84,166): the alpha 16 and alpha 4
+  quads are still opaque. (photos)
+- **T5 — sequence alpha frame -> cube -> 170 grid:** photos `seq 002/003 loop 3`
+  (grid), `seq 001/003 loop 4` (alpha frame), `seq 001/003 loop 27` (cube,
+  `36 verts -> 12 tris`; ~27 s). No freeze/hang, no stray triangles, no
+  POWER-hold reported. After the alpha frame, Y gave the opaque built-in RGB
+  triangle (no visible state leak). (photos)
+
+No hang, no error text, no POWER-hold reported.
+
+**Conclusion (HARDWARE OBSERVED):** the explicit blend/alpha-test state did
+not change the console picture of the alpha frame relative to Run 14;
+alpha-1.0 frames unchanged; no hang. The alpha-0 quad is still absent
+although the alpha test is now explicitly disabled, so the default alpha test
+was not the cause. The `(alpha + 1) / 32` scale and the DS translucent-polygon
+rules stay UNVERIFIED.
+
+**Open / UNKNOWN (candidates, none verified):**
+- (a) the old `twlhd-arm11-alpha.3dsx` was started instead of
+  `twlhd-arm11-blend.3dsx` (identical on screen, no build id displayed; which
+  file was started was not recorded);
+- (b) the blend registers are not applied/ineffective on the console path
+  (citro3d state flow, fragment operation mode, render-target format);
+- (c) the fragment alpha reaching the blender is not the vertex alpha while
+  alpha 0 is removed by something else.
+EMULATOR (Tanuki3DS) blended in both cases and is not a predictor. Needed
+next: a build id on the bottom screen and a diagnostic that separates the
+candidates.
+
+**Not covered / still open:** overlapping translucent polygons; wireframe;
+cull; lighting; textures; the `(alpha + 1) / 32` scale versus `/31`; DS
+translucent-polygon depth/draw-order rules; runs longer than those
+photographed.
