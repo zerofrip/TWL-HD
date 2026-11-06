@@ -75,7 +75,8 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_demo_frame_c2 \
 	tests/host/build/test_demo_frame_s1 \
 	tests/host/build/test_demo_frame_s2 \
-	tests/host/build/test_demo_frame_s3
+	tests/host/build/test_demo_frame_s3 \
+	tests/host/build/test_demo_frame_s4
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -280,6 +281,22 @@ tests/host/build/test_demo_frame_s3: tests/host/test_demo_frame.cpp \
 	fi
 	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=3 \
 		-DTWLHD_TEST_EXPECT_SCENE=3 -o $@ $< $(HOST_V2_COMMON)
+
+tests/host/build/test_demo_frame_s4: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the scene test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the scene test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=4 \
+		-DTWLHD_TEST_EXPECT_SCENE=4 -o $@ $< $(HOST_V2_COMMON)
 
 # Expected-stream generator for tools/emulator/compare_capture.py. It runs the
 # same frame body with the same mock seam as the demo-frame test.

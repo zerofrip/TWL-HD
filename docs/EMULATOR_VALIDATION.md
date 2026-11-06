@@ -107,15 +107,18 @@ they do not replace the real run.
   recorder entries, and below the 1 MiB v2 file size. `make test` also builds `-DTWLHD_DEMO_CUBES=170` and `=2` host binaries that
   check the recorded VTX_16 count and the interpreter's vertex output against fixed literals.
 - `SCENE=<n>` replaces the cube with a flat primitive scene for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
-  `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles) and
-  `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles). The value must be empty, `0` or a decimal integer in 1..3;
-  anything else is a build error, and leaving it unset (or `0`) keeps the normal ROM unchanged. The `<n>` suffix composes with the
-  other options, e.g. `make -C arm9v2 AUTODUMP_FRAME=120 SCENE=2` builds `arm9v2/twlhd-arm9v2-autodump-s2.nds` in
-  `build-autodump-s2/`. `SCENE` > 0 together with `CUBES` > 1 is rejected by `demo_frame.cpp` (`#error`). Changing `SCENE` without
-  `rm -rf` rebuilds cleanly because it is part of `<BUILD>/flags.stamp`, and `make clean` removes every `-s<N>` build directory and
-  output file. `make test` also builds `-DTWLHD_DEMO_SCENE=1`, `=2` and `=3` host binaries that check the recorded primitive type,
-  VTX_16/COLOR counts and the exact interpreted vertex-index order and frustum bounds at angles 0, 7680, 15360, 23040 and 30720
-  (the scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25).
+  `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles),
+  `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles) and `SCENE=4` four flat quads, one quad-list each, with a
+  per-quad `POLYGON_ATTR` alpha of 31, 16, 4 and 0 (16 input vertices / 8 triangles; two translucent and one wireframe BEGIN group,
+  alpha 31 counted as neither). The value must be empty, `0` or a decimal integer in 1..4; anything else is a build error, and
+  leaving it unset (or `0`) keeps the normal ROM unchanged. The `<n>` suffix composes with the other options, e.g.
+  `make -C arm9v2 AUTODUMP_FRAME=120 SCENE=2` builds `arm9v2/twlhd-arm9v2-autodump-s2.nds` in `build-autodump-s2/`; `SCENE=4`
+  produces `twlhd-arm9v2-s4.nds` in `build-s4/`. `SCENE` > 0 together with `CUBES` > 1 is rejected by `demo_frame.cpp`
+  (`#error`). Changing `SCENE` without `rm -rf` rebuilds cleanly because it is part of `<BUILD>/flags.stamp`, and `make clean`
+  removes every `-s<N>` build directory and output file. `make test` also builds `-DTWLHD_DEMO_SCENE=1`, `=2`, `=3` and `=4` host
+  binaries that check the recorded primitive type, VTX_16/COLOR/POLYGON_ATTR counts, the exact interpreted vertex-index order and
+  frustum bounds at angles 0, 7680, 15360, 23040 and 30720, plus the per-vertex alpha literals for `SCENE=4`
+  (1.0 / 0.53125 / 0.15625 / 0.0). The scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25.
 
 ## Emulator facts that shaped the harness
 

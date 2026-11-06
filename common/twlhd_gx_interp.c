@@ -53,7 +53,9 @@ typedef struct {
 
     uint32_t mode;          /* 0=projection, 1/2=position, 3=texture (ignored). */
     GxVertexPos cur;        /* last emitted/updated vertex position. */
-    float rgba[4];          /* latched colour. */
+    float rgba[4];          /* latched colour; rgba[3] comes from the alpha. */
+    uint32_t pending_alpha; /* raw 5-bit POLYGON_ATTR alpha, default 31. */
+    uint32_t applied_alpha; /* raw alpha copied from pending at BEGIN_VTXS. */
 
     /* Primitive assembly state. */
     int in_begin;
@@ -287,11 +289,23 @@ static int32_t sign_extend10(uint32_t v) {
     return (int32_t)w;
 }
 
+/*
+ * DS raw alpha -> output vertex alpha.
+ *
+ * TO BE VERIFIED: DeSmuME's blend weight is (alpha+1)/32 (rasterize.cpp:490-494);
+ * hardware/GBATEK were not checked, and alpha/31 is the alternative. Alpha 0
+ * means wireframe on the DS: it is counted as alpha_wireframe_polys, but
+ * outline-only drawing is NOT implemented (the polygon is emitted with 0.0).
+ */
+static float gx_alpha_float(uint32_t alpha) {
+    return alpha == 0u ? 0.0f : (float)(alpha + 1u) / 32.0f;
+}
+
 static void set_rgba_from_rgb555(GxInterp *g, uint32_t value) {
     g->rgba[0] = (float)(value & 0x1Fu) / 31.0f;
     g->rgba[1] = (float)((value >> 5) & 0x1Fu) / 31.0f;
     g->rgba[2] = (float)((value >> 10) & 0x1Fu) / 31.0f;
-    g->rgba[3] = 1.0f;
+    /* rgba[3] is set from the applied POLYGON_ATTR alpha at BEGIN_VTXS. */
 }
 
 static void transform_vertex(GxInterp *g, float x, float y, float z,
@@ -580,9 +594,14 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         set_rgba_from_rgb555(g, params[0]);
         break;
 
+    case TWLHD_V2_CMD_POLYGON_ATTR:
+        /* Latch only; BEGIN_VTXS copies pending -> applied (DeSmuME
+         * gfx3d.cpp:2681, 2729-2731). Bits outside 16..20 are ignored. */
+        g->pending_alpha = (params[0] >> 16) & 0x1Fu;
+        break;
+
     case TWLHD_V2_CMD_NORMAL:
     case TWLHD_V2_CMD_TEX_COORD:
-    case TWLHD_V2_CMD_POLYGON_ATTR:
     case TWLHD_V2_CMD_TEXIMAGE_PARAM:
     case TWLHD_V2_CMD_PLTT_BASE:
     case TWLHD_V2_CMD_DIF_AMB:
@@ -649,6 +668,14 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         g->prim_count = 0u;
         g->prim_tri_index = 0u;
         g->prim_emitted = 0;
+        /* Apply the pending POLYGON_ATTR alpha once per BEGIN group. */
+        g->applied_alpha = g->pending_alpha;
+        g->rgba[3] = gx_alpha_float(g->applied_alpha);
+        if (g->applied_alpha == 0u) {
+            g->stats->alpha_wireframe_polys++;
+        } else if (g->applied_alpha < 31u) {
+            g->stats->alpha_translucent_polys++;
+        }
         break;
 
     case TWLHD_V2_CMD_END_VTXS:
@@ -707,7 +734,9 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
     g.clip_dirty = 1;
     g.mode = 0u;
     g.rgba[0] = g.rgba[1] = g.rgba[2] = 0.0f;
-    g.rgba[3] = 1.0f;
+    g.pending_alpha = 31u; /* no-attr default: opaque. */
+    g.applied_alpha = 31u;
+    g.rgba[3] = gx_alpha_float(g.applied_alpha);
 
     g.proj_stack.capacity = PROJ_STACK_CAP;
     g.pos_stack.capacity = POS_STACK_CAP;
