@@ -856,6 +856,16 @@ static const uint8_t g_scene_index[SCENE_OUT_VERTICES] = {
     0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
     12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23
 };
+static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
+    {-2243, -1424}, {-1443, -1424}, {-1843,  -624},
+    {-1014, -1424}, { -214, -1424}, { -614,  -624},
+    {  214, -1424}, { 1014, -1424}, {  614,  -624},
+    { 1443, -1424}, { 2243, -1424}, { 1843,  -624},
+    {-2243,   624}, {-1443,   624}, {-1843,  1424},
+    {-1014,   624}, { -214,   624}, { -614,  1424},
+    {  214,   624}, { 1014,   624}, {  614,  1424},
+    { 1443,   624}, { 2243,   624}, { 1843,  1424},
+};
 #elif TWLHD_DEMO_SCENE == 2
 #define SCENE_BEGIN_TYPE 2u /* GL_TRIANGLE_STRIP */
 #define SCENE_IN_VERTICES 12u
@@ -865,6 +875,11 @@ static const uint8_t g_scene_index[SCENE_OUT_VERTICES] = {
     0, 1, 2, 2, 1, 3, 2, 3, 4, 4, 3, 5, 4, 5, 6,
     6, 5, 7, 6, 7, 8, 8, 7, 9, 8, 9, 10, 10, 9, 11
 };
+static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
+    {-2560, -1024}, {-2560, 1024}, {-1536, -1024}, {-1536, 1024},
+    { -512, -1024}, { -512, 1024}, {  512, -1024}, {  512, 1024},
+    { 1536, -1024}, { 1536, 1024}, { 2560, -1024}, { 2560, 1024},
+};
 #else
 #define SCENE_BEGIN_TYPE 3u /* GL_QUAD_STRIP */
 #define SCENE_IN_VERTICES 12u
@@ -873,6 +888,11 @@ static const uint8_t g_scene_index[SCENE_OUT_VERTICES] = {
 static const uint8_t g_scene_index[SCENE_OUT_VERTICES] = {
     0, 1, 3, 0, 3, 2, 2, 3, 5, 2, 5, 4, 4, 5, 7,
     4, 7, 6, 6, 7, 9, 6, 9, 8, 8, 9, 11, 8, 11, 10
+};
+static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
+    {-2560, -1024}, {-2560, 1024}, {-1536, -1024}, {-1536, 1024},
+    { -512, -1024}, { -512, 1024}, {  512, -1024}, {  512, 1024},
+    { 1536, -1024}, { 1536, 1024}, { 2560, -1024}, { 2560, 1024},
 };
 #endif
 
@@ -914,6 +934,40 @@ static void test_scene_variant(void) {
         }
 
         CHECK(frame_ordering_ok(g_rec.gxcm, g_rec.gxcm_count));
+
+        /* Position assertion (angle 0). The host math seam deliberately stubs
+         * normalizef32() to a no-op and tanLerp() to 1.0, so the interpreted
+         * clips do not follow the device camera formula: calibration at angle
+         * 0 measured clip[3] == 16 (not 4) and x/w off the literal formula.
+         * Assert the raw VTX_16 words the frame records instead: two per
+         * vertex, the first packing the table's int16 (x, y), the second
+         * z == 0. This is exact (no tolerance) and kills any swapped vertex or
+         * any coordinate change of one 1/256 unit (16 here), which the clip
+         * checks cannot see with the stubbed up axis. */
+        if (a == 0u) {
+            uint32_t vtx_word = 0u;
+            uint32_t e;
+
+            for (e = 0u; e < g_rec.gxcm_count; e++) {
+                uint32_t v;
+                uint32_t expected;
+
+                if (g_rec.gxcm[e].cmd_word != TWLHD_V2_CMD_VTX_16) continue;
+                v = vtx_word / 2u;
+                CHECK(v < SCENE_IN_VERTICES);
+                if (v >= SCENE_IN_VERTICES) break;
+                if ((vtx_word & 1u) == 0u) {
+                    expected =
+                        ((uint32_t)(uint16_t)g_scene_xy[v][1] << 16) |
+                        (uint32_t)(uint16_t)g_scene_xy[v][0];
+                } else {
+                    expected = 0u;
+                }
+                CHECK_EQ_INT(g_rec.gxcm[e].value, expected);
+                vtx_word++;
+            }
+            CHECK_EQ_INT(vtx_word, SCENE_IN_VERTICES * 2u);
+        }
 
         CHECK_EQ_INT(twlhd_gx_rec_serialize(&g_rec, g_out, sizeof g_out,
                                             &size),
