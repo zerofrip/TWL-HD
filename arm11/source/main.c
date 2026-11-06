@@ -23,6 +23,11 @@
 #include "twlhd_gx_interp.h"
 #include "twlhd_vertex_convert.h"
 #include "twlhd_seq.h"
+#include "twlhd_diag_config.h"
+
+#ifndef TWLHD_BUILD_ID
+#define TWLHD_BUILD_ID "unknown"
+#endif
 
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
@@ -246,7 +251,9 @@ static int load_sd_frame(const char *path,
  * | line                  | format                                  | worst-case string                         | cols |
  * |-----------------------|-----------------------------------------|-------------------------------------------|------|
  * | title                 | "TWL-HD Phase 4B/4C renderer\n"         | TWL-HD Phase 4B/4C renderer               | 27   |
- * | status banner         | "HARDWARE UNVERIFIED (build-only)\n\n"   | HARDWARE UNVERIFIED (build-only)          | 32   |
+ * | status banner         | "HARDWARE UNVERIFIED (build-only)\n"     | HARDWARE UNVERIFIED (build-only)          | 32   |
+ * | build id              | "build: %s blend=explicit\n"             | build: 0a237ef-diag blend=explicit        | 36   |
+ * | diag mode             | "diag: %s\n"                             | diag: 2 const-alpha-0.5                   | 23   |
  * | seq status            | "seq %03u/%03u loop %lu\n"               | seq 063/064 loop 9999                     | 21   |
  * | mode                  | "mode:   %s\n"                          | mode:   SD FRAME (DEBUG CAMERA)           | 31   |
  * | mode (builtin)        | "mode:   %s\n"                          | mode:   BUILT-IN TRIANGLE                 | 25   |
@@ -271,7 +278,9 @@ static int load_sd_frame(const char *path,
 static void update_console(void) {
     consoleClear();
     printf("TWL-HD Phase 4B/4C renderer\n");
-    printf("HARDWARE UNVERIFIED (build-only)\n\n");
+    printf("HARDWARE UNVERIFIED (build-only)\n");
+    printf("build: %s blend=explicit\n", TWLHD_BUILD_ID);
+    printf("diag: %s\n", twlhd_diag_config(renderer_get_diag_mode())->name);
     if (g_seq_on) {
         printf("seq %03u/%03u loop %lu\n",
                (unsigned)clamp_4digit(g_seq_state.displayed),
@@ -429,6 +438,11 @@ int main(void) {
                     snprintf(g_status, sizeof g_status, "seq on");
                 }
             }
+            update_console();
+        }
+
+        if (keys & KEY_B) {
+            renderer_set_diag_mode(twlhd_diag_next(renderer_get_diag_mode()));
             update_console();
         }
 
