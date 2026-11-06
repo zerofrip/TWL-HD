@@ -374,3 +374,50 @@ emulator/oracle at photo level only (not pixel-exact).
 **Not covered:** large frames (many vertices) on the clip path; runs much longer than ~1 minute;
 captures other than the demo cube; DS-side viewport +1/y1-wrap; textures/lighting/alpha (5B, not
 approved); T6/T7 and the X-restart/X-freeze steps have no photos.
+
+### Run 10 — Phase 5A large frames on the clip path, 100 and 170 cubes (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 15 photographs kept **outside** the repository in the owner's staging
+directory (`evidence/run10_01..15`); report dated 2026-11-06 ("全テスト正常動作正常終了です").
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-seq.3dsx` (same bytes as Run 9) | `b7b14cff7f4783ca…` |
+| v2 frame `twlhd_frame_v2_c100.bin` (CUBES option, AUTODUMP_FRAME=10) | `8e53b4b3…` |
+| v2 frame `twlhd_frame_v2_c170.bin` (CUBES option, AUTODUMP_FRAME=10) | `4904e26d…` |
+
+Build: unchanged ARM11 `twlhd-arm11-seq.3dsx` (SHA-256 `b7b14cff7f4783ca…`, same bytes as
+Run 9). Frames are DeSmuME captures of our own homebrew demo built with the CUBES option
+(main @ `1c36d06`) at AUTODUMP_FRAME=10: `twlhd_frame_v2_c100.bin` (71688 B, 3600 output
+vertices, 1200 tris, gxcm 8941) and `twlhd_frame_v2_c170.bin` (121528 B, 6120 vertices,
+2040 tris, gxcm 15171). 6120 is the largest size the ARM11 clip scene accepts (buffer
+capacity 6144).
+
+Results:
+- **T1 — single cube regression:** `render verts: 36`, 12 tris. OK (photo).
+- **T2 — 100 cubes:** `SD: v2 loaded, 3600 verts -> 1200 tris`; grid with 6 rows, last row
+  15 cubes, fully visible. OK (photo).
+- **T3 — 170 cubes:** `SD: v2 loaded, 6120 verts -> 2040 tris`; 17×10 grid fully visible,
+  edge cubes not cut off. Y (built-in triangle) then A again OK. (photo)
+- **T4 — restart + A:** same 170-cube picture. OK (photo).
+- **T5 — sequence `seq_000` (c100) / `seq_001` (c170):** alternates between the two grids,
+  `seq: wrapped`; photos at loop 5, 7, 8, 9, 10 and at loop 43 and 52; no freeze, no stray
+  triangles, no POWER-hold reported. Loop 52 at the last photo (~35 s inferred from the loop
+  counter; elapsed time was not measured). (photos)
+
+Observations, not failures:
+- One transition photo (loop 8) shows faint ghost rows of the other grid (consistent with the
+  camera exposure spanning two frames; unverified).
+- Bottom-screen text is partly overwritten in two photos (console redraw while photographed;
+  not investigated).
+
+**Conclusion:** HARDWARE OBSERVED: no GPU hang for a 6120-vertex scene, and for alternating
+3600/6120-vertex re-uploads over ~35 s. Picture correctness judged from photos only (grid
+structure/counts); no pixel-exact comparison with the oracle.
+
+**Not covered / still open:** runs much longer than ~1 min with large frames; captures other
+than our demo cube; DS-side viewport +1/y1-wrap; the unexplained DeSmuME failures at
+AUTODUMP_FRAME=120 (see `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B,
+not approved).
