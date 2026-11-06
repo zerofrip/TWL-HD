@@ -107,15 +107,18 @@ they do not replace the real run.
   recorder entries, and below the 1 MiB v2 file size. `make test` also builds `-DTWLHD_DEMO_CUBES=170` and `=2` host binaries that
   check the recorded VTX_16 count and the interpreter's vertex output against fixed literals.
 - `SCENE=<n>` replaces the cube with a flat primitive scene for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
-  `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles) and
-  `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles). The value must be empty, `0` or a decimal integer in 1..3;
-  anything else is a build error, and leaving it unset (or `0`) keeps the normal ROM unchanged. The `<n>` suffix composes with the
-  other options, e.g. `make -C arm9v2 AUTODUMP_FRAME=120 SCENE=2` builds `arm9v2/twlhd-arm9v2-autodump-s2.nds` in
-  `build-autodump-s2/`. `SCENE` > 0 together with `CUBES` > 1 is rejected by `demo_frame.cpp` (`#error`). Changing `SCENE` without
-  `rm -rf` rebuilds cleanly because it is part of `<BUILD>/flags.stamp`, and `make clean` removes every `-s<N>` build directory and
-  output file. `make test` also builds `-DTWLHD_DEMO_SCENE=1`, `=2` and `=3` host binaries that check the recorded primitive type,
-  VTX_16/COLOR counts and the exact interpreted vertex-index order and frustum bounds at angles 0, 7680, 15360, 23040 and 30720
-  (the scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25).
+  `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles),
+  `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles) and `SCENE=4` four flat quads, one quad-list each, with a
+  per-quad `POLYGON_ATTR` alpha of 31, 16, 4 and 0 (16 input vertices / 8 triangles; two translucent and one wireframe BEGIN group,
+  alpha 31 counted as neither). The value must be empty, `0` or a decimal integer in 1..4; anything else is a build error, and
+  leaving it unset (or `0`) keeps the normal ROM unchanged. The `<n>` suffix composes with the other options, e.g.
+  `make -C arm9v2 AUTODUMP_FRAME=120 SCENE=2` builds `arm9v2/twlhd-arm9v2-autodump-s2.nds` in `build-autodump-s2/`; `SCENE=4`
+  produces `twlhd-arm9v2-s4.nds` in `build-s4/`. `SCENE` > 0 together with `CUBES` > 1 is rejected by `demo_frame.cpp`
+  (`#error`). Changing `SCENE` without `rm -rf` rebuilds cleanly because it is part of `<BUILD>/flags.stamp`, and `make clean`
+  removes every `-s<N>` build directory and output file. `make test` also builds `-DTWLHD_DEMO_SCENE=1`, `=2`, `=3` and `=4` host
+  binaries that check the recorded primitive type, VTX_16/COLOR/POLYGON_ATTR counts, the exact interpreted vertex-index order and
+  frustum bounds at angles 0, 7680, 15360, 23040 and 30720, plus the per-vertex alpha literals for `SCENE=4`
+  (1.0 / 0.53125 / 0.15625 / 0.0). The scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25.
 
 ## Emulator facts that shaped the harness
 
@@ -141,6 +144,10 @@ These are observations from earlier runs with the build above (measured on this 
   is load-bearing; keep it. An earlier note that python3 "does not ignore SIGPIPE here" was wrong: it does, and `stdbuf` hides it.
 - Input injection is not used: `--play-movie` is ignored by `desmume-cli` (the GTK/GTK2/Windows frontends do execute it), so the demo is
   built with an auto-dump frame instead of waiting for a key.
+
+## Alpha blending of vertex alpha (EMULATOR, SCENE=4)
+
+EMULATOR: Tanuki3DS, scene4 capture (SCENE=4, AUTODUMP_FRAME=10; DeSmuME capture 1128 B, sha256 prefix 2decd74dead1044f; four flat quads alpha 31/16/4/0 = interpreter vertex alpha 1.0 / 0.53125 / 0.15625 / 0.0, colours red/green/blue/white). OLD ARM11 build (b7b14cff…, interpreter alpha always 1.0) vs NEW ARM11 build (phase5b/alpha-cpu, NO ARM11 source change, only shared interpreter changed): 15220 of 1440015 screenshot bytes differ. Dominant colours old -> new: blue quad (0,0,240) 2088 px -> (0,0,48); green quad (0,240,0) -> (0,128,0); white quad (240,240,240) 1299 px -> gone (background). I.e. the existing renderer ALREADY alpha-blends vertex alpha with its default (citro3d) blend state; the exact blend state was never set explicitly by our code (arm11/source/renderer.c sets cull/depth/TexEnv explicitly, not blending). Frames whose alpha is 1.0 (every existing capture) are unchanged: gx_interp_cli vertex output is identical on main and on this branch for the Run 7-13 frames (only the stats line differs: ignored_no_effect one lower because POLYGON_ATTR is now processed). HARDWARE UNVERIFIED (needs an approved run). Depth/draw-order semantics of DS translucent polygons (DESMUME: depth write only if TranslucentDepthWrite bit, sort order) are NOT implemented, so overlapping translucent polygons may differ from DS.
 
 ## Limits
 

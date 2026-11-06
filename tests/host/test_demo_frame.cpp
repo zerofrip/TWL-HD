@@ -903,7 +903,7 @@ static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
     { -512, -1024}, { -512, 1024}, {  512, -1024}, {  512, 1024},
     { 1536, -1024}, { 1536, 1024}, { 2560, -1024}, { 2560, 1024},
 };
-#else
+#elif TWLHD_DEMO_SCENE == 3
 #define SCENE_BEGIN_TYPE 3u /* GL_QUAD_STRIP */
 #define SCENE_IN_VERTICES 12u
 #define SCENE_OUT_VERTICES 30u
@@ -916,6 +916,26 @@ static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
     {-2560, -1024}, {-2560, 1024}, {-1536, -1024}, {-1536, 1024},
     { -512, -1024}, { -512, 1024}, {  512, -1024}, {  512, 1024},
     { 1536, -1024}, { 1536, 1024}, { 2560, -1024}, { 2560, 1024},
+};
+#else
+#define SCENE_BEGIN_TYPE 1u /* GL_QUADS */
+#define SCENE_IN_VERTICES 16u
+#define SCENE_OUT_VERTICES 24u
+#define SCENE_QUADS_SPLIT 4u
+static const int16_t g_scene_xy[SCENE_IN_VERTICES][2] = {
+    {-2400, -1600}, { -400, -1600}, { -400,  -200}, {-2400,  -200},
+    {  400, -1600}, { 2400, -1600}, { 2400,  -200}, {  400,  -200},
+    {-2400,   200}, { -400,   200}, { -400,  1600}, {-2400,  1600},
+    {  400,   200}, { 2400,   200}, { 2400,  1600}, {  400,  1600},
+};
+/* Literal alpha per output vertex: the four BEGIN groups carry POLYGON_ATTR
+ * alpha 31, 16, 4 and 0, so each quad's six output vertices share one value.
+ * Hand-written from (a+1)/32, not derived from the production function. */
+static const float g_scene_alpha[SCENE_OUT_VERTICES] = {
+    1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.0f,
+    0.53125f, 0.53125f, 0.53125f, 0.53125f, 0.53125f, 0.53125f,
+    0.15625f, 0.15625f, 0.15625f, 0.15625f, 0.15625f, 0.15625f,
+    0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
 };
 #endif
 
@@ -933,7 +953,9 @@ static void test_scene_variant(void) {
 
     for (a = 0u; a < sizeof angles / sizeof angles[0]; a++) {
         uint32_t begin;
+#if TWLHD_DEMO_SCENE != 4
         uint32_t recovered;
+#endif
 
         mock_reset();
         twlhd_gx_rec_init(&g_rec);
@@ -948,6 +970,10 @@ static void test_scene_variant(void) {
         CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_VTX_16),
                      SCENE_IN_VERTICES * 2u);
         CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_COLOR), SCENE_IN_VERTICES);
+#if TWLHD_DEMO_SCENE == 4
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_BEGIN_VTXS), 4u);
+        CHECK_EQ_INT(count_cmd_word(TWLHD_V2_CMD_POLYGON_ATTR), 4u);
+#endif
 
         /* The scene path records exactly one glScalef32 (2,2,2), which is
          * three consecutive MTX_SCALE words each inttof32(2) == 2 * 4096 ==
@@ -1025,14 +1051,25 @@ static void test_scene_variant(void) {
         CHECK_EQ_INT(stats.stack_errors, 0u);
         CHECK_EQ_INT(stats.geometry_incomplete, 0u);
         CHECK_EQ_INT(stats.dropped_incomplete, 0u);
+#if TWLHD_DEMO_SCENE == 4
+        CHECK_EQ_INT(stats.alpha_translucent_polys, 2u);
+        CHECK_EQ_INT(stats.alpha_wireframe_polys, 1u);
+#endif
 
         if (out_vertices == SCENE_OUT_VERTICES) {
             for (i = 0u; i < out_vertices; i++) {
                 double w = fabs((double)g_scene_out[i].clip[3]);
 
+#if TWLHD_DEMO_SCENE == 4
+                /* Exact literals: 0.53125 = 17/32 and 0.15625 = 5/32 are
+                 * representable f32s, so this kills alpha-scale mutations and
+                 * any swapped per-quad alpha/vertex order. */
+                CHECK_NEAR(g_scene_out[i].rgba[3], g_scene_alpha[i], 0.0f);
+#else
                 recovered = (uint32_t)(int)(g_scene_out[i].rgba[0] * 31.0f +
                                             0.5f) - 1u;
                 CHECK_EQ_INT(recovered, g_scene_index[i]);
+#endif
 
                 CHECK(fabs((double)g_scene_out[i].clip[0]) <=
                       w * TWLHD_TEST_FRUSTUM_MARGIN);

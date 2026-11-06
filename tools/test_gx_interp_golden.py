@@ -6,8 +6,10 @@ compare against the independent Python oracle.
 """
 
 import os
+import struct
 import subprocess
 import sys
+import tempfile
 import unittest
 
 import gx_interp_oracle
@@ -21,6 +23,16 @@ CLI = os.path.join(
     os.path.dirname(__file__), "..", "tests", "host", "build", "gx_interp_cli"
 )
 
+# v2 command ids (common/twlhd_v2_format.h) used by the alpha streams.
+CMD_VTX_16 = 0x23
+CMD_POLYGON_ATTR = 0x29
+CMD_BEGIN_VTXS = 0x40
+CMD_END_VTXS = 0x41
+CMD_SWAP_BUFFERS = 0x50
+
+GXCM = int.from_bytes(b"GXCM", "little")
+META = int.from_bytes(b"META", "little")
+
 CLIP_TOL = 0.02
 # Tolerance explanation: the oracle uses double-precision Python math, while
 # the DS/libnds build the perspective, look-at and rotation matrices from
@@ -28,6 +40,38 @@ CLIP_TOL = 0.02
 # trigonometric and fractional constants introduces small rounding differences.
 # The observed maximum clip-space deviation is ~0.0073, so 0.02 is a safe
 # upper bound.
+
+
+def _vtx16(x, y):
+    """Two GXCM entries for one VTX_16 command (x | y << 16, z = 0)."""
+    return [
+        (CMD_VTX_16, ((y & 0xFFFF) << 16) | (x & 0xFFFF)),
+        (CMD_VTX_16, 0),
+    ]
+
+
+def _triangle_group(alpha=None):
+    """One BEGIN..END triangle list carrying 3 VTX_16 vertices."""
+    entries = []
+    if alpha is not None:
+        entries.append((CMD_POLYGON_ATTR, alpha << 16))
+    entries.append((CMD_BEGIN_VTXS, 0))
+    for x, y in ((0, 0), (0x1000, 0), (0, 0x1000)):
+        entries.extend(_vtx16(x, y))
+    entries.append((CMD_END_VTXS, 0))
+    return entries
+
+
+def build_v2(entries):
+    """Minimal parser-clean v2 file: 32-byte header, GXCM, META(16 bytes)."""
+    gxcm = b"".join(struct.pack("<II", cmd, value) for cmd, value in entries)
+    total = 32 + 16 + len(gxcm) + 16 + 16
+    header = struct.pack("<8I", 2, 32, total, 1, 1, 2, 0, 0)
+    gxcm_chunk = struct.pack("<4I", GXCM, len(gxcm), 1, 0) + gxcm
+    meta_chunk = struct.pack("<4I", META, 16, 0, 0) + struct.pack(
+        "<4I", 2, 0, 0, 0
+    )
+    return header + gxcm_chunk + meta_chunk
 
 
 class GxInterpGoldenTest(unittest.TestCase):
@@ -107,6 +151,77 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertIn("dropped_incomplete=0", stats_line)
         self.assertIn("stack_errors=0", stats_line)
         self.assertIn("geometry_incomplete=0", stats_line)
+
+    def _run_cli(self, data):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "alpha_stream_v2.bin")
+            with open(path, "wb") as handle:
+                handle.write(data)
+            result = subprocess.run(
+                [CLI, path], capture_output=True, text=True, check=True
+            )
+        lines = result.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "result=OK")
+        vertices = []
+        for line in lines[2:]:
+            if line.startswith("stats "):
+                break
+            parts = line.split()
+            self.assertEqual(len(parts), 9)
+            vertices.append([float(x) for x in parts[1:]])
+        return vertices
+
+    def test_oracle_alpha_table(self):
+        # Hand-written table, independent of the oracle implementation: 1..31
+        # is (alpha + 1) / 32 and 0 is the DS wireframe value.
+        expected = {
+            0: 0.0,
+            1: 0.0625,
+            4: 0.15625,
+            16: 0.53125,
+            31: 1.0,
+        }
+        for alpha, value in expected.items():
+            self.assertEqual(gx_interp_oracle.alpha_to_float(alpha), value)
+
+    def test_alpha_streams(self):
+        for alpha in (31, 16, 4, 0):
+            entries = _triangle_group(alpha)
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            vertices = self._run_cli(build_v2(entries))
+            self.assertEqual(len(vertices), 3)
+            expected = gx_interp_oracle.alpha_to_float(alpha)
+            for vertex in vertices:
+                self.assertEqual(vertex[7], expected)
+
+    def test_alpha_pending_until_begin(self):
+        entries = [(CMD_POLYGON_ATTR, 31 << 16), (CMD_BEGIN_VTXS, 0)]
+        for x, y in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(x, y))
+        # Inside BEGIN..END: applies only at the NEXT BEGIN.
+        entries.append((CMD_POLYGON_ATTR, 4 << 16))
+        for x, y in ((0x1000, 0x1000), (0x800, 0x800), (0x400, 0x400)):
+            entries.extend(_vtx16(x, y))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for x, y in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(x, y))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+
+        vertices = self._run_cli(build_v2(entries))
+        self.assertEqual(len(vertices), 9)
+        for vertex in vertices[:6]:
+            self.assertEqual(vertex[7], 1.0)
+        for vertex in vertices[6:]:
+            self.assertEqual(vertex[7], gx_interp_oracle.alpha_to_float(4))
+
+    def test_alpha_no_attr_stream(self):
+        entries = _triangle_group()
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        vertices = self._run_cli(build_v2(entries))
+        self.assertEqual(len(vertices), 3)
+        for vertex in vertices:
+            self.assertEqual(vertex[7], 1.0)
 
 
 if __name__ == "__main__":

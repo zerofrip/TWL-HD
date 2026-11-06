@@ -1,6 +1,7 @@
 # Phase 5B — lighting, POLYGON_ATTR (alpha/cull), textures (PLAN ONLY)
 
 STATUS: PLAN — stage order approved by the owner (2026-11-06); NO stage is approved for implementation yet; each stage, each format extension, each stride change and each hardware run still needs its own approval.
+5B-0a (CPU alpha) is implemented as **BUILD/UNIT** plus an **EMULATOR** observation (see §8); the ARM11 binary changes (shared interpreter) but behaves identically for alpha-1.0 frames.
 Equations written here are placeholders marked **TO BE
 VERIFIED**; they are not facts.
 
@@ -219,3 +220,31 @@ label.
 a) Stage 5B-0 implementation task: interpreter alpha/cull latch + UNIT tests + test-ROM scene generation via the pipeline.
 b) GBATEK/DeSmuME verification of POLYGON_ATTR bit layout as a research task before any equation is used.
 c) Results of the DS POLYGON_ATTR/primitive-assembly research: see docs/DS_GX_RESEARCH.md.
+
+### 5B-0a (CPU alpha) — BUILD/UNIT + EMULATOR observation
+
+Status: interpreter-side alpha only. POLYGON_ATTR (cmd `0x29`) now latches bits
+16..20 into a pending raw alpha and applies it at the next BEGIN_VTXS, matching
+DeSmuME's latch (`gfx3d.cpp:2681`, `2729-2731`). The raw value is converted by one
+named function; `alpha 0 -> 0.0` and `1..31 -> (alpha + 1) / 32.0f`. **TO BE
+VERIFIED:** the `(alpha + 1) / 32` blend weight comes from DeSmuME
+(`rasterize.cpp:490-494`); hardware/GBATEK were not consulted and `/31` is the
+alternative for non-zero alphas.
+
+`TwlhdGxStats` gained `alpha_translucent_polys` (applied raw alpha 1..30) and
+`alpha_wireframe_polys` (applied raw alpha 0), one increment per BEGIN group;
+alpha 31 and the no-attr default never increment.
+
+NOT implemented here:
+- no explicit blending state or GPU change in our code (arm11/source/renderer.c sets cull/depth/TexEnv, not blending); EMULATOR: the default (citro3d) blend state already alpha-blends vertex alpha, so alpha<1 frames differ (scene4 capture 1128 B, sha256 prefix 2decd74dead1044f; old vs new ARM11 build differ 15220 of 1440015 bytes; blue (0,0,240)->(0,0,48), green (0,240,0)->(0,128,0), white quad gone). alpha=1.0 frames (Runs 7-13) are unchanged; only the stats line differs (ignored_no_effect one lower, POLYGON_ATTR now processed). HARDWARE UNVERIFIED (needs an approved run).
+- depth/draw-order semantics of DS translucent polygons (DESMUME: depth write only if TranslucentDepthWrite bit, sort order) are NOT implemented; overlapping translucent polygons may differ from DS.
+- 5B-0b (explicit blend state in the renderer) must be re-scoped after a hardware observation: it may reduce to setting the blend state explicitly (as for cull/depth/TexEnv) instead of relying on the default.
+- no cull mode (bits 6-7 are parsed past, not applied);
+- alpha 0 is counted as wireframe but outline-only drawing is not rendered (the
+  polygon reaches the output with alpha 0.0 and looks like an ordinary colour);
+- the alpha scale above is marked TO BE VERIFIED, not a hardware fact.
+
+Host coverage: literal C unit tests for 31/16/4/1/0, pending-until-BEGIN, two
+BEGIN groups, no-attr default, non-alpha bits, RGB isolation; a SCENE=4 host
+variant with per-quad alphas 31/16/4/0; and Python golden streams checked against
+an independently written oracle.
