@@ -154,13 +154,13 @@ EMULATOR: DeSmuME 0.9.14, interpreter, JIT off by default. Measured by the super
 
 AF=10 captures parse OK (entries: 100=8941, 169=15082, 170=15171; rsta=4 each); n=64 also OK at AF=60 (46056 B). tests/host/build/gx_interp_cli reports result=OK on the 100/169/170 captures. The recorder overflow limit (16384 entries) and ARM11 clip buffer (6144 output vertices) are not exceeded at n=170 (15171 entries; 6120 output vertices).
 
-gdb (arm9gdb) on the n=64 AF=120 ROM reached the reset vector (0x01FF853C, bkpt) shortly after twlhd_gx_rec_serialize returned; twlhd_v2_parse returned ERR_GXCM_GROUP (17) on the in-ROM buffer in one breakpointed run while both host parsers accept the same bytes; adding breakpoints changes behaviour. Cause: unexplained; follow-up item.
+gdb (arm9gdb) on the n=64 AF=120 ROM (EMULATOR): the in-ROM v2 buffer at 0x0201c890 (46056 B, 5737 GXCM + 4 RSTA) dumped at the parse call and at the parse-error exit is byte-valid (`tools/twlhd_v2_dump.py validate`: result=OK, entries=5737, rsta=4 for both); entries 2957..2964 are well-formed VTX_16 pairs. Yet twlhd_v2_write's self-check call of twlhd_v2_parse returned ERR_GXCM_GROUP (17) at i=2959, j=2960, count=5737 (breakpoint at the group-failure return). Masking interrupts did not prevent it: CPSR I-bit set at dump entry, and separately IME=0, still returned 17, then control reached the reset vector (0x01FF853C). Adding more breakpoints inside the parse suppressed the fault. The bytes are valid but the ROM-side check fails only for this AUTODUMP_FRAME value; this is consistent with an emulator-side or timing-dependent cause but is not shown to be one. Not a finding about the ARM11 parser, which reads these files correctly on the 3DS (Runs 7-11) and on the host. Root cause UNEXPLAINED.
 
 AF sweep (CUBES=64, EMULATOR): AF = 10, 20, 40, 60, 80, 100, 110, 119, 121, 140 each wrote 46056 B (parsers OK for 10 and 60; the rest not run through validate_with_parsers.sh); AF = 120 no capture (ROM fault). The failure is not "any AF >= some frame" and not a run-length effect: AF=119 and AF=121 pass, only AF=120 fails among those measured. Root cause UNEXPLAINED.
 
 Host mock (tests/host dump_demo_frame, -DTWLHD_DEMO_CUBES=64 and 100, angles 2560, 30719, 30720, 30721) wrote 5737 (resp. 8941) GXCM + 4 RSTA entries with no error: the mock does not reproduce a malformed stream. It replaces libnds, so this does not rule out a device-side or emulator-side cause; the angle used by the ROM at frame 120 was not read (the list above is a guess, not evidence). Root cause UNEXPLAINED.
 
-Follow-up (open): read the in-ROM recorder buffer at the failing frame and compare it with the AF=119/121 streams.
+Follow-up (open): explain why the ROM-side parse fails only for AF=120 despite a byte-valid buffer (interrupt masking and extra breakpoints already tested); not a finding about the ARM11 parser.
 
 Default builds (CUBES unset) are unaffected: make emu-validate PASS 124 GXCM + 4 RSTA at angle 61440. EMULATOR evidence only; not HARDWARE VERIFIED.
 
