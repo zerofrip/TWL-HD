@@ -114,7 +114,8 @@ they do not replace the real run.
   `build-autodump-s2/`. `SCENE` > 0 together with `CUBES` > 1 is rejected by `demo_frame.cpp` (`#error`). Changing `SCENE` without
   `rm -rf` rebuilds cleanly because it is part of `<BUILD>/flags.stamp`, and `make clean` removes every `-s<N>` build directory and
   output file. `make test` also builds `-DTWLHD_DEMO_SCENE=1`, `=2` and `=3` host binaries that check the recorded primitive type,
-  VTX_16/COLOR counts and the exact interpreted vertex-index order and frustum bounds at angles 0, 7680 and 30720.
+  VTX_16/COLOR counts and the exact interpreted vertex-index order and frustum bounds at angles 0, 7680, 15360, 23040 and 30720
+  (the scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25).
 
 ## Emulator facts that shaped the harness
 

@@ -114,9 +114,10 @@ static void draw_cube(void) {
 #endif
 
 #if TWLHD_DEMO_SCENE
-/* Flat (z = 0) shapes well inside the unit cube, so the cube path's
- * stays-in-view argument applies unchanged. Every vertex gets a unique red
- * channel (i + 1 in RGB15) so interpreted output maps back to input order. */
+/* Flat (z = 0) shapes drawn at 2x scale, so scaled vertices reach |x| = 1.25;
+ * the frames stay in view by the hand-derived frustum bound documented in the
+ * host test. Every vertex gets a unique red channel (i + 1 in RGB15) so
+ * interpreted output maps back to input order. */
 #if TWLHD_DEMO_SCENE == 1
 static const int16_t scene_tri_vertices[24][2] = {
     {-2243, -1424}, {-1443, -1424}, {-1843, -624},
@@ -190,7 +191,7 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glRotateXi((int)angle);
     glRotateYi((int)angle);
     glTranslatef32(0, 0, 0);
-    glScalef32(inttof32(1), inttof32(1), inttof32(1));
+    glScalef32(inttof32(2), inttof32(2), inttof32(2));
 
     glPushMatrix();
     glPolyFmt(POLY_ALPHA(31));
