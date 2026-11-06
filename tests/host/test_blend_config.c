@@ -133,7 +133,7 @@ static void test_renderer_call_sites(void) {
 
     CHECK_EQ_INT(count_substr(buf, "C3D_AlphaBlend("), 2);
     CHECK_EQ_INT(count_substr(buf, "C3D_AlphaTest("), 2);
-    CHECK_EQ_INT(count_substr(buf, "twlhd_blend_config_alpha("), 1);
+    CHECK_EQ_INT(count_substr(buf, "twlhd_blend_config_alpha("), 0);
     CHECK_EQ_INT(count_substr(buf, "twlhd_blend_config_opaque("), 1);
     CHECK_EQ_INT(count_substr(buf, "twlhd_alpha_test_disabled("), 2);
 
@@ -148,7 +148,7 @@ static void test_renderer_call_sites(void) {
             debug_body, sizeof(debug_body));
 
         if (clip != NULL) {
-            CHECK_EQ_INT(count_substr(clip, "twlhd_blend_config_alpha("), 1);
+            CHECK_EQ_INT(count_substr(clip, "twlhd_blend_config_alpha("), 0);
             CHECK_EQ_INT(count_substr(clip, "twlhd_blend_config_opaque("), 0);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaBlend("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaTest("), 1);
