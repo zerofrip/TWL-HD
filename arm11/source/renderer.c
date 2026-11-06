@@ -23,6 +23,7 @@
 
 #include "renderer.h"
 #include "twlhd_attr_pad.h"
+#include "twlhd_blend_config.h"
 #include "twlhd_clipfix.h"
 #include "twlhd_geometry_slots.h"
 
@@ -918,6 +919,18 @@ static void draw_debug_internal(void) {
     renderer_trace("FrameDrawOn");
     C3D_FrameDrawOn(g_renderer.target);
 
+    if (!(g_debug_flags & TWLHD_RDBG_NO_STATE)) {
+        /* Citro3d render state persists across frames and between modes.
+         * Set the DEBUG path to OPAQUE explicitly so a prior clip frame's
+         * alpha-blend config cannot leak in (and vice-versa: the clip path
+         * also sets its blend state unconditionally below). */
+        TwlhdBlendConfig blend = twlhd_blend_config_opaque();
+        TwlhdAlphaTestConfig at = twlhd_alpha_test_disabled();
+        C3D_AlphaBlend(blend.colorEq, blend.alphaEq, blend.srcColor,
+                       blend.dstColor, blend.srcAlpha, blend.dstAlpha);
+        C3D_AlphaTest(at.enable, at.func, at.ref);
+    }
+
     if (!(g_debug_flags & TWLHD_RDBG_NO_BIND)) {
         renderer_trace("BindProgram");
         C3D_BindProgram(&g_renderer.program);
@@ -993,10 +1006,19 @@ static void draw_clip_internal(int committed) {
 
     C3D_FrameDrawOn(g_renderer.target);
 
-    /* HARD RULE: set render state explicitly on every clip frame;
-     * never rely on the DEBUG path having run first. */
+    /* HARD RULE: set render state explicitly on every clip frame — depth,
+     * cull, blend, alpha test, TexEnv; never rely on the DEBUG path having
+     * run first or on citro3d defaults (Run 14: default blend does not blend
+     * on the console — docs/HARDWARE_TEST_PROCEDURE_3DS.md Run 14). */
     C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
     C3D_CullFace(GPU_CULL_NONE);
+    {
+        TwlhdBlendConfig blend = twlhd_blend_config_alpha();
+        TwlhdAlphaTestConfig at = twlhd_alpha_test_disabled();
+        C3D_AlphaBlend(blend.colorEq, blend.alphaEq, blend.srcColor,
+                       blend.dstColor, blend.srcAlpha, blend.dstAlpha);
+        C3D_AlphaTest(at.enable, at.func, at.ref);
+    }
 
     /* TexEnv slot 0: pass primary vertex colour through unchanged (same as DEBUG path). */
     {

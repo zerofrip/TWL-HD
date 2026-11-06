@@ -1,6 +1,6 @@
 # Phase 5B — lighting, POLYGON_ATTR (alpha/cull), textures (PLAN ONLY)
 
-STATUS: PLAN — stage order approved by the owner (2026-11-06); NO stage is approved for implementation yet; each stage, each format extension, each stride change and each hardware run still needs its own approval.
+STATUS: 5B-0b implemented BUILD/UNIT only as of 2026-11-07 (owner approval after Run 14); EMULATOR and HARDWARE still UNVERIFIED.
 5B-0a (CPU alpha) is implemented as **BUILD/UNIT** plus an **EMULATOR** observation and a **HARDWARE** observation (Run 14, see §8 and `docs/HARDWARE_TEST_PROCEDURE_3DS.md` section 12): alpha-1.0 frames are unchanged on hardware; alpha<1 frames do NOT blend on the console with the default blend state. The ARM11 binary changes (shared interpreter) but behaves identically for alpha-1.0 frames.
 Equations written here are placeholders marked **TO BE
 VERIFIED**; they are not facts.
@@ -248,3 +248,31 @@ Host coverage: literal C unit tests for 31/16/4/1/0, pending-until-BEGIN, two
 BEGIN groups, no-attr default, non-alpha bits, RGB isolation; a SCENE=4 host
 variant with per-quad alphas 31/16/4/0; and Python golden streams checked against
 an independently written oracle.
+
+### 5B-0b (explicit blend state) — BUILD/UNIT only
+
+Status: implemented BUILD/UNIT only as of 2026-11-07 (owner approval after Run 14);
+HARDWARE UNVERIFIED until Run 15.
+
+What was implemented:
+- New header-only, pure-data carrier `arm11/include/twlhd_blend_config.h` with
+  two blend configs (standard alpha blend and opaque) and one disabled alpha-test
+  config.
+- `arm11/source/renderer.c` now calls `C3D_AlphaBlend` + `C3D_AlphaTest` in both
+  render paths: alpha blend in the clip-space path, opaque in the DEBUG path,
+  with alpha test explicitly disabled in both.
+- The HARD RULE comment now names depth, cull, blend, alpha test, and TexEnv.
+
+What it fixes:
+- Alpha < 1.0 is now requested to blend using the standard PICA translucent
+  equation (`src*srcAlpha + dst*(1-srcAlpha)`).
+- Alpha 0.0 under normal alpha blending produces `out = dst` (the fragment is
+  not visible), which is the interim decision for the alpha-0 / wireframe case.
+
+What stays UNVERIFIED:
+- The `(alpha + 1) / 32` scale (`common/twlhd_gx_interp.c:301`).
+- DS translucent-polygon depth/draw-order semantics: depth test stays
+  `GPU_GREATER` + `GPU_WRITE_ALL`.
+- Wireframe/outline-only drawing is still NOT implemented.
+- Everything visual: this is HARDWARE UNVERIFIED until an approved run; Run 15
+  approval is still required.
