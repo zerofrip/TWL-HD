@@ -72,7 +72,10 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_demo_frame \
 	tests/host/build/test_demo_frame_vp \
 	tests/host/build/test_demo_frame_c170 \
-	tests/host/build/test_demo_frame_c2
+	tests/host/build/test_demo_frame_c2 \
+	tests/host/build/test_demo_frame_s1 \
+	tests/host/build/test_demo_frame_s2 \
+	tests/host/build/test_demo_frame_s3
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -226,6 +229,57 @@ tests/host/build/test_demo_frame_c2: tests/host/test_demo_frame.cpp \
 	fi
 	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_CUBES=2 \
 		-DTWLHD_TEST_EXPECT_CUBES=2 -o $@ $< $(HOST_V2_COMMON)
+
+# Same frame body compiled with each primitive-scene build, so the test checks
+# the recorded primitive type/counts and the interpreter output (BUILD/UNIT
+# only).
+tests/host/build/test_demo_frame_s1: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the scene test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the scene test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=1 \
+		-DTWLHD_TEST_EXPECT_SCENE=1 -o $@ $< $(HOST_V2_COMMON)
+
+tests/host/build/test_demo_frame_s2: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the scene test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the scene test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=2 \
+		-DTWLHD_TEST_EXPECT_SCENE=2 -o $@ $< $(HOST_V2_COMMON)
+
+tests/host/build/test_demo_frame_s3: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the scene test needs the devkitPro headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the scene test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=3 \
+		-DTWLHD_TEST_EXPECT_SCENE=3 -o $@ $< $(HOST_V2_COMMON)
 
 # Expected-stream generator for tools/emulator/compare_capture.py. It runs the
 # same frame body with the same mock seam as the demo-frame test.
