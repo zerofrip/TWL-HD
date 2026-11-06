@@ -218,3 +218,4 @@ label.
 
 a) Stage 5B-0 implementation task: interpreter alpha/cull latch + UNIT tests + test-ROM scene generation via the pipeline.
 b) GBATEK/DeSmuME verification of POLYGON_ATTR bit layout as a research task before any equation is used.
+c) Results of the DS POLYGON_ATTR/primitive-assembly research: see docs/DS_GX_RESEARCH.md.
