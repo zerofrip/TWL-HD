@@ -1,6 +1,7 @@
 # build output
 */build/
 tests/host/build/
+tools/azahar_host/build/
 
 # binaries
 *.nds
