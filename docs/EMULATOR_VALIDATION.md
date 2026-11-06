@@ -145,6 +145,10 @@ These are observations from earlier runs with the build above (measured on this 
 - Input injection is not used: `--play-movie` is ignored by `desmume-cli` (the GTK/GTK2/Windows frontends do execute it), so the demo is
   built with an auto-dump frame instead of waiting for a key.
 
+## Alpha blending of vertex alpha (EMULATOR, SCENE=4)
+
+EMULATOR: Tanuki3DS, scene4 capture (SCENE=4, AUTODUMP_FRAME=10; DeSmuME capture 1128 B, sha256 prefix 2decd74dead1044f; four flat quads alpha 31/16/4/0 = interpreter vertex alpha 1.0 / 0.53125 / 0.15625 / 0.0, colours red/green/blue/white). OLD ARM11 build (b7b14cff…, interpreter alpha always 1.0) vs NEW ARM11 build (phase5b/alpha-cpu, NO ARM11 source change, only shared interpreter changed): 15220 of 1440015 screenshot bytes differ. Dominant colours old -> new: blue quad (0,0,240) 2088 px -> (0,0,48); green quad (0,240,0) -> (0,128,0); white quad (240,240,240) 1299 px -> gone (background). I.e. the existing renderer ALREADY alpha-blends vertex alpha with its default (citro3d) blend state; the exact blend state was never set explicitly by our code (arm11/source/renderer.c sets cull/depth/TexEnv explicitly, not blending). Frames whose alpha is 1.0 (every existing capture) are unchanged: gx_interp_cli vertex output is identical on main and on this branch for the Run 7-13 frames (only the stats line differs: ignored_no_effect one lower because POLYGON_ATTR is now processed). HARDWARE UNVERIFIED (needs an approved run). Depth/draw-order semantics of DS translucent polygons (DESMUME: depth write only if TranslucentDepthWrite bit, sort order) are NOT implemented, so overlapping translucent polygons may differ from DS.
+
 ## Limits
 
 One fixed scenario (the demo's rotation angle 61440, one frame). Not covered: other angles, real GX timing, overflow behaviour under load, other
