@@ -1,9 +1,7 @@
 # Phase 5B — lighting, POLYGON_ATTR (alpha/cull), textures (PLAN ONLY)
 
-**STATUS: PLAN ONLY — NOT APPROVED.** Nothing in this document may be implemented,
-built into a ROM, or run on hardware without a separate owner approval for each
-stage and for each new hardware run. This is a plan, not a specification and not
-an implementation. Equations written here are placeholders marked **TO BE
+STATUS: PLAN — stage order approved by the owner (2026-11-06); NO stage is approved for implementation yet; each stage, each format extension, each stride change and each hardware run still needs its own approval.
+Equations written here are placeholders marked **TO BE
 VERIFIED**; they are not facts.
 
 Scope (fixed by the owner, unchanged from Phase 5A): offline rendering of
@@ -182,16 +180,22 @@ mark unverified items with **CHECK** until hardware confirms them, exactly as
 ## 5. Decision points for the owner (yes/no)
 
 1. Approve stage order 5B-0 -> 5B-1 -> 5B-2? (Recommend: yes.)
+   Answered 2026-11-06: yes — stage order 5B-0 -> 5B-1 -> 5B-2 approved.
 2. Extend the v2 capture format with TXDS/TXDT/PLDT, or use a side file for
    texture/palette data? (Recommend: extend format, but only with owner approval.)
+   Answered 2026-11-06: extend the v2 format with TXDS/TXDT/PLDT (stage-5B-2 implementation still needs its own approval).
 3. Accept a vertex stride/layout change for textures, or keep 32 B and use a
    separate texcoord attribute buffer? (Recommend: decide after 5B-1 results.)
+   Answered 2026-11-06: open — decide after 5B-1 results.
 4. Are test-ROM scenes required for each stage (alpha/cull cube, lit cube,
    textured cube), and who produces the captures? (Recommend: yes; owner/ROM
    author runs the demo with AUTODUMP.)
+   Answered 2026-11-06: yes, required; the worker (supervisor pipeline) creates them from our own homebrew demo ROM (alpha/cull cube, lit cube, textured cube), captures via AUTODUMP; hardware is not touched.
 5. Proceed with 5B-0/5B-1 only on CPU-side colour output before any GPU-state
    change lands? (Recommend: yes, split alpha latch from cull state if needed.)
+   Answered 2026-11-06: yes.
 6. Keep cull disabled by default until GBATEK cull bits are verified? (Recommend: yes.)
+   Answered 2026-11-06: yes.
 
 ## 6. What requires a new owner approval before any code
 
@@ -209,3 +213,8 @@ BUILD = compiles clean. UNIT = host tests pass. EMULATOR = Tanuki3DS pixel
 sanity (not hardware evidence). HARDWARE = run on real New 3DS (owner-run,
 assistant never executes hardware). Nothing in 5B is currently verified at any
 label.
+
+## 8. Next steps (proposal, needs owner approval to start)
+
+a) Stage 5B-0 implementation task: interpreter alpha/cull latch + UNIT tests + test-ROM scene generation via the pipeline.
+b) GBATEK/DeSmuME verification of POLYGON_ATTR bit layout as a research task before any equation is used.
