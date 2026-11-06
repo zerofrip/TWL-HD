@@ -156,6 +156,12 @@ AF=10 captures parse OK (entries: 100=8941, 169=15082, 170=15171; rsta=4 each); 
 
 gdb (arm9gdb) on the n=64 AF=120 ROM reached the reset vector (0x01FF853C, bkpt) shortly after twlhd_gx_rec_serialize returned; twlhd_v2_parse returned ERR_GXCM_GROUP (17) on the in-ROM buffer in one breakpointed run while both host parsers accept the same bytes; adding breakpoints changes behaviour. Cause: unexplained; follow-up item.
 
+AF sweep (CUBES=64, EMULATOR): AF = 10, 20, 40, 60, 80, 100, 110, 119, 121, 140 each wrote 46056 B (parsers OK for 10 and 60; the rest not run through validate_with_parsers.sh); AF = 120 no capture (ROM fault). The failure is not "any AF >= some frame" and not a run-length effect: AF=119 and AF=121 pass, only AF=120 fails among those measured. Root cause UNEXPLAINED.
+
+Host mock (tests/host dump_demo_frame, -DTWLHD_DEMO_CUBES=64 and 100, angles 2560, 30719, 30720, 30721) wrote 5737 (resp. 8941) GXCM + 4 RSTA entries with no error: the mock does not reproduce a malformed stream. It replaces libnds, so this does not rule out a device-side or emulator-side cause; the angle used by the ROM at frame 120 was not read (the list above is a guess, not evidence). Root cause UNEXPLAINED.
+
+Follow-up (open): read the in-ROM recorder buffer at the failing frame and compare it with the AF=119/121 streams.
+
 Default builds (CUBES unset) are unaffected: make emu-validate PASS 124 GXCM + 4 RSTA at angle 61440. EMULATOR evidence only; not HARDWARE VERIFIED.
 
 ## Licensing posture (not legal advice)
