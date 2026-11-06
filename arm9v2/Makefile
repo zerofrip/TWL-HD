@@ -129,17 +129,18 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
-# Optional primitive-scene build: SCENE=1..3 draws triangles, a triangle strip
-# or a quad strip instead of the cube. Unset (or 0) leaves TARGET, BUILD and
+# Optional primitive-scene build: SCENE=1..4 draws triangles, a triangle strip,
+# a quad strip or four alpha-labelled quads instead of the cube. Unset (or 0)
+# leaves TARGET, BUILD and
 # CFLAGS untouched so the default ROM is byte-identical. This block runs after
 # the AUTODUMP, VP and CUBES blocks, so the suffixes compose; SCENE and
 # CUBES > 1 are mutually exclusive and rejected by demo_frame.cpp.
 #---------------------------------------------------------------------------------
 SCENE_STRIPPED	:=	$(strip $(SCENE))
 ifneq ($(SCENE_STRIPPED),)
-SCENE_OK := $(shell echo '$(SCENE_STRIPPED)' | grep -Eq '^[0-3]$$' && echo ok)
+SCENE_OK := $(shell echo '$(SCENE_STRIPPED)' | grep -Eq '^[0-4]$$' && echo ok)
 ifeq ($(SCENE_OK),)
-$(error SCENE must be empty or a decimal integer in 0..3 (got: $(SCENE)))
+$(error SCENE must be empty or a decimal integer in 0..4 (got: $(SCENE)))
 endif
 ifneq ($(SCENE_STRIPPED),0)
 TARGET		:=	$(TARGET)-s$(SCENE_STRIPPED)

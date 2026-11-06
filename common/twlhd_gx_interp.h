@@ -22,7 +22,7 @@ extern "C" {
 /* 32 bytes: clip-space position plus latched RGBA. */
 typedef struct {
     float clip[4]; /* x, y, z, w in DS clip space (no divide, no clip). */
-    float rgba[4]; /* r, g, b, a in 0..1 (alpha is always 1). */
+    float rgba[4]; /* r, g, b, a in 0..1 (alpha from POLYGON_ATTR, see stats). */
 } TwlhdGxVertex;
 
 typedef struct {
@@ -44,6 +44,10 @@ typedef struct {
     uint32_t capacity_dropped;    /* vertices dropped by out[] overflow. */
     uint32_t geometry_incomplete; /* VTX_DIFF inside BEGIN..END: output may
                                        miss expected geometry. */
+    uint32_t alpha_translucent_polys; /* BEGIN groups with applied raw alpha
+                                         1..30 (one per group, not per poly). */
+    uint32_t alpha_wireframe_polys;   /* BEGIN groups with applied raw alpha 0
+                                         (outline-only drawing NOT implemented). */
 } TwlhdGxStats;
 
 typedef enum {

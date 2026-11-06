@@ -14,6 +14,20 @@ import math
 import sys
 
 
+def alpha_to_float(alpha):
+    """POLYGON_ATTR raw 5-bit alpha -> output vertex alpha.
+
+    Independent model of the rule encoded in the C interpreter (it is NOT
+    imported from the C sources): alpha 0 is the DS wireframe value and maps to
+    0.0; alpha 1..31 uses the DeSmuME blend weight (alpha + 1) / 32.
+    TO BE VERIFIED: hardware/GBATEK were not checked; alpha / 31 is the
+    alternative for non-zero values.
+    """
+    if alpha == 0:
+        return 0.0
+    return (alpha + 1) / 32.0
+
+
 def mat_identity():
     return [1.0 if (i % 5) == 0 else 0.0 for i in range(16)]
 

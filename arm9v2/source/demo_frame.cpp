@@ -101,9 +101,10 @@ static void draw_cube(void) {
 #endif
 
 /*
- * Alternative primitive scene, build-time option (SCENE=1..3 in the Makefile).
+ * Alternative primitive scene, build-time option (SCENE=1..4 in the Makefile).
  * 0 (the default) keeps today's cube path. 1 draws a triangle list, 2 a
- * triangle strip, 3 a quad strip. The two options cannot be combined.
+ * triangle strip, 3 a quad strip, 4 four quads each preceded by its own
+ * POLYGON_ATTR alpha (31, 16, 4, 0). The two options cannot be combined.
  */
 #ifndef TWLHD_DEMO_SCENE
 #define TWLHD_DEMO_SCENE 0
@@ -116,8 +117,8 @@ static void draw_cube(void) {
 #if TWLHD_DEMO_SCENE
 /* Flat (z = 0) shapes drawn at 2x scale, so scaled vertices reach |x| = 1.25;
  * the frames stay in view by the hand-derived frustum bound documented in the
- * host test. Every vertex gets a unique red channel (i + 1 in RGB15) so
- * interpreted output maps back to input order. */
+ * host test. Scenes 1-3 give every vertex a unique red channel (i + 1 in
+ * RGB15) so interpreted output maps back to input order. */
 #if TWLHD_DEMO_SCENE == 1
 static const int16_t scene_tri_vertices[24][2] = {
     {-2243, -1424}, {-1443, -1424}, {-1843, -624},
@@ -129,7 +130,7 @@ static const int16_t scene_tri_vertices[24][2] = {
     {  214,   624}, { 1014,   624}, {  614, 1424},
     { 1443,   624}, { 2243,   624}, { 1843, 1424},
 };
-#else
+#elif TWLHD_DEMO_SCENE == 2 || TWLHD_DEMO_SCENE == 3
 static const int16_t scene_strip_vertices[12][2] = {
     {-2560, -1024}, {-2560, 1024},
     {-1536, -1024}, {-1536, 1024},
@@ -138,8 +139,24 @@ static const int16_t scene_strip_vertices[12][2] = {
     { 1536, -1024}, { 1536, 1024},
     { 2560, -1024}, { 2560, 1024},
 };
+#else
+/* Scene 4: four flat quads in one quad-list each, with one POLYGON_ATTR per
+ * BEGIN so the interpreter latches alpha 31, 16, 4 and 0. Four distinct solid
+ * colours; the alpha-0 quad is counted as wireframe (outline drawing is NOT
+ * implemented, so the host interpreter emits it with vertex alpha 0.0). */
+static const int16_t scene_alpha_vertices[4][4][2] = {
+    {{-2400, -1600}, { -400, -1600}, { -400, -200}, {-2400,  -200}},
+    {{  400, -1600}, { 2400, -1600}, { 2400,  -200}, {  400,  -200}},
+    {{-2400,   200}, { -400,   200}, { -400,  1600}, {-2400,  1600}},
+    {{  400,   200}, { 2400,   200}, { 2400,  1600}, {  400,  1600}},
+};
+static const uint8_t scene_alpha[4] = {31u, 16u, 4u, 0u};
+static const uint8_t scene_colors[4][3] = {
+    {255, 0, 0}, {0, 255, 0}, {0, 0, 255}, {255, 255, 255},
+};
 #endif
 
+#if TWLHD_DEMO_SCENE != 4
 static void draw_scene_vertices(const int16_t (*verts)[2], int count) {
     int i;
 
@@ -149,6 +166,7 @@ static void draw_scene_vertices(const int16_t (*verts)[2], int count) {
         glVertex3v16((v16)verts[i][0], (v16)verts[i][1], 0);
     }
 }
+#endif
 
 #if TWLHD_DEMO_SCENE == 1
 static void draw_scene_tri_list(void) {
@@ -162,11 +180,28 @@ static void draw_scene_tri_strip(void) {
     draw_scene_vertices(scene_strip_vertices, 12);
     glEnd();
 }
-#else
+#elif TWLHD_DEMO_SCENE == 3
 static void draw_scene_quad_strip(void) {
     glBegin(GL_QUAD_STRIP);
     draw_scene_vertices(scene_strip_vertices, 12);
     glEnd();
+}
+#else
+static void draw_scene_alpha_quads(void) {
+    int q;
+    int i;
+
+    for (q = 0; q < 4; q++) {
+        glPolyFmt(POLY_ALPHA(scene_alpha[q]));
+        glBegin(GL_QUADS);
+        for (i = 0; i < 4; i++) {
+            glColor3b(scene_colors[q][0], scene_colors[q][1],
+                      scene_colors[q][2]);
+            glVertex3v16((v16)scene_alpha_vertices[q][i][0],
+                         (v16)scene_alpha_vertices[q][i][1], 0);
+        }
+        glEnd();
+    }
 }
 #endif
 #endif
@@ -194,6 +229,10 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glScalef32(inttof32(2), inttof32(2), inttof32(2));
 
     glPushMatrix();
+#if TWLHD_DEMO_SCENE == 4
+    /* Each quad issues its own POLYGON_ATTR alpha. */
+    draw_scene_alpha_quads();
+#else
     glPolyFmt(POLY_ALPHA(31));
 #if TWLHD_DEMO_SCENE == 1
     draw_scene_tri_list();
@@ -201,6 +240,7 @@ void twlhd_demo_draw_frame(unsigned angle) {
     draw_scene_tri_strip();
 #else
     draw_scene_quad_strip();
+#endif
 #endif
     glPopMatrix(1);
 

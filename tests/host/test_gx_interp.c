@@ -1436,6 +1436,193 @@ static void test_default_colour(void) {
     CHECK_NEAR(g_out[0].rgba[3], 1.0f, 0.0001f);
 }
 
+static void add_triangle_group(uint32_t *n) {
+    add_entry(n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(n, 0, 0, 0);
+    add_vtx_16(n, 0x1000, 0, 0);
+    add_vtx_16(n, 0, 0x1000, 0);
+    add_entry(n, TWLHD_V2_CMD_END_VTXS, 0u);
+}
+
+static void test_alpha_literal_scale(void) {
+    static const struct {
+        uint32_t alpha;
+        float expected;
+    } cases[] = {
+        {31u, 1.0f},
+        {16u, 0.53125f},
+        {4u, 0.15625f},
+        {1u, 0.0625f},
+        {0u, 0.0f},
+    };
+    uint32_t c;
+    uint32_t i;
+
+    for (c = 0u; c < sizeof cases / sizeof cases[0]; c++) {
+        uint32_t n = 0u;
+        TwlhdV2View view;
+        TwlhdGxResult r;
+
+        clear_state();
+        add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, cases[c].alpha << 16);
+        add_triangle_group(&n);
+        build_view(n, &view);
+        r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp,
+                               &g_st);
+        CHECK_EQ_INT(r, TWLHD_GX_OK);
+        CHECK_EQ_INT(g_out_count, 3u);
+        for (i = 0u; i < g_out_count; i++) {
+            /* Exact literals, not derived from gx_alpha_float(). */
+            CHECK_NEAR(g_out[i].rgba[3], cases[c].expected, 0.0f);
+        }
+        CHECK_EQ_INT(g_st.alpha_translucent_polys,
+                     (cases[c].alpha >= 1u && cases[c].alpha <= 30u) ? 1u
+                                                                     : 0u);
+        CHECK_EQ_INT(g_st.alpha_wireframe_polys,
+                     cases[c].alpha == 0u ? 1u : 0u);
+        /* POLYGON_ATTR is no longer counted as having no effect. */
+        CHECK_EQ_INT(g_st.ignored_no_effect, 0u);
+    }
+}
+
+static void test_alpha_pending_until_begin(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 31u << 16);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    /* Written inside BEGIN..END: must not affect this group. */
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 4u << 16);
+    add_vtx_16(&n, 0x800, 0x800, 0);
+    add_vtx_16(&n, 0x400, 0x400, 0);
+    add_vtx_16(&n, 0x200, 0x200, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    /* New BEGIN with no fresh attr: pending 4 is applied now. */
+    add_triangle_group(&n);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 9u);
+    for (i = 0u; i < 6u; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 1.0f, 0.0f);
+    }
+    for (i = 6u; i < 9u; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 0.15625f, 0.0f);
+    }
+    CHECK_EQ_INT(g_st.alpha_translucent_polys, 1u);
+    CHECK_EQ_INT(g_st.alpha_wireframe_polys, 0u);
+}
+
+static void test_alpha_two_groups(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 16u << 16);
+    add_triangle_group(&n);
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 0u << 16);
+    add_triangle_group(&n);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    for (i = 0u; i < 3u; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 0.53125f, 0.0f);
+    }
+    for (i = 3u; i < 6u; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 0.0f, 0.0f);
+    }
+    CHECK_EQ_INT(g_st.alpha_translucent_polys, 1u);
+    CHECK_EQ_INT(g_st.alpha_wireframe_polys, 1u);
+}
+
+static void test_alpha_default_and_extra_bits(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+    uint32_t i;
+
+    /* No POLYGON_ATTR at all: opaque and no alpha statistics. */
+    clear_state();
+    add_triangle_group(&n);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    for (i = 0u; i < g_out_count; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 1.0f, 0.0f);
+    }
+    CHECK_EQ_INT(g_st.alpha_translucent_polys, 0u);
+    CHECK_EQ_INT(g_st.alpha_wireframe_polys, 0u);
+
+    /* Only bits 16..20 are the alpha; cull (6-7) and bit 14 are ignored. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR,
+              (16u << 16) | 0x0000C0u | 0x00004000u);
+    add_triangle_group(&n);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    for (i = 0u; i < g_out_count; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 0.53125f, 0.0f);
+    }
+    CHECK_EQ_INT(g_st.alpha_translucent_polys, 1u);
+
+    /* 0x1F0000 (alpha 31) plus cull bits: opaque and still no statistics. */
+    clear_state();
+    n = 0u;
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 0x001F0000u | 0x0000C0u);
+    add_triangle_group(&n);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    for (i = 0u; i < g_out_count; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 1.0f, 0.0f);
+    }
+    CHECK_EQ_INT(g_st.alpha_translucent_polys, 0u);
+    CHECK_EQ_INT(g_st.alpha_wireframe_polys, 0u);
+}
+
+static void test_alpha_rgb_unaffected(void) {
+    uint32_t n = 0u;
+    TwlhdV2View view;
+    TwlhdGxResult r;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_COLOR, 0x7FFFu); /* R=G=B=31 */
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 4u << 16);
+    add_triangle_group(&n);
+    add_entry(&n, TWLHD_V2_CMD_POLYGON_ATTR, 31u << 16);
+    add_triangle_group(&n);
+    build_view(n, &view);
+    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    CHECK_EQ_INT(r, TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    for (i = 0u; i < 6u; i++) {
+        CHECK_NEAR(g_out[i].rgba[0], 1.0f, 0.0f);
+        CHECK_NEAR(g_out[i].rgba[1], 1.0f, 0.0f);
+        CHECK_NEAR(g_out[i].rgba[2], 1.0f, 0.0f);
+    }
+    for (i = 0u; i < 3u; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 0.15625f, 0.0f);
+    }
+    for (i = 3u; i < 6u; i++) {
+        CHECK_NEAR(g_out[i].rgba[3], 1.0f, 0.0f);
+    }
+}
+
 static void test_quad_split(void) {
     uint32_t n = 0u;
     size_t size;
@@ -2394,5 +2581,15 @@ int main(void) {
     test_report("gx_interp/proj-pos-product-order");
     test_default_colour();
     test_report("gx_interp/default-colour");
+    test_alpha_literal_scale();
+    test_report("gx_interp/alpha-literal-scale");
+    test_alpha_pending_until_begin();
+    test_report("gx_interp/alpha-pending-until-begin");
+    test_alpha_two_groups();
+    test_report("gx_interp/alpha-two-groups");
+    test_alpha_default_and_extra_bits();
+    test_report("gx_interp/alpha-default-and-extra-bits");
+    test_alpha_rgb_unaffected();
+    test_report("gx_interp/alpha-rgb-unaffected");
     return test_exit_code();
 }
