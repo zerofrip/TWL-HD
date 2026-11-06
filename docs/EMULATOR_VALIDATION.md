@@ -137,6 +137,27 @@ These are observations from earlier runs with the build above (measured on this 
 One fixed scenario (the demo's rotation angle 61440, one frame). Not covered: other angles, real GX timing, overflow behaviour under load, other
 emulators, commercial software, and anything about the PICA200 renderer.
 
+## Multi-cube captures (CUBES) in DeSmuME: measured behaviour (EMULATOR)
+
+EMULATOR: DeSmuME 0.9.14, interpreter, JIT off by default. Measured by the supervisor (sequential runs, DESMUME_TIMEOUT 120, 60 for AF=10, clean rebuilds). The root cause of the failures below is NOT identified (unexplained); no cause is asserted here.
+
+| n | AF=120 | AF=10 |
+|---|---|---|
+| 2 | 1912 B ok | not measured |
+| 32 | 23272 B ok | not measured |
+| 64 | no capture (ARM OP_BKPT) | 46056 B ok |
+| 100 | no capture (undef instr) | 71688 B ok |
+| 128 | 91624 B ok (11433 entries) | not measured |
+| 129 | 92336 B ok (undef instr after write) | not measured |
+| 169 | no capture (undef instr) | 120816 B ok |
+| 170 | no capture (undef instr) | 121528 B ok |
+
+AF=10 captures parse OK (entries: 100=8941, 169=15082, 170=15171; rsta=4 each); n=64 also OK at AF=60 (46056 B). tests/host/build/gx_interp_cli reports result=OK on the 100/169/170 captures. The recorder overflow limit (16384 entries) and ARM11 clip buffer (6144 output vertices) are not exceeded at n=170 (15171 entries; 6120 output vertices).
+
+gdb (arm9gdb) on the n=64 AF=120 ROM reached the reset vector (0x01FF853C, bkpt) shortly after twlhd_gx_rec_serialize returned; twlhd_v2_parse returned ERR_GXCM_GROUP (17) on the in-ROM buffer in one breakpointed run while both host parsers accept the same bytes; adding breakpoints changes behaviour. Cause: unexplained; follow-up item.
+
+Default builds (CUBES unset) are unaffected: make emu-validate PASS 124 GXCM + 4 RSTA at angle 61440. EMULATOR evidence only; not HARDWARE VERIFIED.
+
 ## Licensing posture (not legal advice)
 
 DeSmuME (GPL-2.0-or-later) is used only as an external program. TWL-HD (Apache-2.0) neither links nor vendors it. Separate repositories alone are
