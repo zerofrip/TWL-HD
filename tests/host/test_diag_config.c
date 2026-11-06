@@ -209,6 +209,10 @@ static void test_source_files(const char *path) {
     } else if (strstr(path, "renderer.c") != NULL) {
         CHECK_EQ_INT(count_substr(buf, "twlhd_diag_config("), 1);
 
+        CHECK_EQ_INT(count_substr(buf, "g_diag_mode ="), 1);
+        CHECK_EQ_INT(count_substr(buf, "g_diag_mode = mode;"), 1);
+        CHECK_EQ_INT(count_substr(buf, "mode > TWLHD_DIAG_MODE_COUNT - 1"), 1);
+
         clip = extract_function(buf, "static void draw_clip_internal(",
                                 "draw_clip_internal", clip_body,
                                 sizeof(clip_body));
@@ -218,6 +222,7 @@ static void test_source_files(const char *path) {
 
         if (clip != NULL) {
             CHECK_EQ_INT(count_substr(clip, "twlhd_diag_config("), 1);
+            CHECK_EQ_INT(count_substr(clip, "twlhd_diag_config(g_diag_mode)"), 1);
             CHECK_EQ_INT(count_substr(clip, "twlhd_blend_config_alpha("), 0);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaBlend("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaTest("), 1);
