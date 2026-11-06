@@ -72,6 +72,17 @@ LDFLAGS		=	-specs=3dsx.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 LIBS		:=	-lcitro3d -lctru -lm
 LIBDIRS		:=	$(CTRULIB)
 
+# Build ID stamp for the ARM11 3DSX. Shown on the bottom-screen console so the
+# owner can verify the right .3dsx started. Short git hash (always used, even on
+# a dirty tree) with a "-diag" suffix; missing git resolves to "unknown".
+TWLHD_GIT_HASH := $(shell git -C $(CURDIR) rev-parse --short HEAD 2>/dev/null)
+ifeq ($(strip $(TWLHD_GIT_HASH)),)
+TWLHD_BUILD_ID_STR := unknown
+else
+TWLHD_BUILD_ID_STR := $(TWLHD_GIT_HASH)-diag
+endif
+CFLAGS += -DTWLHD_BUILD_ID=\"$(TWLHD_BUILD_ID_STR)\"
+
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
@@ -137,6 +148,16 @@ all: $(BUILD)
 $(BUILD):
 	@[ -d $@ ] || mkdir -p $@
 	@$(MAKE) --no-print-directory -C $(BUILD) -f $(CURDIR)/Makefile
+
+# Rebuild main.o when the build ID changes (git hash moves or becomes unknown).
+ifeq ($(filter clean,$(MAKECMDGOALS)),)
+$(shell mkdir -p $(BUILD))
+TWLHD_BUILD_ID_STAMP := $(TWLHD_BUILD_ID_STR)
+ifneq ($(strip $(TWLHD_BUILD_ID_STAMP)),$(strip $(shell cat $(BUILD)/buildid.stamp 2>/dev/null)))
+$(shell rm -f $(BUILD)/main.o $(BUILD)/main.d)
+endif
+$(file >$(BUILD)/buildid.stamp,$(strip $(TWLHD_BUILD_ID_STAMP)))
+endif
 
 #---------------------------------------------------------------------------------
 clean:

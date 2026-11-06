@@ -90,6 +90,11 @@ const char *renderer_result_string(int result);
 void renderer_set_debug_flags(uint32_t flags);
 uint32_t renderer_get_debug_flags(void);
 
+/* Clip-path diagnostic mode. 0=normal, 1=alpha-as-gray, 2=const-alpha-0.5.
+ * Persists across renderer_init() because it lives outside RendererState. */
+void renderer_set_diag_mode(unsigned mode);
+unsigned renderer_get_diag_mode(void);
+
 /* Parametric stride-layout parameters. Defaults are 48 bytes, 3 vertices and
  * 0 padding. Setters clamp/ignore out-of-range values. The active values are
  * read by renderer_draw() only when TWLHD_RDBG_LAYOUT_STRIDE is set. */
