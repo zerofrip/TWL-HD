@@ -106,6 +106,16 @@ they do not replace the real run.
   `build-autodump-c64/`. The limit of 170 is 6120 clip vertices (≤ the ARM11 `CLIP_VERTEX_CAPACITY` of 6144), fewer than 16384
   recorder entries, and below the 1 MiB v2 file size. `make test` also builds `-DTWLHD_DEMO_CUBES=170` and `=2` host binaries that
   check the recorded VTX_16 count and the interpreter's vertex output against fixed literals.
+- `SCENE=<n>` replaces the cube with a flat primitive scene for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
+  `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles) and
+  `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles). The value must be empty, `0` or a decimal integer in 1..3;
+  anything else is a build error, and leaving it unset (or `0`) keeps the normal ROM unchanged. The `<n>` suffix composes with the
+  other options, e.g. `make -C arm9v2 AUTODUMP_FRAME=120 SCENE=2` builds `arm9v2/twlhd-arm9v2-autodump-s2.nds` in
+  `build-autodump-s2/`. `SCENE` > 0 together with `CUBES` > 1 is rejected by `demo_frame.cpp` (`#error`). Changing `SCENE` without
+  `rm -rf` rebuilds cleanly because it is part of `<BUILD>/flags.stamp`, and `make clean` removes every `-s<N>` build directory and
+  output file. `make test` also builds `-DTWLHD_DEMO_SCENE=1`, `=2` and `=3` host binaries that check the recorded primitive type,
+  VTX_16/COLOR counts and the exact interpreted vertex-index order and frustum bounds at angles 0, 7680, 15360, 23040 and 30720
+  (the scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25).
 
 ## Emulator facts that shaped the harness
 

@@ -100,8 +100,112 @@ static void draw_cube(void) {
 #define TWLHD_DEMO_CUBES 1
 #endif
 
+/*
+ * Alternative primitive scene, build-time option (SCENE=1..3 in the Makefile).
+ * 0 (the default) keeps today's cube path. 1 draws a triangle list, 2 a
+ * triangle strip, 3 a quad strip. The two options cannot be combined.
+ */
+#ifndef TWLHD_DEMO_SCENE
+#define TWLHD_DEMO_SCENE 0
+#endif
+
+#if TWLHD_DEMO_SCENE != 0 && TWLHD_DEMO_CUBES != 1
+#error "TWLHD_DEMO_SCENE and TWLHD_DEMO_CUBES > 1 are mutually exclusive"
+#endif
+
+#if TWLHD_DEMO_SCENE
+/* Flat (z = 0) shapes drawn at 2x scale, so scaled vertices reach |x| = 1.25;
+ * the frames stay in view by the hand-derived frustum bound documented in the
+ * host test. Every vertex gets a unique red channel (i + 1 in RGB15) so
+ * interpreted output maps back to input order. */
+#if TWLHD_DEMO_SCENE == 1
+static const int16_t scene_tri_vertices[24][2] = {
+    {-2243, -1424}, {-1443, -1424}, {-1843, -624},
+    {-1014, -1424}, { -214, -1424}, { -614, -624},
+    {  214, -1424}, { 1014, -1424}, {  614, -624},
+    { 1443, -1424}, { 2243, -1424}, { 1843, -624},
+    {-2243,   624}, {-1443,   624}, {-1843, 1424},
+    {-1014,   624}, { -214,   624}, { -614, 1424},
+    {  214,   624}, { 1014,   624}, {  614, 1424},
+    { 1443,   624}, { 2243,   624}, { 1843, 1424},
+};
+#else
+static const int16_t scene_strip_vertices[12][2] = {
+    {-2560, -1024}, {-2560, 1024},
+    {-1536, -1024}, {-1536, 1024},
+    { -512, -1024}, { -512, 1024},
+    {  512, -1024}, {  512, 1024},
+    { 1536, -1024}, { 1536, 1024},
+    { 2560, -1024}, { 2560, 1024},
+};
+#endif
+
+static void draw_scene_vertices(const int16_t (*verts)[2], int count) {
+    int i;
+
+    for (i = 0; i < count; i++) {
+        /* glColor3b keeps the top 5 bits: red == i + 1, green/blue == 0. */
+        glColor3b((u8)((i + 1) << 3), 0, 0);
+        glVertex3v16((v16)verts[i][0], (v16)verts[i][1], 0);
+    }
+}
+
+#if TWLHD_DEMO_SCENE == 1
+static void draw_scene_tri_list(void) {
+    glBegin(GL_TRIANGLES);
+    draw_scene_vertices(scene_tri_vertices, 24);
+    glEnd();
+}
+#elif TWLHD_DEMO_SCENE == 2
+static void draw_scene_tri_strip(void) {
+    glBegin(GL_TRIANGLE_STRIP);
+    draw_scene_vertices(scene_strip_vertices, 12);
+    glEnd();
+}
+#else
+static void draw_scene_quad_strip(void) {
+    glBegin(GL_QUAD_STRIP);
+    draw_scene_vertices(scene_strip_vertices, 12);
+    glEnd();
+}
+#endif
+#endif
+
 void twlhd_demo_draw_frame(unsigned angle) {
-#if TWLHD_DEMO_CUBES <= 1
+#if TWLHD_DEMO_SCENE != 0
+    /* Re-issue all state needed to replay this frame independently. */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(TWLHD_DEMO_VP_X1, TWLHD_DEMO_VP_Y1,
+               TWLHD_DEMO_VP_X2, TWLHD_DEMO_VP_Y2);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(70, 256.0 / 192.0, 0.1, 100.0);
+
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
+    glRotateXi((int)angle);
+    glRotateYi((int)angle);
+    glTranslatef32(0, 0, 0);
+    glScalef32(inttof32(2), inttof32(2), inttof32(2));
+
+    glPushMatrix();
+    glPolyFmt(POLY_ALPHA(31));
+#if TWLHD_DEMO_SCENE == 1
+    draw_scene_tri_list();
+#elif TWLHD_DEMO_SCENE == 2
+    draw_scene_tri_strip();
+#else
+    draw_scene_quad_strip();
+#endif
+    glPopMatrix(1);
+
+    glFlush(0); /* records SWAP_BUFFERS (0x50) and disarms */
+#elif TWLHD_DEMO_CUBES <= 1
     /* Re-issue all state needed to replay this frame independently. */
     glEnable(GL_ANTIALIAS);
     glClearColor(0, 0, 0, 31);

@@ -21,6 +21,8 @@ arm9v2/*.guard
 arm9v2/build-autodump/
 arm9v2/build-autodump-c*/
 arm9v2/build-c*/
+arm9v2/build-autodump-s*/
+arm9v2/build-s*/
 arm9v2/build-vp*/
 *.guard.nm
 

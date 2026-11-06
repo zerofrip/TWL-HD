@@ -129,6 +129,28 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
+# Optional primitive-scene build: SCENE=1..3 draws triangles, a triangle strip
+# or a quad strip instead of the cube. Unset (or 0) leaves TARGET, BUILD and
+# CFLAGS untouched so the default ROM is byte-identical. This block runs after
+# the AUTODUMP, VP and CUBES blocks, so the suffixes compose; SCENE and
+# CUBES > 1 are mutually exclusive and rejected by demo_frame.cpp.
+#---------------------------------------------------------------------------------
+SCENE_STRIPPED	:=	$(strip $(SCENE))
+ifneq ($(SCENE_STRIPPED),)
+SCENE_OK := $(shell echo '$(SCENE_STRIPPED)' | grep -Eq '^[0-3]$$' && echo ok)
+ifeq ($(SCENE_OK),)
+$(error SCENE must be empty or a decimal integer in 0..3 (got: $(SCENE)))
+endif
+ifneq ($(SCENE_STRIPPED),0)
+TARGET		:=	$(TARGET)-s$(SCENE_STRIPPED)
+BUILD		:=	$(BUILD)-s$(SCENE_STRIPPED)
+CFLAGS		+=	-DTWLHD_DEMO_SCENE=$(SCENE_STRIPPED)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_SCENE=$(SCENE_STRIPPED)
+endif
+endif
+
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
@@ -148,7 +170,7 @@ $(shell mkdir -p $(BUILD))
 
 # make cannot see -D changes in the object prerequisites, so record the define
 # set in the variant BUILD directory and drop stale objects when it changes.
-TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1)
+TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0)
 ifneq ($(strip $(TWLHD_FLAGS_STAMP)),$(strip $(shell cat $(BUILD)/flags.stamp 2>/dev/null)))
 $(shell rm -f $(BUILD)/*.o $(BUILD)/*.d)
 endif
@@ -207,6 +229,8 @@ clean:
 	@rm -f twlhd-arm9v2-vp*.elf twlhd-arm9v2-vp*.nds twlhd-arm9v2-vp*.arm9 twlhd-arm9v2-vp*.guard twlhd-arm9v2-vp*.guard.nm twlhd-arm9v2-vp*.map
 	@rm -fr build-c* build-*c*
 	@rm -f twlhd-arm9v2*c*.elf twlhd-arm9v2*c*.nds twlhd-arm9v2*c*.arm9 twlhd-arm9v2*c*.guard twlhd-arm9v2*c*.guard.nm twlhd-arm9v2*c*.map
+	@rm -fr build-s[0-9]* build-*-s[0-9]*
+	@rm -f twlhd-arm9v2*-s[0-9]*.elf twlhd-arm9v2*-s[0-9]*.nds twlhd-arm9v2*-s[0-9]*.arm9 twlhd-arm9v2*-s[0-9]*.guard twlhd-arm9v2*-s[0-9]*.guard.nm twlhd-arm9v2*-s[0-9]*.map
 
 #---------------------------------------------------------------------------------
 else
