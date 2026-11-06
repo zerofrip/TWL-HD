@@ -464,3 +464,43 @@ stayed responsive; picture correctness judged from photos only.
 cube; DS-side viewport +1/y1-wrap; the unexplained DeSmuME failures at
 AUTODUMP_FRAME=120 (see `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B,
 not approved).
+
+### Run 12 — Phase 5A 15-minute run of the large-frame sequence, 100/170 cubes (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 5 photographs kept **outside** the repository in the owner's
+staging directory (`evidence/run12_01..05`); report dated 2026-11-06 ("全テスト正常動作正常終了です / 本体温度も正常です").
+A phone stopwatch is visible in every photo.
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-seq.3dsx` (same bytes as Runs 9–11) | `b7b14cff7f4783ca…` |
+| sequence file `seq_000.bin` = c100 (CUBES option, AUTODUMP_FRAME=10) | `8e53b4b3…` |
+| sequence file `seq_001.bin` = c170 (CUBES option, AUTODUMP_FRAME=10) | `4904e26d…` |
+
+Build: unchanged ARM11 `twlhd-arm11-seq.3dsx` (SHA-256 `b7b14cff7f4783ca…`, same bytes as
+Runs 9–11). Sequence files are the same as Runs 10/11: `seq_000.bin` = c100 (3600 output
+vertices, 1200 tris) and `seq_001.bin` = c170 (6120 vertices, 2040 tris). 6120 is the
+largest size the ARM11 clip scene accepts (buffer capacity 6144).
+
+Results:
+- **T1 — start (X):** sequence playback started from the built-in triangle via X; alternating
+  `seq_000` (c100) / `seq_001` (c170). (photo)
+- **T2 — 15-minute run:** bottom screen at 0:14 `loop 12`, at 1:31 `loop 75`, at 5:08
+  `loop 252`, at 10:09 `loop 498`, at 15:24 `loop 756`; all showing 6120 verts -> 2040 tris
+  (seq 001, 170-cube grid) on the top screen; loop rates 0.83, 0.82, 0.816, 0.818 and 0.817
+  loops/s at those points — constant over 15 minutes, no slowdown. ~756 loops and ~1500 uploads
+  of 115/196 KB by 15:24. No freeze, no flicker/torn grid, no stray triangles, no colour
+  change visible; no POWER-hold reported. (photos)
+- **T3 — stop/regression:** X stop, Y built-in triangle and A load were reported OK by the
+  owner; **no photos** provided for these steps. Console temperature normal (user report).
+
+**Conclusion:** HARDWARE OBSERVED: alternating re-upload of 3600/6120-vertex scenes ran 15 min
+24 s (756 loops, ~1500 uploads) at a constant rate without a GPU hang or visible degradation;
+console temperature normal; picture correctness judged from photos only.
+
+**Not covered / still open:** runs longer than ~15 minutes; captures other than our demo
+cube; DS-side viewport +1/y1-wrap; the unexplained DeSmuME failures at
+AUTODUMP_FRAME=120 (see `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B,
+not approved).
