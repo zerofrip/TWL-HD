@@ -1,5 +1,5 @@
 .PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag \
-	emu-expected emu-validate
+	emu-expected emu-validate azahar-host
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
@@ -38,7 +38,8 @@ rtcom_rom: arm9 arm7
 # runs the v2 port-coverage test, which needs DEVKITPRO.
 # ---------------------------------------------------------------------------
 HOST_CC ?= cc
-HOST_CFLAGS := -std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host
+HOST_CFLAGS := -std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host \
+	-Itools/azahar_host
 HOST_SAN := $(shell printf 'int main(void){return 0;}\n' | \
 	$(HOST_CC) -x c - -fsanitize=address,undefined -o /dev/null \
 	>/dev/null 2>&1 && printf '%s' \
@@ -55,7 +56,8 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_v2_format.h common/twlhd_v2_parse.h \
 	common/twlhd_v2_write.h common/twlhd_gx_record.h \
 	common/twlhd_gx_interp.h common/twlhd_attr_pad.h \
-	common/twlhd_clipfix.h common/twlhd_seq.h tests/host/tests_host.h
+	common/twlhd_clipfix.h common/twlhd_seq.h tests/host/tests_host.h \
+	tools/azahar_host/azahar_host_util.h
 HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_converter \
 	tests/host/build/test_roundtrip \
@@ -77,7 +79,8 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_demo_frame_s2 \
 	tests/host/build/test_demo_frame_s3 \
 	tests/host/build/test_demo_frame_s4 \
-	tests/host/build/test_blend_config
+	tests/host/build/test_blend_config \
+	tests/host/build/test_azahar_host_ppm
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -130,6 +133,10 @@ tests/host/build/test_clipfix: tests/host/test_clipfix.c common/twlhd_clipfix.c 
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_clipfix.c $(HOST_LDFLAGS)
 
 tests/host/build/test_seq: tests/host/test_seq.c $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
+
+tests/host/build/test_azahar_host_ppm: tests/host/test_azahar_host_ppm.c \
+		$(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
 
 tests/host/build/gx_interp_cli: tests/host/gx_interp_cli.c $(HOST_V2_COMMON) \
@@ -361,6 +368,27 @@ emu-validate:
 tests/host/build:
 	mkdir -p $@
 
+# ---------------------------------------------------------------------------
+# Headless Azahar libretro host (opt-in; NEVER part of `all` or `test`).
+#
+# The Azahar core stays external and unvendored: it is dlopen()ed at run time.
+# Pass LIBRETRO_INCLUDE=/path/to/libretro-common/include to compile against the
+# real libretro.h; without it the tool uses its minimal hand-written mirror.
+# ---------------------------------------------------------------------------
+LIBRETRO_INCLUDE ?=
+
+azahar-host: tools/azahar_host/build/azahar_host
+
+tools/azahar_host/build/azahar_host: tools/azahar_host/azahar_host.c \
+		tools/azahar_host/azahar_host_util.h \
+		tools/azahar_host/azahar_host_libretro_min.h | tools/azahar_host/build
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O2 -D_POSIX_C_SOURCE=200809L \
+		-Itools/azahar_host $(if $(LIBRETRO_INCLUDE),-I$(LIBRETRO_INCLUDE)) \
+		-o $@ $< -ldl
+
+tools/azahar_host/build:
+	mkdir -p $@
+
 test: host-test tests/host/build/gx_interp_cli
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
@@ -371,4 +399,5 @@ clean:
 	$(MAKE) -C arm11 clean
 	$(MAKE) -C arm11_ucode clean
 	rm -rf tests/host/build
+	rm -rf tools/azahar_host/build
 	rm -f twlhd-rtcom.nds
