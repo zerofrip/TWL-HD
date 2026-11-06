@@ -1,7 +1,7 @@
 # Phase 5B — lighting, POLYGON_ATTR (alpha/cull), textures (PLAN ONLY)
 
 STATUS: PLAN — stage order approved by the owner (2026-11-06); NO stage is approved for implementation yet; each stage, each format extension, each stride change and each hardware run still needs its own approval.
-5B-0a (CPU alpha) is implemented as **BUILD/UNIT** plus an **EMULATOR** observation (see §8); the ARM11 binary changes (shared interpreter) but behaves identically for alpha-1.0 frames.
+5B-0a (CPU alpha) is implemented as **BUILD/UNIT** plus an **EMULATOR** observation and a **HARDWARE** observation (Run 14, see §8 and `docs/HARDWARE_TEST_PROCEDURE_3DS.md` section 12): alpha-1.0 frames are unchanged on hardware; alpha<1 frames do NOT blend on the console with the default blend state. The ARM11 binary changes (shared interpreter) but behaves identically for alpha-1.0 frames.
 Equations written here are placeholders marked **TO BE
 VERIFIED**; they are not facts.
 
@@ -236,9 +236,9 @@ alternative for non-zero alphas.
 alpha 31 and the no-attr default never increment.
 
 NOT implemented here:
-- no explicit blending state or GPU change in our code (arm11/source/renderer.c sets cull/depth/TexEnv, not blending); EMULATOR: the default (citro3d) blend state already alpha-blends vertex alpha, so alpha<1 frames differ (scene4 capture 1128 B, sha256 prefix 2decd74dead1044f; old vs new ARM11 build differ 15220 of 1440015 bytes; blue (0,0,240)->(0,0,48), green (0,240,0)->(0,128,0), white quad gone). alpha=1.0 frames (Runs 7-13) are unchanged; only the stats line differs (ignored_no_effect one lower, POLYGON_ATTR now processed). HARDWARE UNVERIFIED (needs an approved run).
+- no explicit blending state or GPU change in our code (arm11/source/renderer.c sets cull/depth/TexEnv, not blending). EMULATOR (Tanuki3DS): the default (citro3d) blend state already alpha-blends vertex alpha, so alpha<1 frames differ (scene4 capture 1128 B, sha256 prefix 2decd74dead1044f; old vs new ARM11 build differ 15220 of 1440015 bytes; blue (0,0,240)->(0,0,48), green (0,240,0)->(0,128,0), white quad gone). alpha=1.0 frames (Runs 7-13) are unchanged; only the stats line differs (ignored_no_effect one lower, POLYGON_ATTR now processed). HARDWARE OBSERVED (Run 14): on the real console the alpha 16/31 and 4/31 quads were OPAQUE (no blending) and the alpha-0 quad was not drawn — i.e. the "default blend state already alpha-blends" claim is true only for the EMULATOR, not the console. Consequently 5B-0b must set the blend state explicitly (not rely on the default), the alpha-0 / wireframe handling must be decided, and a further hardware run (its own approval) is needed. HARDWARE OBSERVED for alpha-1.0 frames: unchanged.
 - depth/draw-order semantics of DS translucent polygons (DESMUME: depth write only if TranslucentDepthWrite bit, sort order) are NOT implemented; overlapping translucent polygons may differ from DS.
-- 5B-0b (explicit blend state in the renderer) must be re-scoped after a hardware observation: it may reduce to setting the blend state explicitly (as for cull/depth/TexEnv) instead of relying on the default.
+- 5B-0b (explicit blend state in the renderer) is now required, not optional: Run 14 showed the default blend state does NOT alpha-blend on the console, so 5B-0b must set the blend state explicitly (as for cull/depth/TexEnv) and decide the alpha-0 / wireframe handling; a further hardware run (its own approval) is needed before any conclusion.
 - no cull mode (bits 6-7 are parsed past, not applied);
 - alpha 0 is counted as wireframe but outline-only drawing is not rendered (the
   polygon reaches the output with alpha 0.0 and looks like an ordinary colour);
