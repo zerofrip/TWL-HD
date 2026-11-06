@@ -504,3 +504,61 @@ console temperature normal; picture correctness judged from photos only.
 cube; DS-side viewport +1/y1-wrap; the unexplained DeSmuME failures at
 AUTODUMP_FRAME=120 (see `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B,
 not approved).
+
+### Run 13 — Phase 5A triangle list, triangle strip and quad strip (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 6 photographs kept **outside** the repository in the owner's
+staging directory (`evidence/run13_01..06`); report dated 2026-11-06 ("全テスト正常動作正常終了です").
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-seq.3dsx` (same bytes as Runs 9–12) | `b7b14cff7f4783ca…` |
+| scene1 triangle list (SCENE option, AUTODUMP_FRAME=10) | `e32d766b53b50705…` |
+| scene2 triangle strip (SCENE option, AUTODUMP_FRAME=10) | `8710595d8b1f8150…` |
+| scene3 quad strip (SCENE option, AUTODUMP_FRAME=10) | `165e9f42e53d48c5…` |
+
+Build: unchanged ARM11 `twlhd-arm11-seq.3dsx` (SHA-256 `b7b14cff7f4783ca…`, same bytes as
+Runs 9–12). Frames are DeSmuME captures of our own homebrew demo built with the SCENE option
+(main @ `98599f4`) at AUTODUMP_FRAME=10: scene1 triangle list (1248 B, 24 vertices,
+8 triangles), scene2 triangle strip (960 B, 12 input vertices, 10 triangles, 30 output
+vertices), scene3 quad strip (960 B, 12 input vertices, 10 triangles, 30 output vertices).
+Each vertex has a unique dark-red colour (red channel i+1 of 31).
+
+Results:
+- **T1 — A-load regression with a large frame:** the SD root still held the Run 10–12
+  170-cube frame (6120 verts -> 2040 tris); the photo shows that grid, so the A-load path
+  was exercised with a large frame. The RGB triangle and single cube were not photographed.
+  (photo)
+- **T2 — triangle list:** `SD: v2 loaded, 24 verts -> 8 tris` (gxcm 136); 8 separate
+  dark-red triangles in 2 rows of 4 pointing the same way, brightness increasing from the
+  bottom-left to the upper right (= vertex index order). Photo extents ~x 157–241, y 88–160
+  px versus interpreter prediction ~150–240 × 86–158 (within ~3 px). (photo)
+- **T3 — triangle strip:** `30 verts -> 10 tris` (gxcm 100); one tilted quadrilateral
+  ribbon with a smooth dark-to-bright gradient left to right, straight edges, no gaps, stray
+  or missing piece visible. Photo extents ~x 148–249, y 96–155 px versus prediction
+  ~142–244 × 91–153 (within ~5 px, photo parallax). (photo)
+- **T4 — quad strip:** `30 verts -> 10 tris`; the same ribbon shape and gradient as T3
+  (expected: the colours are an exact linear gradient, so scenes 2 and 3 are
+  indistinguishable by design). (photo)
+- **T5 — sequence of the 3 scenes:** first photo `seq 000/000 loop 0` (triangle list; the
+  /000 total is the first-pass display), later photo `seq 001/003 loop 20` (ribbon); no
+  freeze, no stray triangles. (photos)
+
+No hang, no error text, no POWER-hold reported.
+
+Limits: the ribbon is a smooth gradient, so individual pieces cannot be counted in the
+photos; DS-side primitive semantics (strip winding, quad vertex order, DS quad colour
+interpolation) are not verified; the interpreter splits quads into 2 triangles.
+
+**Conclusion:** HARDWARE OBSERVED: triangle-list, triangle-strip and quad-strip frames load
+and draw on the clip path without a GPU hang or error, with the expected outline and vertex
+order (within ~3–5 px of the interpreter prediction); picture details judged from photos
+only.
+
+**Not covered / still open:** DS-side primitive semantics (strip winding, quad vertex order,
+DS quad colour interpolation); mixed primitives in one frame; strips longer than 12
+vertices; runs longer than ~15 minutes; captures other than our demo cube; DS-side
+viewport +1/y1-wrap; the unexplained DeSmuME failures at AUTODUMP_FRAME=120 (see
+`docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B, not approved).
