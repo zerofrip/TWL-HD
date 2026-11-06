@@ -562,3 +562,61 @@ DS quad colour interpolation); mixed primitives in one frame; strips longer than
 vertices; runs longer than ~15 minutes; captures other than our demo cube; DS-side
 viewport +1/y1-wrap; the unexplained DeSmuME failures at AUTODUMP_FRAME=120 (see
 `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B, not approved).
+
+### Run 14 — Phase 5B-0a new ARM11 build regression and alpha frame (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 8 photographs kept **outside** the repository in the owner's
+staging directory (`evidence/run14_01..08`); report dated 2026-11-07 ("全テスト正常動作正常終了です").
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-alpha.3dsx` (main @ `0a237ef`; no ARM11 source change, only the shared interpreter changed) | `dd60f963f50d3b18…` |
+| single-cube frame `twlhd_frame_v2_ctl_full.bin` | `79f90bc2…` |
+| scene1 triangle list (SCENE option, AUTODUMP_FRAME=10) | `e32d766b…` |
+| scene2 triangle strip (SCENE option, AUTODUMP_FRAME=10) | `8710595d…` |
+| 170-cube frame `twlhd_frame_v2_c170.bin` (CUBES option, AUTODUMP_FRAME=10) | `4904e26d…` |
+| scene4 alpha frame `twlhd_frame_v2_scene4_alpha.bin` (SCENE=4) | `2decd74dead1044f…` (1128 B) |
+
+Build: NEW ARM11 `twlhd-arm11-alpha.3dsx` (main @ `0a237ef`, SHA-256
+`dd60f963f50d3b18…`); only the shared interpreter changed, no ARM11 source
+change. The scene4 frame is a DeSmuME capture of our own homebrew demo built
+with SCENE=4 (four flat quads, per-quad POLYGON_ATTR alpha 31/16/4/0 =
+red/green/blue/white; interpreter vertex alpha 1.0/0.53125/0.15625/0.0).
+
+Results:
+- **T1 — built-in RGB triangle (alpha-1.0 regression):** OK (photo).
+- **T2 — triangle list:** `SD: v2 loaded, 24 verts -> 8 tris` (gxcm 136). OK (photo).
+- **T3 — triangle strip ribbon:** `30 verts -> 10 tris` (gxcm 100); two photos. OK.
+- **T4 — 170-cube grid:** `SD: v2 loaded, 6120 verts -> 2040 tris`, opaque grid;
+  all as in Runs 10/13. OK (photo). The single-cube A-load photo was not sent.
+- **T5 — alpha frame (SCENE=4):** `24 verts -> 8 tris` (gxcm 121, vtx in 16):
+  only THREE quads visible; the white (alpha 0) quad is ABSENT. Measured colours
+  from the photo (average of a 25×25 px patch; camera shifted; background about
+  (88,100,150)): red quad (232,77,43), green quad (50,221,33), blue quad
+  (76,104,236). Blending with the emulator's weights would give about green
+  (41,182,71) and blue (74,84,166); the observed green is saturated and the
+  observed blue far more saturated than a 16 % blend, so the alpha 16 and alpha 4
+  quads look OPAQUE (no blending). The sequence photo shows the same: blue
+  (80,108,244), red (248,68,37), green (41,221,14), no white. Where the white
+  quad should be: plain background (84,100,148). (photos)
+- **T6 — sequence alpha frame -> cube -> 170 grid:** photos `seq 000/000 loop 0`
+  and `seq 002/003 loop 22` (`seq: wrapped`); no freeze. (photos)
+
+No hang, no error text, no POWER-hold reported.
+
+**Conclusion (HARDWARE OBSERVED):** the new ARM11 build behaves as before for
+alpha-1.0 frames. With the renderer as it is (blend state never set explicitly in
+`arm11/source/renderer.c`), vertex alpha 16/31 and 4/31 do NOT blend on the
+console and alpha 0 is not drawn. The `(alpha + 1) / 32` scale and the DS
+translucent-polygon rules stay UNVERIFIED. By contrast, the EMULATOR
+(Tanuki3DS, earlier) gave blue (0,0,48), green (0,128,0) and an absent white
+quad — i.e. it DID blend; the real console did not. The mechanism that hides the
+alpha-0 quad on hardware (alpha test, blend weight 0, or other) is UNKNOWN.
+
+**Not covered / still open:** overlapping translucent polygons; wireframe;
+cull; lighting; textures; the `(alpha + 1) / 32` scale versus `/31`; DS
+translucent-polygon depth/draw-order rules; runs longer than those photographed.
+5B-0b must set the blend state explicitly and decide the alpha-0 / wireframe
+handling; a further hardware run needs its own approval.
