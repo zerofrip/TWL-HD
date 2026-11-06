@@ -421,3 +421,46 @@ structure/counts); no pixel-exact comparison with the oracle.
 than our demo cube; DS-side viewport +1/y1-wrap; the unexplained DeSmuME failures at
 AUTODUMP_FRAME=120 (see `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B,
 not approved).
+
+### Run 11 — Phase 5A 5-minute run of the large-frame sequence, 100/170 cubes (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 6 photographs kept **outside** the repository in the owner's
+staging directory (`evidence/run11_01..06`); report dated 2026-11-06 ("全テスト正常動作正常終了です").
+A phone stopwatch is visible in every photo.
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-seq.3dsx` (same bytes as Runs 9/10) | `b7b14cff7f4783ca…` |
+| sequence file `seq_000.bin` = c100 (CUBES option, AUTODUMP_FRAME=10) | `8e53b4b3…` |
+| sequence file `seq_001.bin` = c170 (CUBES option, AUTODUMP_FRAME=10) | `4904e26d…` |
+
+Build: unchanged ARM11 `twlhd-arm11-seq.3dsx` (SHA-256 `b7b14cff7f4783ca…`, same bytes as
+Runs 9/10). Sequence files are the same as Run 10: `seq_000.bin` = c100 (3600 output
+vertices, 1200 tris) and `seq_001.bin` = c170 (6120 vertices, 2040 tris). 6120 is the
+largest size the ARM11 clip scene accepts (buffer capacity 6144).
+
+Results:
+- **T1 — 5-minute sequence run:** alternating `seq_000` (c100) / `seq_001` (c170); bottom
+  screen at 0:15 `loop 15 seq 001 6120 verts`, at 1:06 `loop 56 seq 000 3600 verts`, at
+  3:02 `loop 151 seq 000 3600 verts`, at 5:05 `loop 251 seq 001 6120 verts`; top screen
+  shows the 170-cube (17×10) or 100-cube grid accordingly, no glitches visible. (photos)
+- **T2 — loop rate:** ~1.0/s at 0:15, 0.85/s (0:15–1:06), 0.82/s (1:06–3:02), 0.81/s
+  (3:02–5:05): steady after the first minute, no progressive slowdown. The procedure's
+  expected loop numbers (~90/270/450) were too high; real rate ~0.82 loops/s (~1.6
+  uploads/s), ~260 loops / ~520 uploads over the 5 min run. (photos)
+- **T3 — stop and A:** at 5:19 `seq off` (X) with the 170-cube frame frozen; at 5:34 A
+  loaded `sdmc:/twlhd_frame.bin` (still the 170-cube file from Run 10, 6120 verts ->
+  2040 tris). No photo of the Y (built-in triangle) step was provided. No freeze, no
+  flicker/torn grid, no stray triangles, no colour change visible; no POWER-hold reported.
+  (photos)
+
+**Conclusion:** HARDWARE OBSERVED: alternating re-upload of 3600/6120-vertex scenes ran for
+5 min 05 s (251 loops, ~500 uploads) without a GPU hang or visible degradation; the app
+stayed responsive; picture correctness judged from photos only.
+
+**Not covered / still open:** runs longer than ~5 minutes; captures other than our demo
+cube; DS-side viewport +1/y1-wrap; the unexplained DeSmuME failures at
+AUTODUMP_FRAME=120 (see `docs/EMULATOR_VALIDATION.md`); textures/lighting/alpha (Phase 5B,
+not approved).
