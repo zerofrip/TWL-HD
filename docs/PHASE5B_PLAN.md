@@ -1,6 +1,6 @@
 # Phase 5B — lighting, POLYGON_ATTR (alpha/cull), textures (PLAN ONLY)
 
-STATUS: 5B-0b implemented BUILD/UNIT only as of 2026-11-07 (owner approval after Run 14); EMULATOR and HARDWARE still UNVERIFIED.
+STATUS: 5B-0b implemented (BUILD/UNIT/EMULATOR) as of 2026-11-07 (owner approval after Run 14); HARDWARE observation (Run 15) shows NO change of the console picture: alpha 16/4 quads still opaque, alpha-0 quad still not drawn; cause UNKNOWN (candidates in Run 15). Next step = diagnostics (build id on screen; separate the candidates) before any further renderer change; no further 5B stage started.
 5B-0a (CPU alpha) is implemented as **BUILD/UNIT** plus an **EMULATOR** observation and a **HARDWARE** observation (Run 14, see §8 and `docs/HARDWARE_TEST_PROCEDURE_3DS.md` section 12): alpha-1.0 frames are unchanged on hardware; alpha<1 frames do NOT blend on the console with the default blend state. The ARM11 binary changes (shared interpreter) but behaves identically for alpha-1.0 frames.
 Equations written here are placeholders marked **TO BE
 VERIFIED**; they are not facts.
@@ -249,10 +249,17 @@ BEGIN groups, no-attr default, non-alpha bits, RGB isolation; a SCENE=4 host
 variant with per-quad alphas 31/16/4/0; and Python golden streams checked against
 an independently written oracle.
 
-### 5B-0b (explicit blend state) — BUILD/UNIT only
+### 5B-0b (explicit blend state) — BUILD/UNIT/EMULATOR; HARDWARE (Run 15) no change
 
-Status: implemented BUILD/UNIT only as of 2026-11-07 (owner approval after Run 14);
-HARDWARE UNVERIFIED until Run 15.
+Status: implemented (BUILD/UNIT/EMULATOR) as of 2026-11-07 (owner approval after
+Run 14); HARDWARE OBSERVED (Run 15, 2026-11-07) shows NO change of the console
+picture relative to Run 14: alpha 16/4 quads still opaque, alpha-0 quad still
+not drawn. Cause UNKNOWN (candidates: (a) wrong build started, (b) blend
+registers ineffective on the console path, (c) fragment alpha not the vertex
+alpha). EMULATOR (Tanuki3DS) blended in both cases and is not a predictor.
+Next step = diagnostics (build id on the bottom screen; separate the
+candidates) before any further renderer change; no further 5B stage is
+started.
 
 What was implemented:
 - New header-only, pure-data carrier `arm11/include/twlhd_blend_config.h` with
@@ -274,8 +281,12 @@ What stays UNVERIFIED:
 - DS translucent-polygon depth/draw-order semantics: depth test stays
   `GPU_GREATER` + `GPU_WRITE_ALL`.
 - Wireframe/outline-only drawing is still NOT implemented.
-- Everything visual: this is HARDWARE UNVERIFIED until an approved run; Run 15
-  approval is still required.
+- Everything visual: HARDWARE OBSERVED (Run 15) shows no change of the console
+  picture relative to Run 14; the cause is UNKNOWN (see Run 15 candidates). The
+  `(alpha + 1) / 32` scale, DS translucent-polygon depth/draw-order semantics,
+  wireframe/outline-only drawing and all later 5B stages remain UNVERIFIED;
+  diagnostics (build id on screen; separate the candidates) are required before
+  any further renderer change.
 
 ### 5B-0c / Run 16 diagnostic build — BUILD/UNIT only
 
