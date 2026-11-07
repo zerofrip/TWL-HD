@@ -1,6 +1,6 @@
 # Phase 5B — lighting, POLYGON_ATTR (alpha/cull), textures (PLAN ONLY)
 
-STATUS: 5B-0b implemented (BUILD/UNIT/EMULATOR) as of 2026-11-07 (owner approval after Run 14); HARDWARE observation (Run 15) shows NO change of the console picture: alpha 16/4 quads still opaque, alpha-0 quad still not drawn; cause UNKNOWN (candidates in Run 15). Next step = diagnostics (build id on screen; separate the candidates) before any further renderer change; no further 5B stage started.
+STATUS: 5B-0b implemented (BUILD/UNIT/EMULATOR) as of 2026-11-07 (owner approval after Run 14); HARDWARE observation (Run 15) shows NO change of the console picture: alpha 16/4 quads still opaque, alpha-0 quad still not drawn; cause UNKNOWN (candidates in Run 15). 5B-0c diagnostic build implemented (BUILD/UNIT) as of 2026-11-07; HARDWARE OBSERVED (Run 16, 2026-11-07) confirms the intended binary ran (build id `e6e6c88-diag`), the vertex alpha reaches the fragment stage distinctly and monotonically (mode 1), and with blending ON plus constant fragment alpha 0.5 the quads are NOT visibly mixed with the background and an alpha-0 quad disappears in mode 0 while the same quad is drawn at alpha 0.5 (mode 2) — i.e. the console blend does not behave like alpha blending with this state; cause UNKNOWN (candidates: colour-buffer read/blend path ineffective with this render target; effect state not what the C3D calls intend; an alpha-0 discard elsewhere). Emulators (Tanuki3DS, Azahar) both blend and are NOT predictors of console blend behaviour. Next step proposed (needs approval): in-console pixel probe reading the top framebuffer at the quad centres. No further 5B stage started.
 5B-0a (CPU alpha) is implemented as **BUILD/UNIT** plus an **EMULATOR** observation and a **HARDWARE** observation (Run 14, see §8 and `docs/HARDWARE_TEST_PROCEDURE_3DS.md` section 12): alpha-1.0 frames are unchanged on hardware; alpha<1 frames do NOT blend on the console with the default blend state. The ARM11 binary changes (shared interpreter) but behaves identically for alpha-1.0 frames.
 Equations written here are placeholders marked **TO BE
 VERIFIED**; they are not facts.
@@ -220,6 +220,10 @@ label.
 a) Stage 5B-0 implementation task: interpreter alpha/cull latch + UNIT tests + test-ROM scene generation via the pipeline.
 b) GBATEK/DeSmuME verification of POLYGON_ATTR bit layout as a research task before any equation is used.
 c) Results of the DS POLYGON_ATTR/primitive-assembly research: see docs/DS_GX_RESEARCH.md.
+d) (proposed, needs approval) In-console pixel probe: read the top framebuffer at
+   the quad centres after rendering and print the RGB values on the bottom
+   screen, to remove the camera/ambient-light limit of the Run 16 photo
+   evidence. See the proposal at the end of this file.
 
 ### 5B-0a (CPU alpha) — BUILD/UNIT + EMULATOR observation
 
@@ -249,16 +253,20 @@ BEGIN groups, no-attr default, non-alpha bits, RGB isolation; a SCENE=4 host
 variant with per-quad alphas 31/16/4/0; and Python golden streams checked against
 an independently written oracle.
 
-### 5B-0b (explicit blend state) — BUILD/UNIT/EMULATOR; HARDWARE (Run 15) no change
+### 5B-0b (explicit blend state) — BUILD/UNIT/EMULATOR; HARDWARE (Runs 15, 16) no change
 
 Status: implemented (BUILD/UNIT/EMULATOR) as of 2026-11-07 (owner approval after
-Run 14); HARDWARE OBSERVED (Run 15, 2026-11-07) shows NO change of the console
-picture relative to Run 14: alpha 16/4 quads still opaque, alpha-0 quad still
-not drawn. Cause UNKNOWN (candidates: (a) wrong build started, (b) blend
-registers ineffective on the console path, (c) fragment alpha not the vertex
-alpha). EMULATOR (Tanuki3DS) blended in both cases and is not a predictor.
-Next step = diagnostics (build id on the bottom screen; separate the
-candidates) before any further renderer change; no further 5B stage is
+Run 14); HARDWARE OBSERVED (Run 15, 2026-11-07) and (Run 16, 2026-11-07) show
+NO change of the console picture relative to Run 14: alpha 16/4 quads still
+opaque, alpha-0 quad still not drawn. Run 16 (build id `e6e6c88-diag`) confirms
+the intended binary ran and that the vertex alpha reaches the fragment stage
+distinctly and monotonically (mode 1), while blending ON with constant
+fragment alpha 0.5 does not mix with the background and an alpha-0 quad
+disappears in mode 0 but is drawn at alpha 0.5 (mode 2). Cause UNKNOWN
+(candidates: colour-buffer read/blend path ineffective with this render target;
+effect state not what the C3D calls intend; an alpha-0 discard elsewhere).
+Emulators (Tanuki3DS, Azahar) both blend and are NOT predictors. Next step
+proposed (needs approval): in-console pixel probe. No further 5B stage is
 started.
 
 What was implemented:
@@ -288,10 +296,15 @@ What stays UNVERIFIED:
   diagnostics (build id on screen; separate the candidates) are required before
   any further renderer change.
 
-### 5B-0c / Run 16 diagnostic build — BUILD/UNIT only
+### 5B-0c / Run 16 diagnostic build — BUILD/UNIT + HARDWARE OBSERVED (Run 16)
 
-Status: implemented BUILD/UNIT only as of 2026-11-07; HARDWARE UNVERIFIED until
-owner run.
+Status: implemented BUILD/UNIT as of 2026-11-07; HARDWARE OBSERVED (Run 16,
+2026-11-07): the intended binary ran (build id `e6e6c88-diag`); the vertex
+alpha reaches the fragment stage distinctly and monotonically (mode 1); with
+blending ON and constant fragment alpha 0.5 the quads are not visibly mixed
+with the background and an alpha-0 quad disappears in mode 0 while the same
+quad is drawn at alpha 0.5 (mode 2). The console blend does not behave like
+alpha blending with this state; cause UNKNOWN. No further 5B stage started.
 
 Purpose: bisect why the explicit alpha blend (5B-0b) showed no effect on the
 real console in Runs 14/15 (alpha 16/31 and 4/31 quads drew opaque; alpha-0 quad
@@ -316,3 +329,13 @@ checks; the owner runs the hardware test. Mode 0 is designed to be pixel-identic
 to the current build on the emulator (Tanuki3DS screenshot comparison unchanged)
 so any console difference is isolated to real-hardware blend-register behaviour
 or fragment-alpha interpretation.
+
+### Proposed next step (needs owner approval): in-console pixel probe
+
+Proposal (not yet approved, not implemented): an in-console pixel probe that
+reads the top framebuffer at the quad centres after rendering and prints the
+RGB values on the bottom screen, removing the camera/ambient-light limit of
+the photographic evidence. This is the Run 16 "open" item: the photo evidence
+is relative, and a numeric in-console readout would settle whether the blend
+is truly ineffective or only appears so in photos. Requires its own approval
+before any code (section 6).
