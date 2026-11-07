@@ -1,5 +1,5 @@
 .PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag \
-	emu-expected emu-validate azahar-host
+	emu-expected emu-validate azahar-host ntr-capture
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
@@ -81,6 +81,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_demo_frame_s4 \
 	tests/host/build/test_blend_config \
 	tests/host/build/test_azahar_host_ppm \
+	tests/host/build/test_ntr_capture_util \
 	tests/host/build/test_diag_config
 
 host-test: $(HOST_TESTS)
@@ -139,6 +140,10 @@ tests/host/build/test_seq: tests/host/test_seq.c $(HOST_HEADERS) | tests/host/bu
 tests/host/build/test_azahar_host_ppm: tests/host/test_azahar_host_ppm.c \
 		$(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
+
+tests/host/build/test_ntr_capture_util: tests/host/test_ntr_capture_util.c \
+		tools/ntr_capture/ntr_capture_util.h $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -Itools/ntr_capture -o $@ $< $(HOST_LDFLAGS)
 
 tests/host/build/gx_interp_cli: tests/host/gx_interp_cli.c $(HOST_V2_COMMON) \
 		$(HOST_HEADERS) | tests/host/build
@@ -403,6 +408,44 @@ tools/azahar_host/build/azahar_host: tools/azahar_host/azahar_host.c \
 tools/azahar_host/build:
 	mkdir -p $@
 
+# ---------------------------------------------------------------------------
+# Headless NTR-HR remote-play capture (opt-in; NEVER part of `all` or `test`).
+#
+# The binary drives NTR-HR "JPEG Compat (UDP)" remote play and writes PPM
+# frames; the console is only contacted when the binary is run, never by this
+# target. NTRVIEWER_DIR is the MIT-licensed viewer source tree the protocol and
+# bundled jpeg_turbo come from. Its bundled libjpeg-turbo needs nasm (missing
+# here) and hard-codes WITH_SIMD=1 without a no-SIMD switch, so the target uses
+# the system libjpeg-turbo headers instead; it fails loudly if they are missing.
+# Nothing from the viewer is vendored into this repository.
+# ---------------------------------------------------------------------------
+NTRVIEWER_DIR ?= /home/one/3ds/ntrviewer-hr
+NTR_CAPTURE_JPEG_CFLAGS := $(shell pkg-config --cflags libjpeg 2>/dev/null)
+NTR_CAPTURE_JPEG_LIBS := $(shell pkg-config --libs libjpeg 2>/dev/null)
+
+ntr-capture: tools/ntr_capture/build/ntr_capture
+
+tools/ntr_capture/build/ntr_capture: tools/ntr_capture/ntr_capture.c \
+		tools/ntr_capture/ntr_capture_util.h | tools/ntr_capture/build
+	@if [ -z "$(NTR_CAPTURE_JPEG_LIBS)" ] || [ ! -f /usr/include/jpeglib.h ]; then \
+		echo "error: libjpeg headers not found (need /usr/include/jpeglib.h and -ljpeg);" >&2; \
+		echo "       $(NTRVIEWER_DIR)/jpeg_turbo cannot build standalone here: nasm is" >&2; \
+		echo "       required for its hard-coded WITH_SIMD=1 build." >&2; \
+		exit 1; \
+	fi
+	@if [ ! -d "$(NTRVIEWER_DIR)/jpeg_turbo" ]; then \
+		echo "note: $(NTRVIEWER_DIR)/jpeg_turbo not found; using system libjpeg-turbo" >&2; \
+	elif ! command -v nasm >/dev/null 2>&1; then \
+		echo "note: $(NTRVIEWER_DIR)/jpeg_turbo needs nasm (missing) for its WITH_SIMD=1 build;" >&2; \
+		echo "      using system libjpeg-turbo" >&2; \
+	fi
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O2 -D_POSIX_C_SOURCE=200809L \
+		-Itools/ntr_capture $(NTR_CAPTURE_JPEG_CFLAGS) \
+		-o $@ $< $(NTR_CAPTURE_JPEG_LIBS)
+
+tools/ntr_capture/build:
+	mkdir -p $@
+
 test: host-test tests/host/build/gx_interp_cli
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
@@ -414,4 +457,5 @@ clean:
 	$(MAKE) -C arm11_ucode clean
 	rm -rf tests/host/build
 	rm -rf tools/azahar_host/build
+	rm -rf tools/ntr_capture/build
 	rm -f twlhd-rtcom.nds
