@@ -692,3 +692,80 @@ candidates.
 cull; lighting; textures; the `(alpha + 1) / 32` scale versus `/31`; DS
 translucent-polygon depth/draw-order rules; runs longer than those
 photographed.
+
+### Run 16 — Phase 5B diagnostic build: build id and alpha diagnostic modes (HARDWARE OBSERVED, photographs; summary)
+
+Owner-run; evidence = 11 photographs kept **outside** the repository in the
+owner's staging directory (`evidence/run16_01..11`); report dated 2026-11-07
+("全テスト正常動作正常終了です").
+
+Artifact hashes (of the files staged for the run, run by file name):
+
+| Artifact | SHA-256 |
+|---|---|
+| production app `twlhd-arm11-diag.3dsx` (main @ `e6e6c88`) | `9bf74bc65ddfac63…` |
+| scene4 alpha frame `twlhd_frame_v2_scene4_alpha.bin` (SCENE=4) | `2decd74dead1044f…` (1128 B) |
+| 170-cube frame `twlhd_frame_v2_c170.bin` (CUBES option, AUTODUMP_FRAME=10) | `4904e26d…` |
+
+Build: NEW ARM11 `twlhd-arm11-diag.3dsx` (main @ `e6e6c88`, SHA-256
+`9bf74bc65ddfac63…`): build id `e6e6c88-diag` shown on the bottom screen;
+B key cycles three clip-path diagnostic modes — 0 normal (explicit alpha
+blend, TexEnv passes primary colour/alpha), 1 alpha-as-gray (opaque blend,
+RGB = fragment alpha, output alpha forced to 1.0), 2 const-alpha-0.5
+(explicit alpha blend, RGB = primary colour, alpha forced to 0.5). Frames as
+in Runs 14/15: scene4_alpha (quads alpha 31/16/4/0 = red/green/blue/white)
+and c170 (alpha 1.0 everywhere).
+
+Results:
+- **T1 — build id / right binary:** the bottom screen shows
+  `build: e6e6c88-diag blend=explicit` and `diag: normal`: the intended
+  binary was running. (Whether Runs 14/15 used the right files is still
+  unknown.)
+- **Mode 0 (normal):** photo 02; JPEG patch averages (camera and ambient
+  light shift colours; background reads about (100-142,106-147,145-182)
+  although the clear colour is (16,16,24); compare only within one photo):
+  red (244,99,67), green (17,208,41), blue (108,120,231), white-quad area
+  (109,114,150) = background. Same picture as Runs 14/15: no white quad.
+- **Mode 1 (blend off, RGB = fragment alpha):** four different levels
+  ordered like the vertex alphas: red position (alpha 1.0) (189,232,240);
+  green position (alpha 0.53) (154,202,233); blue position (alpha 0.16)
+  (145,164,195); white position (alpha 0) (98,86,80) = a dark quad drawn
+  there. The vertex alpha reaches the fragment stage distinctly and
+  monotonically; absolute levels are not linear in the vertex alpha as read
+  from the photo (camera/screen response, ambient light); the evidence is the
+  order.
+- **Mode 2 (blend on, fragment alpha forced to 0.5), two photos:** all four
+  quads are drawn, including the white-quad position (pale patch
+  (159,209,246) / (148,198,230)); green (17,211,27)/(31,196,46) as
+  saturated as in mode 0; red (213,69,61)/(204,67,57) and blue
+  (25,86,245)/(20,89,238) fully saturated: no sign of 50 % mixing with the
+  background (a 50 % mix of green would raise red/blue components to roughly
+  60-90).
+- **T5:** mode 0 again as T2; Y gave the opaque built-in triangle.
+- **T6 — c170 (alpha 1.0 everywhere):** mode 0 normal grid, mode 1 all
+  cubes light/white, mode 2 and back to mode 0 coloured grid.
+
+No hang, no error text, no POWER-hold reported.
+
+**Conclusion (HARDWARE OBSERVED):** the binary was the intended one; the
+fragment alpha is distinct and ordered (so the vertex alpha does reach the
+fragment stage); with blending ON and constant fragment alpha 0.5 the quads
+are not visibly mixed with the background, and an alpha-0 quad disappears in
+mode 0 while the same quad is drawn when its alpha is 0.5. On the console
+the blend does not behave like alpha blending with this state; the cause is
+UNKNOWN. Candidates, none verified: the colour-buffer read/blend path is
+ineffective with this render target; the effect state is not what the C3D
+calls intend; an alpha-0 discard exists elsewhere. EMULATOR (Tanuki3DS and
+the Azahar software renderer) both blend (mode 0 and mode 2 predicted
+correctly by Azahar for modes 1/2, but both emulators blend in mode 0 where
+the console does not): emulators are not predictors of the console blend
+behaviour.
+
+**Open / UNKNOWN:** the photo evidence is relative; a numeric in-console
+readout of pixels would remove the camera limit. Proposal (needs approval):
+in-console pixel probe (read the top framebuffer at the quad centres after
+rendering and print the RGB values on the bottom screen).
+
+**Not covered / still open:** draw order/depth write of overlapping
+translucent polygons; wireframe; cull; lighting; textures; the
+`(alpha + 1) / 32` scale.
