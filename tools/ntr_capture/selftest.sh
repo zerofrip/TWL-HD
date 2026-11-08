@@ -149,7 +149,7 @@ def packets(jpeg, frame_id, is_top):
     out = []
     for off in range(0, len(jpeg), 1444):
         last = off + 1444 >= len(jpeg)
-        flags = (0x00 if is_top else 0x01) | (0x10 if last else 0x00)
+        flags = (0x01 if is_top else 0x00) | (0x10 if last else 0x00)
         out.append(bytes([frame_id, flags, 0x02, (off // 1444) & 0xFF]) +
                    jpeg[off:off + 1444])
     return out

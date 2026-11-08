@@ -122,12 +122,16 @@ Each datagram is a 4-byte header plus up to 1444 bytes of JPEG data
 | Byte | Meaning |
 |---|---|
 | 0 | frame id |
-| 1 | bit 0: bottom screen when set; bit 4: last packet of the frame |
+| 1 | screen: the whole byte after clearing bit 4 — `0x00` = bottom, any nonzero value = top; bit 1 = full width (top only); bit 4 = last packet of the frame (`ntr_rp.c:1795-1796,1833`) |
 | 2 | must satisfy `(b & ~0x0d) == 2`; bit 0 lossless; bits 2-3 downsample (`ntr_rp.c:1827-1838`) |
 | 3 | packet number |
 
 The frame identity is bytes 0-2 **after clearing the end bit**
-(`ntr_rp.c:1836,1843`). A new identity starts a new frame. A non-end packet must
+(`ntr_rp.c:1836,1843`). Byte 1 is a whole-byte screen selector, not a single
+bit: after the end bit is cleared, `0x00` is the bottom screen and any nonzero
+value is the top screen (`ntr_rp.c:1795-1796`). Byte 1 bit 1 requests a
+full-width top frame (~800 px wide) and is only meaningful for top frames. A
+new identity starts a new frame. A non-end packet must
 be exactly 1444 bytes. Packet numbers wrap by 256 (`ntr_rp.c:1900-1902`). On the
 end packet the viewer checks that every packet `0..end_packet` arrived; a
 missing packet discards the whole frame (`ntr_rp.c:1930-1948`). The end packet's
@@ -191,6 +195,11 @@ is not a console packet trace.
 - UDP frame ids, downsample bits, packet ordering and JPEG dimensions from a
   real game stream were not observed. Reassembly is tested with synthetic
   packets only.
+- A live capture on 2026-11-08 20:03 (console 192.168.1.32) established the
+  correct byte-1 screen semantics: bottom packets carried 240×400 JPEGs and
+  top packets carried 240×320, matching the whole-byte mapping
+  (`ntr_rp.c:1795-1796`). The earlier single-bit reading came from the KCP
+  path (`ntr_rp.c:242`) and was inverted.
 - Output orientation is mirrored from the viewer's SDL renderer. The OpenGL
   renderer swaps texture coordinates equivalently by inspection, but no PPM
   was visually compared with a running viewer.
@@ -212,8 +221,11 @@ is not a console packet trace.
   is no retransmission. Duplicates are ignored. Reordering is tolerated until
   a new frame identity arrives.
 - **Full-resolution JPEG Compat only.** Downsample values 2 and 3 are skipped
-  with a log line. KCP / reliable stream, delta, lossless, audio and full-width
-  modes are not implemented.
+  with a log line. The UDP full-width flag is parsed and stored; a full-width
+  top frame (~800 px wide) is skipped explicitly with a log line because the
+  portrait JPEG cap does not cover it. KCP / reliable stream, delta, lossless,
+  audio and full-width *requests* are not implemented: the remote-play
+  `args[6]` full-width field remains 0.
 - **No input redirection** and no console writes of any kind.
 - PPM is uncompressed: about 288 KB for the top screen and 230 KB for the
   bottom.
@@ -238,7 +250,7 @@ the host's libjpeg-turbo, whose licence is the usual libjpeg BSD-style licence.
 
 ## Mutation evidence
 
-Baseline: `make test` green (all host tests, including 13 groups in
+Baseline: `make test` green (all host tests, including 16 groups in
 `test_ntr_capture_util`; 86 Python tests OK), exit 0.
 
 Each mutant was applied to a copy of `ntr_capture_util.h`, the unchanged test
@@ -253,17 +265,19 @@ loop stops at the first failing test). The header was then restored; the final
 | `ntr_cap_build_remote_play` | (b) bandwidth uses ×1000 instead of ×1024 | PASS | exit 1: `test_ntr_capture_util.c:49: expected 16 * 128 * 1024 == 2097152, got 2048000` |
 | `ntr_cap_build_heartbeat` | (c) heartbeat command becomes 1 | PASS | exit 1: `test_ntr_capture_util.c:82: expected 0 == 0, got 1` |
 | `ntr_cap_build_heartbeat` | (d) heartbeat sequence becomes `seq ^ 1` | PASS | exit 1: `test_ntr_capture_util.c:80: expected 42 == 42, got 43` |
-| `ntr_cap_udp_parse` | (e) top/bottom flag inverted | PASS | exit 1: `test_ntr_capture_util.c:106: expected 1 == 1, got 0` |
-| `ntr_cap_udp_parse` | (f) end-flag mask `0x10` → `0x20` | PASS | exit 1: `test_ntr_capture_util.c:120: expected 1 == 1, got 0` |
-| `ntr_cap_feed` | (g) missing-packet test inverted | PASS | exit 1: `test_ntr_capture_util.c:156: expected NTR_CAP_FEED_READY == 2, got 1` |
-| `ntr_cap_feed` | (h) non-end size check removed | PASS | exit 1: `test_ntr_capture_util.c:228: expected NTR_CAP_FEED_IGNORED == 0, got 1` |
-| `ntr_cap_rotate_ccw` | (i) source row not mirrored | PASS | exit 1: `test_ntr_capture_util.c:300: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
-| `ntr_cap_rotate_ccw` | (j) last destination row skipped | PASS | exit 1: `test_ntr_capture_util.c:300: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
-| `ntr_cap_ppm_header` | (k) magic `P3` instead of `P6` | PASS | exit 1: `test_ntr_capture_util.c:315: CHECK failed: strcmp(buf, "P6\n400 240\n255\n") == 0` |
-| `ntr_cap_ppm_header` | (l) zero width accepted | PASS | exit 1: `test_ntr_capture_util.c:323: expected -1 == -1, got 13` |
-| `ntr_cap_addr_is` | (m) comparison inverted (`==` → `!=`) | PASS | exit 1: `test_ntr_capture_util.c:274: expected 1 == 1, got 0` |
-| `ntr_cap_addr_is` | (n) always matches (source filter removed) | PASS | exit 1: `test_ntr_capture_util.c:276: expected 0 == 0, got 1` |
-| `ntr_cap_feed` | (o) end-packet size assignment removed | PASS | exit 1: `test_ntr_capture_util.c:264: expected 100 == 100, got 0` |
+| `ntr_cap_udp_parse` | (e) whole-byte screen mapping inverted | PASS | exit 1: `test_ntr_capture_util.c:108: expected 0 == 0, got 1` |
+| `ntr_cap_udp_parse` | (f) full-width bit ignored (`full_width` always 0) | PASS | exit 1: `test_ntr_capture_util.c:136: expected 1 == 1, got 0` |
+| `ntr_cap_udp_parse` | (g) bit-0-only screen mapping instead of whole byte | PASS | exit 1: `test_ntr_capture_util.c:135: expected 1 == 1, got 0` |
+| `ntr_cap_udp_parse` | (h) end-flag mask `0x10` → `0x20` | PASS | exit 1: `test_ntr_capture_util.c:125: expected 1 == 1, got 0` |
+| `ntr_cap_feed` | (i) missing-packet test inverted | PASS | exit 1: `test_ntr_capture_util.c:197: expected NTR_CAP_FEED_READY == 2, got 1` |
+| `ntr_cap_feed` | (j) non-end size check removed | PASS | exit 1: `test_ntr_capture_util.c:269: expected NTR_CAP_FEED_IGNORED == 0, got 1` |
+| `ntr_cap_rotate_ccw` | (k) source row not mirrored | PASS | exit 1: `test_ntr_capture_util.c:355: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
+| `ntr_cap_rotate_ccw` | (l) last destination row skipped | PASS | exit 1: `test_ntr_capture_util.c:355: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
+| `ntr_cap_ppm_header` | (m) magic `P3` instead of `P6` | PASS | exit 1: `test_ntr_capture_util.c:370: CHECK failed: strcmp(buf, "P6\n400 240\n255\n") == 0` |
+| `ntr_cap_ppm_header` | (n) zero width accepted | PASS | exit 1: `test_ntr_capture_util.c:378: expected -1 == -1, got 13` |
+| `ntr_cap_addr_is` | (o) comparison inverted (`==` → `!=`) | PASS | exit 1: `test_ntr_capture_util.c:329: expected 1 == 1, got 0` |
+| `ntr_cap_addr_is` | (p) always matches (source filter removed) | PASS | exit 1: `test_ntr_capture_util.c:331: expected 0 == 0, got 1` |
+| `ntr_cap_feed` | (q) end-packet size assignment removed | PASS | exit 1: `test_ntr_capture_util.c:306: expected 100 == 100, got 0` |
 
 Two reviewed fixes are **not** mutation-testable under this protocol. The
 `volatile` qualifier on `decode_jpeg_rgb`'s `rgb` pointer is a C11 7.13.2.1
