@@ -11,6 +11,7 @@
  */
 #pragma once
 
+#include <arpa/inet.h> /* struct in_addr only; no socket is opened here */
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -135,6 +136,16 @@ static inline int ntr_cap_udp_parse(const uint8_t *packet, size_t len,
     return 0;
 }
 
+/* Sender-address filter for the UDP receive path. */
+static inline int ntr_cap_addr_is(const struct in_addr *sender,
+                                  const struct in_addr *expected) {
+    if (sender == NULL || expected == NULL) {
+        return 0;
+    }
+    return memcmp(&sender->s_addr, &expected->s_addr,
+                  sizeof(sender->s_addr)) == 0;
+}
+
 struct ntr_cap_frame {
     uint8_t id[3]; /* frame_id, flags, format (ntr_rp.c:1843) */
     uint8_t active;
@@ -229,6 +240,13 @@ static inline int ntr_cap_feed(struct ntr_cap_reassembler *rs,
                   (uint32_t)h.payload_len;
     }
     if (h.is_end) {
+        /* The end packet bounds the frame; its length is authoritative, so a
+         * single-packet frame (packet 0 with the end bit) gets a real size. */
+        if (packet_no >= f->end_packet) {
+            f->end_packet = (uint16_t)packet_no;
+            f->size = (uint32_t)packet_no * NTR_CAP_RP_PACKET_DATA_SIZE +
+                      (uint32_t)h.payload_len;
+        }
         f->end_seen = 1;
     }
     if (!f->end_seen) {

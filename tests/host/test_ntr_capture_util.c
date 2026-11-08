@@ -252,6 +252,36 @@ static void test_feed_screens_independent(void) {
     CHECK_EQ_INT(rs.screen[1].complete, 1);
 }
 
+static void test_feed_one_packet_end(void) {
+    static struct ntr_cap_reassembler rs;
+
+    ntr_cap_reassembler_init(&rs);
+    /* A whole frame in one datagram: packet 0 carries the end bit. */
+    CHECK_EQ_INT(feed_simple(&rs, 0x70, 0x00, 0, 1, 100),
+                 NTR_CAP_FEED_READY);
+    CHECK_EQ_INT(rs.screen[0].complete, 1);
+    CHECK_EQ_INT(rs.screen[0].end_packet, 0);
+    CHECK_EQ_INT(rs.screen[0].size, 100);
+    CHECK_EQ_INT(rs.screen[0].data[0], 0x70);
+}
+
+static void test_addr_is(void) {
+    struct in_addr a;
+    struct in_addr b;
+
+    CHECK_EQ_INT(inet_pton(AF_INET, "192.168.1.32", &a), 1);
+    CHECK_EQ_INT(inet_pton(AF_INET, "192.168.1.32", &b), 1);
+    CHECK_EQ_INT(ntr_cap_addr_is(&a, &b), 1);
+    CHECK_EQ_INT(inet_pton(AF_INET, "192.168.1.33", &b), 1);
+    CHECK_EQ_INT(ntr_cap_addr_is(&a, &b), 0);
+    CHECK_EQ_INT(inet_pton(AF_INET, "192.168.2.32", &b), 1);
+    CHECK_EQ_INT(ntr_cap_addr_is(&a, &b), 0);
+    CHECK_EQ_INT(inet_pton(AF_INET, "127.0.0.2", &b), 1);
+    CHECK_EQ_INT(ntr_cap_addr_is(&a, &b), 0);
+    CHECK_EQ_INT(ntr_cap_addr_is(NULL, &b), 0);
+    CHECK_EQ_INT(ntr_cap_addr_is(&a, NULL), 0);
+}
+
 static void test_rotate(void) {
     /* 3x2 portrait, one RGB triple per pixel. */
     static const uint8_t src[3 * 2 * 3] = {
@@ -313,6 +343,10 @@ int main(void) {
     test_report("udp/feed-rejects");
     test_feed_screens_independent();
     test_report("udp/feed-screens");
+    test_feed_one_packet_end();
+    test_report("udp/feed-one-packet-end");
+    test_addr_is();
+    test_report("udp/addr-is");
     test_rotate();
     test_report("rotate/ccw");
     test_ppm_header();

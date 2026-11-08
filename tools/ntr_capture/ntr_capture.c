@@ -3,8 +3,8 @@
  * Headless NTR-HR "JPEG Compat (UDP)" capture client.
  *
  * BUILD/UNIT only: this program is the only thing that talks to a console, and
- * it only does so when run with --host. Nothing here was executed against a
- * console during implementation.
+ * it only does so when run with --console-ip. Nothing here was executed
+ * against a console during implementation.
  *
  * Protocol sources (MIT-licensed NTRViewer-HR):
  *   main.c:823-829            menu TCP thread on port 8000
@@ -44,7 +44,8 @@
 enum screen_mode { SCREEN_TOP = 0, SCREEN_BOTTOM = 1, SCREEN_BOTH = 2 };
 
 struct options {
-    const char *host;
+    const char *console_ip;
+    const char *pc_ip;
     const char *out_prefix;
     int tcp_port;
     int udp_port;
@@ -106,12 +107,16 @@ static void die_runtime(const char *fmt, ...) {
 
 static void usage(FILE *fp) {
     fprintf(fp,
-            "usage: ntr_capture --host <ip> [options]\n"
+            "usage: ntr_capture --console-ip <ip> --pc-ip <ip> [options]\n"
             "\n"
             "Headless NTR-HR remote-play capture (JPEG Compat / UDP).\n"
             "\n"
-            "  --host <ip>            console IPv4 address (required unless --dry-run)\n"
-            "  --port <n>             console TCP port (default 8000)\n"
+            "  --console-ip <ip>      console IPv4 address (required unless\n"
+            "                         --dry-run; --host is an alias)\n"
+            "  --console-port <n>     console TCP port (default 8000; --port is\n"
+            "                         an alias)\n"
+            "  --pc-ip <ip>           local IPv4 address to bind the UDP socket\n"
+            "                         to (required unless --dry-run)\n"
             "  --udp-port <n>         local UDP listen port (default 8001)\n"
             "  --screen top|bottom|both  which screen(s) to stream (default both)\n"
             "  --quality <n>          JPEG quality 10..100 (default 95)\n"
@@ -233,7 +238,7 @@ fail:
     return -1;
 }
 
-static int udp_bind(int port) {
+static int udp_bind(const char *pc_ip, int port) {
     struct sockaddr_in addr;
     int fd;
     int rcvbuf = NTR_CAP_UDP_RCVBUF;
@@ -251,7 +256,12 @@ static int udp_bind(int port) {
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons((uint16_t)port);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (inet_pton(AF_INET, pc_ip, &addr.sin_addr) != 1) {
+        int err = EINVAL;
+        close(fd);
+        errno = err;
+        return -1;
+    }
     if (bind(fd, (struct sockaddr *)&addr, sizeof(addr)) != 0) {
         int err = errno;
         close(fd);
@@ -304,7 +314,7 @@ static int decode_jpeg_rgb(const uint8_t *data, size_t size, uint8_t **out,
     struct jpeg_decompress_struct cinfo;
     struct jpeg_error_ctx jerr;
     volatile int created = 0;
-    uint8_t *rgb = NULL;
+    uint8_t *volatile rgb = NULL;
     int w = 0;
     int h = 0;
 
@@ -323,6 +333,12 @@ static int decode_jpeg_rgb(const uint8_t *data, size_t size, uint8_t **out,
     created = 1;
     jpeg_mem_src(&cinfo, data, (unsigned long)size);
     jpeg_read_header(&cinfo, TRUE);
+    /* Reject an oversized header before allocating scanline storage. */
+    if (cinfo.image_width > NTR_CAP_PORTRAIT_WIDTH ||
+        cinfo.image_height > NTR_CAP_TOP_PORTRAIT_HEIGHT) {
+        jpeg_destroy_decompress(&cinfo);
+        return -1;
+    }
     cinfo.out_color_space = JCS_RGB;
     jpeg_start_decompress(&cinfo);
     w = (int)cinfo.output_width;
@@ -445,22 +461,27 @@ int main(int argc, char **argv) {
     uint8_t heartbeat[NTR_CAP_TCP_HEADER_SIZE];
     uint8_t remote_play[NTR_CAP_TCP_HEADER_SIZE];
     struct ntr_cap_reassembler *rs;
+    struct in_addr console_addr = {0};
     unsigned counters[2] = {0, 0};
+    unsigned heartbeats_sent = 0;
     int want_top;
     int want_bottom;
     int tcp_fd = -1;
     int udp_fd = -1;
     uint32_t seq = 2;
     uint64_t last_heartbeat;
+    uint64_t last_heartbeat_log;
     uint64_t deadline;
     int top_priority;
     int priority_factor;
     int exit_code = 0;
     int malformed = 0;
+    int foreign = 0;
     int i;
 
     memset(&o, 0, sizeof(o));
-    o.host = NULL;
+    o.console_ip = NULL;
+    o.pc_ip = NULL;
     o.out_prefix = "ntr_capture";
     o.tcp_port = 8000;
     o.udp_port = 8001;
@@ -478,15 +499,22 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(arg, "--dry-run") == 0) {
             o.dry_run = 1;
-        } else if (strcmp(arg, "--host") == 0) {
+        } else if (strcmp(arg, "--console-ip") == 0 ||
+                   strcmp(arg, "--host") == 0) {
             if (++i >= argc) {
-                die_usage("--host needs an IPv4 address");
+                die_usage("%s needs an IPv4 address", arg);
             }
-            o.host = argv[i];
-        } else if (strcmp(arg, "--port") == 0) {
+            o.console_ip = argv[i];
+        } else if (strcmp(arg, "--console-port") == 0 ||
+                   strcmp(arg, "--port") == 0) {
             if (++i >= argc || parse_int(argv[i], 1, 65535, &o.tcp_port) != 0) {
-                die_usage("--port needs a value in 1..65535");
+                die_usage("%s needs a value in 1..65535", arg);
             }
+        } else if (strcmp(arg, "--pc-ip") == 0) {
+            if (++i >= argc) {
+                die_usage("--pc-ip needs an IPv4 address");
+            }
+            o.pc_ip = argv[i];
         } else if (strcmp(arg, "--udp-port") == 0) {
             if (++i >= argc || parse_int(argv[i], 1, 65535, &o.udp_port) != 0) {
                 die_usage("--udp-port needs a value in 1..65535");
@@ -539,13 +567,20 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (o.host == NULL && !o.dry_run) {
-        die_usage("--host is required (or use --dry-run)");
+    if (o.console_ip == NULL && !o.dry_run) {
+        die_usage("--console-ip is required (or use --dry-run)");
     }
-    if (o.host != NULL) {
+    if (o.pc_ip == NULL && !o.dry_run) {
+        die_usage("--pc-ip is required (or use --dry-run)");
+    }
+    if (o.console_ip != NULL &&
+        inet_pton(AF_INET, o.console_ip, &console_addr) != 1) {
+        die_usage("--console-ip is not an IPv4 address: %s", o.console_ip);
+    }
+    if (o.pc_ip != NULL) {
         struct in_addr probe;
-        if (inet_pton(AF_INET, o.host, &probe) != 1) {
-            die_usage("--host is not an IPv4 address: %s", o.host);
+        if (inet_pton(AF_INET, o.pc_ip, &probe) != 1) {
+            die_usage("--pc-ip is not an IPv4 address: %s", o.pc_ip);
         }
     }
     if (o.screen == SCREEN_TOP) {
@@ -571,8 +606,9 @@ int main(int argc, char **argv) {
 
     if (o.dry_run) {
         printf("dry-run: no sockets opened\n");
-        printf("tcp %s:%d, udp 0.0.0.0:%d (%s, JPEG Compat)\n",
-               o.host != NULL ? o.host : "0.0.0.0", o.tcp_port, o.udp_port,
+        printf("tcp %s:%d, udp %s:%d (%s, JPEG Compat)\n",
+               o.console_ip != NULL ? o.console_ip : "0.0.0.0", o.tcp_port,
+               o.pc_ip != NULL ? o.pc_ip : "0.0.0.0", o.udp_port,
                o.screen == SCREEN_TOP ? "top"
                : o.screen == SCREEN_BOTTOM ? "bottom"
                                            : "both");
@@ -588,25 +624,27 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_signal);
     signal(SIGTERM, on_signal);
 
-    log_ts("connecting to %s:%d (TCP)", o.host, o.tcp_port);
-    tcp_fd = tcp_connect(o.host, o.tcp_port, NTR_CAP_CONNECT_TIMEOUT_MS);
-    if (tcp_fd < 0) {
-        die_runtime("TCP connect to %s:%d failed: %s", o.host, o.tcp_port,
-                    strerror(errno));
-    }
-    log_ts("TCP connected to %s:%d", o.host, o.tcp_port);
-
-    log_ts("binding UDP 0.0.0.0:%d", o.udp_port);
-    udp_fd = udp_bind(o.udp_port);
+    /* Bind UDP first: a bind failure must exit before a console session. */
+    log_ts("binding UDP %s:%d", o.pc_ip, o.udp_port);
+    udp_fd = udp_bind(o.pc_ip, o.udp_port);
     if (udp_fd < 0) {
-        die_runtime("UDP bind on port %d failed: %s", o.udp_port,
+        die_runtime("UDP bind on %s:%d failed: %s", o.pc_ip, o.udp_port,
                     strerror(errno));
     }
-    log_ts("UDP bound on 0.0.0.0:%d", o.udp_port);
+    log_ts("UDP bound on %s:%d", o.pc_ip, o.udp_port);
+
+    log_ts("connecting to %s:%d (TCP)", o.console_ip, o.tcp_port);
+    tcp_fd = tcp_connect(o.console_ip, o.tcp_port, NTR_CAP_CONNECT_TIMEOUT_MS);
+    if (tcp_fd < 0) {
+        die_runtime("TCP connect to %s:%d failed: %s", o.console_ip,
+                    o.tcp_port, strerror(errno));
+    }
+    log_ts("TCP connected to %s:%d", o.console_ip, o.tcp_port);
 
     if (send_all(tcp_fd, heartbeat, sizeof(heartbeat)) != 0) {
         die_runtime("sending heartbeat (seq 0) failed: %s", strerror(errno));
     }
+    heartbeats_sent = 1;
     log_ts("sent heartbeat (cmd 0, seq 0, 84 bytes)");
     if (send_all(tcp_fd, remote_play, sizeof(remote_play)) != 0) {
         die_runtime("sending remote-play command (seq 1) failed: %s",
@@ -622,6 +660,7 @@ int main(int argc, char **argv) {
     ntr_cap_reassembler_init(rs);
 
     last_heartbeat = now_ms();
+    last_heartbeat_log = last_heartbeat;
     deadline = last_heartbeat + (uint64_t)o.timeout_s * 1000u;
 
     while (!g_stop) {
@@ -647,7 +686,13 @@ int main(int argc, char **argv) {
                 exit_code = 1;
                 break;
             }
+            heartbeats_sent++;
             last_heartbeat = now;
+            if (now - last_heartbeat_log >= 4000u) {
+                log_ts("heartbeats sent: %u total, seq %u latest",
+                       heartbeats_sent, seq - 1u);
+                last_heartbeat_log = now;
+            }
         }
 
         pfd[0].fd = tcp_fd;
@@ -699,6 +744,14 @@ int main(int argc, char **argv) {
                 }
                 continue;
             }
+            if (!ntr_cap_addr_is(&from.sin_addr, &console_addr)) {
+                /* Only the console's datagrams belong in the reassembler. */
+                if (foreign++ == 0) {
+                    log_ts("first datagram from non-console address %s ignored",
+                           inet_ntoa(from.sin_addr));
+                }
+                continue;
+            }
             result = ntr_cap_feed(rs, packet, (size_t)n);
             if (result == NTR_CAP_FEED_ERROR) {
                 if (malformed++ == 0) {
@@ -733,6 +786,8 @@ int main(int argc, char **argv) {
         log_ts("interrupted");
         exit_code = 1;
     }
+    log_ts("heartbeats sent: %u total", heartbeats_sent);
+    log_ts("datagrams from non-console addresses ignored: %d", foreign);
     log_ts("closing sockets (the viewer has no stop command; close only, "
            "ntr_hb.c:26-37)");
     if (tcp_fd >= 0) {

@@ -14,7 +14,8 @@ Nothing from NTRViewer-HR or libjpeg is vendored in this repository.
 
 ```sh
 make ntr-capture
-./tools/ntr_capture/build/ntr_capture --host 192.168.1.32 --out /tmp/shot
+./tools/ntr_capture/build/ntr_capture --console-ip 192.168.1.32 \
+    --pc-ip 192.168.1.5 --out /tmp/shot
 ```
 
 `make ntr-capture` is opt-in: it is not part of `make all` or `make test`.
@@ -35,8 +36,9 @@ Options:
 
 | Option | Meaning |
 |---|---|
-| `--host <ip>` | console IPv4 (required unless `--dry-run`) |
-| `--port <n>` | console TCP port, default `8000` |
+| `--console-ip <ip>` | console IPv4 (required unless `--dry-run`; `--host` is an alias) |
+| `--console-port <n>` | console TCP port, default `8000` (`--port` is an alias) |
+| `--pc-ip <ip>` | **local** IPv4 address the UDP socket binds to (required unless `--dry-run`) |
 | `--udp-port <n>` | local UDP port, default `8001` |
 | `--screen top\|bottom\|both` | screen selection through the priority field (see below) |
 | `--quality <n>` | JPEG quality `10..100`, default `95` |
@@ -46,6 +48,11 @@ Options:
 | `--timeout <sec>` | overall timeout, default `15` |
 | `--out <prefix>` | PPM prefix, default `ntr_capture` |
 | `--dry-run` | print the exact TCP bytes and ports; open no sockets |
+
+`--pc-ip` is the address this host binds its UDP socket to, so it must be one of
+the machine's own IPv4 addresses. The console is told **only the UDP port**, never
+a PC address: `args[4]` carries `(uint16_t)rp_port_last` plus the KCP/lossless
+flag bits (`ntr_hb.c:381-386`). There is no PC-IP argument to send.
 
 Output names: `<prefix>_top_<n>.ppm` and `<prefix>_bottom_<n>.ppm`, where `<n>`
 counts from 0 per screen. Exit codes follow `tools/azahar_host`: `2` usage
@@ -123,9 +130,13 @@ The frame identity is bytes 0-2 **after clearing the end bit**
 (`ntr_rp.c:1836,1843`). A new identity starts a new frame. A non-end packet must
 be exactly 1444 bytes. Packet numbers wrap by 256 (`ntr_rp.c:1900-1902`). On the
 end packet the viewer checks that every packet `0..end_packet` arrived; a
-missing packet discards the whole frame (`ntr_rp.c:1930-1948`). Duplicate packet
-numbers overwrite the same slot and are harmless. This client mirrors those
-rules in `ntr_cap_feed()`; duplicates are counted and ignored.
+missing packet discards the whole frame (`ntr_rp.c:1930-1948`). The end packet's
+own position and length bound the assembled JPEG, so a frame that fits in one
+datagram (packet 0 carrying the end bit) is emitted with its real size, not
+zero. This client mirrors those rules in `ntr_cap_feed()`; duplicates are
+counted and ignored. Datagrams whose source address is not `--console-ip` are
+dropped before reassembly: the first one is logged with its address and the
+total is reported at shutdown.
 
 Displayed sizes are 400×240 (top) and 320×240 (bottom); the JPEG itself is the
 portrait 240×400 / 240×320 framebuffer (`const.h:189-192`,
@@ -135,8 +146,9 @@ counter-clockwise rotation (`ntr_cap_rotate_ccw`), so the PPM is landscape.
 
 ## Dry-run hex versus the viewer's bytes
 
-`--dry-run` opens no sockets. For `--host 192.168.1.32 --screen both --quality
-95 --bandwidth 16 --udp-port 8001` it prints:
+`--dry-run` opens no sockets. For `--console-ip 192.168.1.32 --pc-ip
+192.168.1.5 --console-port 8000 --screen both --quality 95 --bandwidth 16
+--udp-port 8001` it prints:
 
 ```
 heartbeat cmd 0 seq 0 (84 bytes):
@@ -182,6 +194,9 @@ is not a console packet trace.
 - Output orientation is mirrored from the viewer's SDL renderer. The OpenGL
   renderer swaps texture coordinates equivalently by inspection, but no PPM
   was visually compared with a running viewer.
+- The localhost self-test (`tools/ntr_capture/selftest.sh`) proves only the
+  end-to-end host path against a synthetic console; it says nothing about
+  NTR-HR's own behaviour.
 - Heartbeat cadence (250 ms) is copied from `HEART_BEAT_EVERY_MS`
   (`ntr_hb.c:7`); the minimum rate NTR-HR tolerates is not documented.
 - IPv4 only.
@@ -207,7 +222,7 @@ is not a console packet trace.
 
 Remote play must be enabled on the console: NTR-HR menu (X+Y) → Remote Play,
 using a mode reported as **JPEG Compat (UDP)**. The PC must be able to receive
-UDP on port 8001 and connect to TCP 8000.
+UDP on port 8001 (bound to the `--pc-ip` address) and connect to TCP 8000.
 
 This tool performs only the actions the owner already allowed on 2026-11-07:
 NTR-HR streaming from TCP 8000 / UDP 8001. Brick-risk operations (NAND, system
@@ -223,7 +238,7 @@ the host's libjpeg-turbo, whose licence is the usual libjpeg BSD-style licence.
 
 ## Mutation evidence
 
-Baseline: `make test` green (all host tests, including 11 checks in
+Baseline: `make test` green (all host tests, including 13 groups in
 `test_ntr_capture_util`; 86 Python tests OK), exit 0.
 
 Each mutant was applied to a copy of `ntr_capture_util.h`, the unchanged test
@@ -242,13 +257,58 @@ loop stops at the first failing test). The header was then restored; the final
 | `ntr_cap_udp_parse` | (f) end-flag mask `0x10` → `0x20` | PASS | exit 1: `test_ntr_capture_util.c:120: expected 1 == 1, got 0` |
 | `ntr_cap_feed` | (g) missing-packet test inverted | PASS | exit 1: `test_ntr_capture_util.c:156: expected NTR_CAP_FEED_READY == 2, got 1` |
 | `ntr_cap_feed` | (h) non-end size check removed | PASS | exit 1: `test_ntr_capture_util.c:228: expected NTR_CAP_FEED_IGNORED == 0, got 1` |
-| `ntr_cap_rotate_ccw` | (i) source row not mirrored | PASS | exit 1: `test_ntr_capture_util.c:270: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
-| `ntr_cap_rotate_ccw` | (j) last destination row skipped | PASS | exit 1: `test_ntr_capture_util.c:270: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
-| `ntr_cap_ppm_header` | (k) magic `P3` instead of `P6` | PASS | exit 1: `test_ntr_capture_util.c:285: CHECK failed: strcmp(buf, "P6\n400 240\n255\n") == 0` |
-| `ntr_cap_ppm_header` | (l) zero width accepted | PASS | exit 1: `test_ntr_capture_util.c:293: expected -1 == -1, got 13` |
+| `ntr_cap_rotate_ccw` | (i) source row not mirrored | PASS | exit 1: `test_ntr_capture_util.c:300: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
+| `ntr_cap_rotate_ccw` | (j) last destination row skipped | PASS | exit 1: `test_ntr_capture_util.c:300: CHECK failed: memcmp(dst, expected, sizeof(expected)) == 0` |
+| `ntr_cap_ppm_header` | (k) magic `P3` instead of `P6` | PASS | exit 1: `test_ntr_capture_util.c:315: CHECK failed: strcmp(buf, "P6\n400 240\n255\n") == 0` |
+| `ntr_cap_ppm_header` | (l) zero width accepted | PASS | exit 1: `test_ntr_capture_util.c:323: expected -1 == -1, got 13` |
+| `ntr_cap_addr_is` | (m) comparison inverted (`==` → `!=`) | PASS | exit 1: `test_ntr_capture_util.c:274: expected 1 == 1, got 0` |
+| `ntr_cap_addr_is` | (n) always matches (source filter removed) | PASS | exit 1: `test_ntr_capture_util.c:276: expected 0 == 0, got 1` |
+| `ntr_cap_feed` | (o) end-packet size assignment removed | PASS | exit 1: `test_ntr_capture_util.c:264: expected 100 == 100, got 0` |
 
-A synthetic localhost run (fake TCP server on 18000, fake UDP sender on 18001)
-also exercised the whole binary without a console: it sent the two 84-byte
-commands, reassembled 240×400 and 240×320 JPEG frames, and produced
-`cap_top_0.ppm` (400×240) and `cap_bottom_0.ppm` (320×240) with sampled pixels
-matching the 90° counter-clockwise mapping within JPEG tolerance.
+Two reviewed fixes are **not** mutation-testable under this protocol. The
+`volatile` qualifier on `decode_jpeg_rgb`'s `rgb` pointer is a C11 7.13.2.1
+compiler rule: dropping it still builds and passes every test. The
+pre-decompress `image_width`/`image_height` cap lives in `ntr_capture.c`, while
+this protocol mutates only `ntr_capture_util.h`.
+
+## Localhost self-test
+
+`tools/ntr_capture/selftest.sh` (opt-in, never part of `make test`) runs the
+real binary against a fake console on `127.0.0.1`: a TCP listener reads the two
+84-byte commands, a UDP sender streams synthetic 240×400 and 240×320 JPEG
+frames, and one decoy datagram from `127.0.0.2` proves the console-address
+filter drops it. It needs `python3`, the built binary, and any of PIL,
+ImageMagick, `cjpeg`, or a C compiler with libjpeg (the last is the same hard
+dependency `make ntr-capture` already has). Exit codes: `0` PASS, `2` binary
+missing, `3` no JPEG encoder, `1` FAIL.
+
+Verbatim output on this host:
+
+```
+TCP: heartbeat cmd 0 and remote-play cmd 901, 84 bytes each
+UDP: sent one decoy datagram from 127.0.0.2
+PPM: top 400x240, bottom 320x240
+--- binary log ---
+[2026-11-08 19:14:38] binding UDP 127.0.0.1:45236
+[2026-11-08 19:14:38] UDP bound on 127.0.0.1:45236
+[2026-11-08 19:14:38] connecting to 127.0.0.1:40451 (TCP)
+[2026-11-08 19:14:38] TCP connected to 127.0.0.1:40451
+[2026-11-08 19:14:38] sent heartbeat (cmd 0, seq 0, 84 bytes)
+[2026-11-08 19:14:38] sent remote-play (cmd 901, seq 1, 84 bytes, udp port 45236)
+[2026-11-08 19:14:38] first datagram from non-console address 127.0.0.2 ignored
+[2026-11-08 19:14:38] screen top: frame 0 240x400 -> 400x240, wrote /tmp/tmp.DqbuwXkGDj/cap_top_0.ppm
+[2026-11-08 19:14:38] screen bottom: frame 0 240x320 -> 320x240, wrote /tmp/tmp.DqbuwXkGDj/cap_bottom_0.ppm
+[2026-11-08 19:14:38] heartbeats sent: 1 total
+[2026-11-08 19:14:38] datagrams from non-console addresses ignored: 1
+[2026-11-08 19:14:38] closing sockets (the viewer has no stop command; close only, ntr_hb.c:26-37)
+--- end binary log ---
+selftest: PASS
+```
+
+Sample heartbeat-rate logging from a 6 s run against a silent fake console
+(`--timeout 6`), showing the 4 s cadence line and the shutdown total:
+
+```
+[2026-11-08 19:14:47] heartbeats sent: 15 total, seq 15 latest
+[2026-11-08 19:14:49] heartbeats sent: 19 total
+```
