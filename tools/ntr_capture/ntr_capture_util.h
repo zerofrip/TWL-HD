@@ -47,7 +47,14 @@
 
 struct ntr_cap_udp_header {
     uint8_t frame_id;
-    uint8_t is_top; /* 1 = top screen, 0 = bottom (ntr_rp.c:1795) */
+    /*
+     * Whole byte 1 after clearing the end bit, as the viewer does before
+     * ntr_rp.c:1795-1796: zero is BOTTOM, any nonzero value is TOP. This is
+     * not the KCP path's single-bit expression (ntr_rp.c:242).
+     */
+    uint8_t is_top;
+    /* Byte 1 bit 1; only meaningful for TOP frames (ntr_rp.c:1796). */
+    uint8_t full_width;
     uint8_t is_end; /* last packet of the frame (ntr_rp.c:1833) */
     uint8_t downsample;
     uint16_t packet;
@@ -127,7 +134,12 @@ static inline int ntr_cap_udp_parse(const uint8_t *packet, size_t len,
         return -1;
     }
     out->frame_id = packet[0];
-    out->is_top = (uint8_t)((packet[1] & 0x01u) ? 0u : 1u);
+    {
+        /* ntr_rp.c:1835 clears the end bit before ntr_rp.c:1795 evaluates it. */
+        uint8_t flags = (uint8_t)(packet[1] & (uint8_t)~0x10u);
+        out->is_top = (uint8_t)(flags != 0u);
+        out->full_width = (uint8_t)((flags & 0x02u) ? 1u : 0u);
+    }
     out->is_end = (uint8_t)((packet[1] & 0x10u) ? 1u : 0u);
     out->downsample = (uint8_t)((packet[2] & 0x0cu) >> 2);
     out->packet = packet[3];
@@ -152,6 +164,7 @@ struct ntr_cap_frame {
     uint8_t complete;
     uint8_t end_seen;
     uint8_t downsample;
+    uint8_t full_width;
     uint16_t end_packet;
     uint32_t size;
     uint8_t have[NTR_CAP_RP_MAX_PACKET_COUNT];
@@ -206,6 +219,7 @@ static inline int ntr_cap_feed(struct ntr_cap_reassembler *rs,
         f->complete = 0;
         f->end_seen = 0;
         f->downsample = h.downsample;
+        f->full_width = h.full_width;
         f->end_packet = 0;
         f->size = 0;
     }

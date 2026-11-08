@@ -100,10 +100,13 @@ static void test_udp_parse(void) {
     struct ntr_cap_udp_header h;
 
     memset(pkt, 0xa5, sizeof(pkt));
+    /* Byte 1 is the whole flag byte: 0 = BOTTOM, nonzero = TOP
+     * (ntr_rp.c:1795-1796, end bit cleared first). */
     make_udp(pkt, 0x41, 0x00, 0x02, 3);
     CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
     CHECK_EQ_INT(h.frame_id, 0x41);
-    CHECK_EQ_INT(h.is_top, 1);
+    CHECK_EQ_INT(h.is_top, 0);
+    CHECK_EQ_INT(h.full_width, 0);
     CHECK_EQ_INT(h.is_end, 0);
     CHECK_EQ_INT(h.downsample, 0);
     CHECK_EQ_INT(h.packet, 3);
@@ -112,11 +115,37 @@ static void test_udp_parse(void) {
 
     make_udp(pkt, 0x42, 0x01, 0x02, 0);
     CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
-    CHECK_EQ_INT(h.is_top, 0);
+    CHECK_EQ_INT(h.is_top, 1);
+    CHECK_EQ_INT(h.full_width, 0);
 
     make_udp(pkt, 0x43, 0x10, 0x02, 0);
     CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
+    CHECK_EQ_INT(h.is_top, 0);
+    CHECK_EQ_INT(h.full_width, 0);
+    CHECK_EQ_INT(h.is_end, 1);
+
+    make_udp(pkt, 0x46, 0x11, 0x02, 0);
+    CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
     CHECK_EQ_INT(h.is_top, 1);
+    CHECK_EQ_INT(h.is_end, 1);
+
+    /* Full-width bit (byte 1 bit 1) is meaningful only for TOP frames. */
+    make_udp(pkt, 0x47, 0x02, 0x02, 0);
+    CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
+    CHECK_EQ_INT(h.is_top, 1);
+    CHECK_EQ_INT(h.full_width, 1);
+    CHECK_EQ_INT(h.is_end, 0);
+
+    make_udp(pkt, 0x48, 0x03, 0x02, 0);
+    CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
+    CHECK_EQ_INT(h.is_top, 1);
+    CHECK_EQ_INT(h.full_width, 1);
+    CHECK_EQ_INT(h.is_end, 0);
+
+    make_udp(pkt, 0x49, 0x12, 0x02, 0);
+    CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), &h), 0);
+    CHECK_EQ_INT(h.is_top, 1);
+    CHECK_EQ_INT(h.full_width, 1);
     CHECK_EQ_INT(h.is_end, 1);
 
     /* Lossless bit is tolerated by the viewer's format check, downsample 3. */
@@ -129,6 +158,18 @@ static void test_udp_parse(void) {
     CHECK_EQ_INT(ntr_cap_udp_parse(pkt, 3, &h), -1);
     CHECK_EQ_INT(ntr_cap_udp_parse(NULL, sizeof(pkt), &h), -1);
     CHECK_EQ_INT(ntr_cap_udp_parse(pkt, sizeof(pkt), NULL), -1);
+}
+
+static void test_screen_geometry(void) {
+    /* A full-width TOP JPEG is 800 px wide; the portrait decoder cap accepts
+     * only 240x400 (top) / 240x320 (bottom), so full-width frames must be
+     * skipped explicitly rather than decoded at the wrong size. */
+    static const int full_width_px = 800;
+
+    CHECK_EQ_INT(NTR_CAP_PORTRAIT_WIDTH, 240);
+    CHECK_EQ_INT(NTR_CAP_TOP_PORTRAIT_HEIGHT, 400);
+    CHECK_EQ_INT(NTR_CAP_BOTTOM_PORTRAIT_HEIGHT, 320);
+    CHECK(full_width_px > NTR_CAP_TOP_PORTRAIT_HEIGHT);
 }
 
 static int feed_simple(struct ntr_cap_reassembler *rs, uint8_t frame_id,
@@ -149,11 +190,11 @@ static void test_feed_complete(void) {
     struct ntr_cap_frame *f;
 
     ntr_cap_reassembler_init(&rs);
-    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x00, 0, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x01, 0, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
-    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x00, 1, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x01, 1, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
-    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x00, 2, 1, 100),
+    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x01, 2, 1, 100),
                  NTR_CAP_FEED_READY);
     f = &rs.screen[0];
     CHECK_EQ_INT(f->active, 1);
@@ -164,7 +205,7 @@ static void test_feed_complete(void) {
     CHECK_EQ_INT(f->data[1444], 0x11);
     CHECK_EQ_INT(f->data[2 * 1444], 0x12);
     /* A late packet of the completed frame is ignored. */
-    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x00, 3, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x10, 0x01, 3, 0, 1444),
                  NTR_CAP_FEED_IGNORED);
 }
 
@@ -172,11 +213,11 @@ static void test_feed_duplicate(void) {
     static struct ntr_cap_reassembler rs;
 
     ntr_cap_reassembler_init(&rs);
-    CHECK_EQ_INT(feed_simple(&rs, 0x20, 0x00, 0, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x20, 0x01, 0, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
-    CHECK_EQ_INT(feed_simple(&rs, 0x20, 0x00, 0, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x20, 0x01, 0, 0, 1444),
                  NTR_CAP_FEED_DUPLICATE);
-    CHECK_EQ_INT(feed_simple(&rs, 0x20, 0x00, 1, 1, 10),
+    CHECK_EQ_INT(feed_simple(&rs, 0x20, 0x01, 1, 1, 10),
                  NTR_CAP_FEED_READY);
 }
 
@@ -185,22 +226,22 @@ static void test_feed_dropped_packet_discards_frame(void) {
     struct ntr_cap_frame *f;
 
     ntr_cap_reassembler_init(&rs);
-    CHECK_EQ_INT(feed_simple(&rs, 0x30, 0x00, 0, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x30, 0x01, 0, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
     /* Packet 1 is lost; the end packet alone must not complete the frame. */
-    CHECK_EQ_INT(feed_simple(&rs, 0x30, 0x00, 2, 1, 10),
+    CHECK_EQ_INT(feed_simple(&rs, 0x30, 0x01, 2, 1, 10),
                  NTR_CAP_FEED_ACCEPTED);
     f = &rs.screen[0];
     CHECK_EQ_INT(f->end_seen, 1);
     CHECK_EQ_INT(f->complete, 0);
 
     /* The next frame identity discards the incomplete one. */
-    CHECK_EQ_INT(feed_simple(&rs, 0x31, 0x00, 0, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x31, 0x01, 0, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
     CHECK_EQ_INT(f->id[0], 0x31);
     CHECK_EQ_INT(f->complete, 0);
     CHECK_EQ_INT(f->have[1], 0);
-    CHECK_EQ_INT(feed_simple(&rs, 0x31, 0x00, 1, 1, 10),
+    CHECK_EQ_INT(feed_simple(&rs, 0x31, 0x01, 1, 1, 10),
                  NTR_CAP_FEED_READY);
 }
 
@@ -209,11 +250,11 @@ static void test_feed_out_of_order(void) {
 
     ntr_cap_reassembler_init(&rs);
     /* End packet first, then the two earlier packets. */
-    CHECK_EQ_INT(feed_simple(&rs, 0x40, 0x00, 2, 1, 10),
+    CHECK_EQ_INT(feed_simple(&rs, 0x40, 0x01, 2, 1, 10),
                  NTR_CAP_FEED_ACCEPTED);
-    CHECK_EQ_INT(feed_simple(&rs, 0x40, 0x00, 1, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x40, 0x01, 1, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
-    CHECK_EQ_INT(feed_simple(&rs, 0x40, 0x00, 0, 0, 1444),
+    CHECK_EQ_INT(feed_simple(&rs, 0x40, 0x01, 0, 0, 1444),
                  NTR_CAP_FEED_READY);
     CHECK_EQ_INT(rs.screen[0].complete, 1);
     CHECK_EQ_INT(rs.screen[0].size, 2 * 1444 + 10);
@@ -225,7 +266,7 @@ static void test_feed_rejects(void) {
 
     ntr_cap_reassembler_init(&rs);
     /* Non-end packet with the wrong length is dropped. */
-    CHECK_EQ_INT(feed_simple(&rs, 0x50, 0x00, 0, 0, 100),
+    CHECK_EQ_INT(feed_simple(&rs, 0x50, 0x01, 0, 0, 100),
                  NTR_CAP_FEED_IGNORED);
     /* Too-short and malformed headers are errors. */
     CHECK_EQ_INT(ntr_cap_feed(&rs, pkt, 3), NTR_CAP_FEED_ERROR);
@@ -239,17 +280,31 @@ static void test_feed_screens_independent(void) {
     static struct ntr_cap_reassembler rs;
 
     ntr_cap_reassembler_init(&rs);
-    CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x00, 0, 0, 1444),
-                 NTR_CAP_FEED_ACCEPTED);
-    CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x00, 1, 1, 10), NTR_CAP_FEED_READY);
-    CHECK_EQ_INT(rs.screen[0].complete, 1);
-    /* Same frame id, bottom-screen flag: a separate reassembly slot. */
+    /* 0x01 = TOP; completes screen[0]. */
     CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x01, 0, 0, 1444),
+                 NTR_CAP_FEED_ACCEPTED);
+    CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x01, 1, 1, 10), NTR_CAP_FEED_READY);
+    CHECK_EQ_INT(rs.screen[0].complete, 1);
+    /* Same frame id, bottom-screen byte (0x00): a separate reassembly slot. */
+    CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x00, 0, 0, 1444),
                  NTR_CAP_FEED_ACCEPTED);
     CHECK_EQ_INT(rs.screen[0].complete, 1);
     CHECK_EQ_INT(rs.screen[1].complete, 0);
-    CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x01, 1, 1, 10), NTR_CAP_FEED_READY);
+    CHECK_EQ_INT(feed_simple(&rs, 0x60, 0x00, 1, 1, 10), NTR_CAP_FEED_READY);
     CHECK_EQ_INT(rs.screen[1].complete, 1);
+}
+
+static void test_feed_bottom_slot(void) {
+    static struct ntr_cap_reassembler rs;
+
+    ntr_cap_reassembler_init(&rs);
+    /* 0x00 = BOTTOM: a one-packet frame lands in screen[1]. */
+    CHECK_EQ_INT(feed_simple(&rs, 0x68, 0x00, 0, 1, 100),
+                 NTR_CAP_FEED_READY);
+    CHECK_EQ_INT(rs.screen[0].active, 0);
+    CHECK_EQ_INT(rs.screen[1].complete, 1);
+    CHECK_EQ_INT(rs.screen[1].size, 100);
+    CHECK_EQ_INT(rs.screen[1].data[0], 0x68);
 }
 
 static void test_feed_one_packet_end(void) {
@@ -257,7 +312,7 @@ static void test_feed_one_packet_end(void) {
 
     ntr_cap_reassembler_init(&rs);
     /* A whole frame in one datagram: packet 0 carries the end bit. */
-    CHECK_EQ_INT(feed_simple(&rs, 0x70, 0x00, 0, 1, 100),
+    CHECK_EQ_INT(feed_simple(&rs, 0x70, 0x01, 0, 1, 100),
                  NTR_CAP_FEED_READY);
     CHECK_EQ_INT(rs.screen[0].complete, 1);
     CHECK_EQ_INT(rs.screen[0].end_packet, 0);
@@ -324,6 +379,16 @@ static void test_ppm_header(void) {
     CHECK_EQ_INT(ntr_cap_ppm_header(buf, sizeof(buf), 400, -1), -1);
 }
 
+static void test_feed_full_width(void) {
+    static struct ntr_cap_reassembler rs;
+
+    ntr_cap_reassembler_init(&rs);
+    /* The full-width flag survives reassembly into the frame slot. */
+    CHECK_EQ_INT(feed_simple(&rs, 0x66, 0x02, 0, 1, 100),
+                 NTR_CAP_FEED_READY);
+    CHECK_EQ_INT(rs.screen[0].full_width, 1);
+}
+
 int main(void) {
     test_build_remote_play();
     test_report("tcp/remote-play");
@@ -331,6 +396,8 @@ int main(void) {
     test_report("tcp/heartbeat");
     test_udp_parse();
     test_report("udp/parse");
+    test_screen_geometry();
+    test_report("udp/screen-geometry");
     test_feed_complete();
     test_report("udp/feed-complete");
     test_feed_duplicate();
@@ -343,6 +410,8 @@ int main(void) {
     test_report("udp/feed-rejects");
     test_feed_screens_independent();
     test_report("udp/feed-screens");
+    test_feed_bottom_slot();
+    test_report("udp/feed-bottom-slot");
     test_feed_one_packet_end();
     test_report("udp/feed-one-packet-end");
     test_addr_is();
@@ -351,5 +420,7 @@ int main(void) {
     test_report("rotate/ccw");
     test_ppm_header();
     test_report("ppm/header");
+    test_feed_full_width();
+    test_report("udp/feed-full-width");
     return test_exit_code();
 }
