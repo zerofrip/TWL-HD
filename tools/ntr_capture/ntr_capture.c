@@ -13,6 +13,7 @@
  *   ntr_hb.c:377-395          remote-play command 901 and its arguments
  *   ntr_common.c:22           UDP port 8001
  *   ntr_rp.c:1815-1948        UDP 4-byte header, reassembly, end packet
+ *   ntr_rp.c:1795-1796        screen mapping (whole byte 1) and full-width bit
  *   const.h:189-192,229-231   screen sizes and packet sizes
  *   ui_renderer_sdl.c:450     -90 degree display rotation
  */
@@ -409,6 +410,14 @@ static int emit_frame(struct ntr_cap_reassembler *rs, int screen,
     if (f->downsample != 0) {
         log_ts("screen %s: downsample %u is not supported; frame skipped", name,
                f->downsample);
+        f->active = 0;
+        f->complete = 0;
+        return 0;
+    }
+    if (f->full_width != 0) {
+        log_ts("screen %s: full-width frame (800 wide) is not supported; "
+               "frame skipped",
+               name);
         f->active = 0;
         f->complete = 0;
         return 0;
