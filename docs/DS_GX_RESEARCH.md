@@ -218,3 +218,32 @@ Demo scenes that would settle 3 and 5 (no code proposed here):
 - Same quad at alpha 16, 1 and 30; compare blended results against a reference to pin
   the alpha scale (question 5).
 - A polygon emitted after END_VTXS and before the next BEGIN_VTXS; checks question 4.
+
+## Lighting (DeSmuME gfx3d.cpp, desmume/src) — 5B-1 research, 2026-11-08
+
+Source read: DeSmuME `gfx3d.cpp` (cited as `gfx3d.cpp:LINE`). Labels: **READ** = read from the DeSmuME source in this repository checkout; **CHECK** = not yet confirmed against GBATEK or real DS output. Nothing here is a hardware fact; DeSmuME is an emulator.
+
+### Command decoding (READ)
+- NORMAL (0x21), `SetNormal` (`gfx3d.cpp:1217-1224`): 3 signed 10-bit components (bits 0-9, 10-19, 20-29), each sign-extended then `* 8`, i.e. 1 sign + 9 fractional bits widened to 20.12 fixed point (4096 = 1.0, so a 10-bit 0x1FF = 511/512*4096).
+- LIGHT_VECTOR (0x32), `SetLightDirection` (`gfx3d.cpp:1179-1193`): same 10-bit unpack; light number in bits 30-31. The direction is multiplied by the *current vector matrix* (`MATRIXMODE_POSITION_VECTOR`, upper-left 3x3) **at command time**, not at vertex time. The vector matrix is the one used in matrix mode 2 (position+vector).
+- NORMAL is transformed with the same 3x3 of the current vector matrix at the NORMAL command (`gfx3d.cpp:1233-1235`); there is no renormalization.
+- LIGHT_COLOR (0x33), `SetLightColor` (`gfx3d.cpp:1195-1199`): bits 0-14 = RGB555, bits 30-31 = light number.
+- DIF_AMB (0x30), `SetDiffuseAmbient` (`gfx3d.cpp:1158-1167`): low 16 bits diffuse RGB555 (bits 0-14), bit 15 = "set vertex colour to diffuse" (calls `SetVertexColor(param)`), high 16 bits ambient RGB555 (bits 16-30).
+- SPE_EMI (0x31), `SetSpecularEmission` (`gfx3d.cpp:1169-1173`): low 16 bits specular RGB555 with bit 15 = "use shininess table", high 16 bits emission RGB555.
+- SHININESS (0x34), `SetShininess` (`gfx3d.cpp:1201-1215`): 32 words, each packing 4 table bytes; 128 entries total; the table is applied only after the 32nd word.
+- Light enable mask: `regPolyAttrApplied.LightMask` (POLYGON_ATTR bits 0-3, `gfx3d.h:208-211`), applied on BEGIN_VTXS (`gfx3d_glBegin`, `gfx3d.cpp:2727`).
+
+### Per-vertex lighting equation (READ, `gfx3d.cpp:1217-1331`), run at every NORMAL command
+Colour channels are 5-bit integers. For each enabled light i (0..3), with N = transformed normal (20.12), L = transformed light direction (20.12):
+1. `fixed_diffuse = max(0, -dot(L, N))`, where `dot` = `sfx32_shiftdown(sum fx32_mul)` (20.12 result, `gfx3d.cpp:476-483`).
+2. Half vector: `H = normalize(L + (0, 0, -4096))` (line of sight (0,0,-1), `gfx3d.cpp:2117-2150`); the length uses `sqrt(dot(h,h)) << 6` and a shifted integer division (not an exact float normalize). The code uses `-H` (`_vecLightDirectionHalfNegative`).
+3. `dot_h = dot(-H, N)`; if `dot_h > 0`: `shin = 2*mul_fixed32(dot_h,dot_h) - 4096` (cos(2a) from cos(a); comment says "gbatek is almost right but not quite"), else 0; clamped to [0, 4095].
+4. If SPE_EMI bit 15 is set: `shin = shininessTable[shin >> 5] << 4` (7-bit index, 8-bit entries, back to 12 fractional bits).
+5. Per channel c: `spec = (specular[c] * light[c] * shin) >> 17`; `diff = (diffuse[c] * light[c] * fixed_diffuse) >> 17`; `amb = (ambient[c] * light[c]) >> 5`; `colour[c] += spec + diff + amb`.
+The vertex colour starts as the emission colour and is clamped with `min(31, x)` per channel (no lower clamp needed); the result **replaces** the current vertex colour (`SetVertexColor`, alpha untouched in this path). Without NORMAL commands the colour is whatever COLOR / DIF_AMB bit 15 set.
+
+### Consequences for the 3DS port (analysis, not DeSmuME facts)
+- Lighting is per NORMAL command on the geometry engine, so a CPU implementation in the interpreter fits: latch material/lights/shininess, and at each NORMAL compute the colour that the following VTX commands will inherit. TwlhdGxVertex stays 32 B.
+- Needed interpreter state: vector matrix (3x3) as of the NORMAL / LIGHT_VECTOR command, 4 light directions already transformed at LIGHT_VECTOR time, 4 light colours, diffuse/ambient/specular/emission, a 128-entry shininess table, light mask from the latched POLYGON_ATTR.
+- Open **CHECK** items before coding: (a) the exact vector-matrix semantics in our interpreter (does it keep a separate vector matrix, matrix mode 2 vs 3?); (b) fx32 rounding of `sfx32_shiftdown` / `fx32_mul`; (c) GBATEK cross-check of the specular exponent (DeSmuME comment: GBATEK is slightly off); (d) integer arithmetic order must be reproduced exactly (>>17, >>5) for golden tests; (e) light mask applies at BEGIN (latched) while NORMAL reads the applied mask; (f) behaviour when a NORMAL is sent outside BEGIN/END.
+- Test plan hint (UNIT): an independent Python oracle that re-implements the integer equations above, golden streams for one light diffuse-only, ambient-only, emission-only, specular with and without the shininess table, light mask bits, clamping at 31; mutation tests for each shift constant.
