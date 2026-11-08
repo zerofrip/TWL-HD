@@ -218,19 +218,6 @@ def expected_vertices(angle_units=61440):
     return out
 
 
-def main():
-    angle = int(sys.argv[1]) if len(sys.argv) > 1 else 61440
-    verts = expected_vertices(angle)
-    for i, v in enumerate(verts):
-        print(
-            f"{i} "
-            f"{v['clip'][0]:.6f} {v['clip'][1]:.6f} "
-            f"{v['clip'][2]:.6f} {v['clip'][3]:.6f} "
-            f"{v['rgba'][0]:.6f} {v['rgba'][1]:.6f} "
-            f"{v['rgba'][2]:.6f} {v['rgba'][3]:.6f}"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Phase 5B-1 lighting oracle.
 #
@@ -518,7 +505,8 @@ class LightingOracle:
             if command == CMD_MTX_MODE:
                 self.mode = params[0] & 3
             elif command == CMD_MTX_PUSH:
-                if self.mode != 0:
+                # C touches the vector stack only in modes 1/2 (mode 3 ignores).
+                if self.mode in (1, 2):
                     self.push()
             elif command == CMD_MTX_POP:
                 if self.mode not in (0, 3):
