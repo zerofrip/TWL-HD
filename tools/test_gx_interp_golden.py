@@ -24,8 +24,23 @@ CLI = os.path.join(
 )
 
 # v2 command ids (common/twlhd_v2_format.h) used by the alpha streams.
+CMD_MTX_MODE = 0x10
+CMD_MTX_PUSH = 0x11
+CMD_MTX_POP = 0x12
+CMD_MTX_IDENTITY = 0x15
+CMD_MTX_LOAD_4x4 = 0x16
+CMD_MTX_MULT_4x4 = 0x18
+CMD_MTX_SCALE = 0x1B
+CMD_MTX_TRANS = 0x1C
+CMD_COLOR = 0x20
+CMD_NORMAL = 0x21
 CMD_VTX_16 = 0x23
 CMD_POLYGON_ATTR = 0x29
+CMD_DIF_AMB = 0x30
+CMD_SPE_EMI = 0x31
+CMD_LIGHT_VECTOR = 0x32
+CMD_LIGHT_COLOR = 0x33
+CMD_SHININESS = 0x34
 CMD_BEGIN_VTXS = 0x40
 CMD_END_VTXS = 0x41
 CMD_SWAP_BUFFERS = 0x50
@@ -72,6 +87,83 @@ def build_v2(entries):
         "<4I", 2, 0, 0, 0
     )
     return header + gxcm_chunk + meta_chunk
+
+
+def _u32(value):
+    return value & 0xFFFFFFFF
+
+
+def _rgb555(r, g, b):
+    return (r & 0x1F) | ((g & 0x1F) << 5) | ((b & 0x1F) << 10)
+
+
+def _component10(value_20_12):
+    """20.12 component -> 10-bit field (9 fractional bits, i.e. /8)."""
+    return (value_20_12 // 8) & 0x3FF
+
+
+def _vector_word(x_20_12, y_20_12, z_20_12, light=0):
+    return (
+        _component10(x_20_12)
+        | (_component10(y_20_12) << 10)
+        | (_component10(z_20_12) << 20)
+        | ((light & 3) << 30)
+    )
+
+
+def _normal_word(x_20_12, y_20_12, z_20_12):
+    return _vector_word(x_20_12, y_20_12, z_20_12, 0)
+
+
+def _light_colour(r, g, b, light=0):
+    return _rgb555(r, g, b) | ((light & 3) << 30)
+
+
+def _add_load_4x4(entries, words):
+    for word in words:
+        entries.append((CMD_MTX_LOAD_4x4, _u32(word)))
+
+
+def _add_mult_4x4(entries, words):
+    for word in words:
+        entries.append((CMD_MTX_MULT_4x4, _u32(word)))
+
+
+def _diag(sx, sy, sz):
+    return [sx, 0, 0, 0,
+            0, sy, 0, 0,
+            0, 0, sz, 0,
+            0, 0, 0, 4096]
+
+
+def _rotate_z_90():
+    # Rotation by +90 degrees about z: (1,0,0) -> (0,1,0).
+    return [0, 4096, 0, 0,
+            -4096, 0, 0, 0,
+            0, 0, 4096, 0,
+            0, 0, 0, 4096]
+
+
+def _lit_entries(pre_entries, normal, mask=None, normal_inside=True):
+    """pre_entries, then (mask), then BEGIN + NORMAL + 3 vertices + END."""
+    entries = list(pre_entries)
+    if mask is not None:
+        entries.append((CMD_POLYGON_ATTR, (31 << 16) | (mask & 0xF)))
+    if not normal_inside:
+        entries.append((CMD_NORMAL, _u32(normal)))
+    entries.append((CMD_BEGIN_VTXS, 0))
+    if normal_inside:
+        entries.append((CMD_NORMAL, _u32(normal)))
+    for x, y in ((0, 0), (0x1000, 0), (0, 0x1000)):
+        entries.extend(_vtx16(x, y))
+    entries.append((CMD_END_VTXS, 0))
+    entries.append((CMD_SWAP_BUFFERS, 0))
+    return entries
+
+
+def _shininess_entries(entries, words):
+    for word in words:
+        entries.append((CMD_SHININESS, _u32(word)))
 
 
 class GxInterpGoldenTest(unittest.TestCase):
@@ -170,6 +262,229 @@ class GxInterpGoldenTest(unittest.TestCase):
             self.assertEqual(len(parts), 9)
             vertices.append([float(x) for x in parts[1:]])
         return vertices
+
+    def _assert_lighting(self, entries):
+        vertices = self._run_cli(build_v2(entries))
+        expected = gx_interp_oracle.LightingOracle().process(entries)
+        self.assertEqual(len(vertices), 3)
+        for vertex in vertices:
+            for channel in range(3):
+                self.assertAlmostEqual(
+                    vertex[4 + channel], expected[channel], places=6,
+                    msg=f"lit colour channel {channel}"
+                )
+            self.assertEqual(vertex[7], 1.0)
+        return vertices, expected
+
+    def test_light_ambient_only(self):
+        entries = [
+            (CMD_DIF_AMB, _rgb555(0, 0, 0) | (_rgb555(16, 8, 4) << 16)),
+            (CMD_LIGHT_COLOR, _light_colour(31, 31, 31)),
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, 4088)),
+        ]
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_diffuse_only(self):
+        entries = [
+            (CMD_DIF_AMB, _rgb555(31, 16, 8)),
+            (CMD_LIGHT_COLOR, _light_colour(31, 31, 31)),
+            # Light points -z, normal points +z: fixed_diffuse = 1.0.
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)),
+        ]
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_emission_only(self):
+        # No BEGIN before NORMAL: the applied light mask is still 0.
+        entries = [(CMD_SPE_EMI, _rgb555(10, 20, 30) << 16)]
+        entries = _lit_entries(
+            entries, _normal_word(0, 0, 4088), mask=None,
+            normal_inside=False
+        )
+        vertices, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (10 / 31.0, 20 / 31.0, 30 / 31.0))
+
+    def test_light_specular_without_table(self):
+        entries = [
+            (CMD_SPE_EMI, _rgb555(31, 31, 31)),
+            (CMD_LIGHT_COLOR, _light_colour(31, 31, 31)),
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)),
+        ]
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_specular_with_table(self):
+        words = [0] * 32
+        words[31] = 200 << 24  # table entry 127 = 200
+        entries = [(CMD_SPE_EMI, _rgb555(31, 31, 31) | 0x8000)]
+        _shininess_entries(entries, words)
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_two_lights(self):
+        entries = [
+            (CMD_DIF_AMB, _rgb555(31, 31, 31)),
+            (CMD_LIGHT_COLOR, _light_colour(31, 0, 0, light=0)),
+            (CMD_LIGHT_COLOR, _light_colour(0, 31, 0, light=1)),
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096, light=0)),
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096, light=1)),
+        ]
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x3)
+        self._assert_lighting(entries)
+
+    def test_light_each_index_alone(self):
+        for light in range(4):
+            entries = [
+                (CMD_DIF_AMB, _rgb555(31, 31, 31)),
+                (CMD_LIGHT_COLOR,
+                 _light_colour(8 + 4 * light, 20 - 4 * light, 4 + 8 * light,
+                               light=light)),
+                (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096, light=light)),
+            ]
+            entries = _lit_entries(entries, _normal_word(0, 0, 4088),
+                                   mask=1 << light)
+            self._assert_lighting(entries)
+
+    def test_light_saturation_at_31(self):
+        entries = [
+            (CMD_DIF_AMB, _rgb555(31, 31, 31) | (_rgb555(31, 31, 31) << 16)),
+            (CMD_LIGHT_COLOR, _light_colour(31, 31, 31)),
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)),
+        ]
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        vertices, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (1.0, 1.0, 1.0))
+
+    def test_light_rotated_vec_normal(self):
+        entries = [(CMD_MTX_MODE, 2)]
+        _add_load_4x4(entries, _rotate_z_90())
+        entries.append((CMD_DIF_AMB, _rgb555(31, 31, 31)))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+        entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_mode2_vs_mode1(self):
+        results = {}
+        for mode in (1, 2):
+            entries = [(CMD_MTX_MODE, mode)]
+            _add_load_4x4(entries, _diag(8192, 4096, 4096))
+            entries.append((CMD_DIF_AMB, _rgb555(31, 31, 31)))
+            entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+            entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+            entries = _lit_entries(entries, _normal_word(4088, 0, 0),
+                                   mask=0x1)
+            _, expected = self._assert_lighting(entries)
+            results[mode] = expected
+        self.assertNotEqual(results[1], results[2])
+
+    def test_light_scale_in_mode2_scales_position_only(self):
+        entries = [(CMD_MTX_MODE, 2)]
+        _add_load_4x4(entries, _diag(2048, 4096, 4096))
+        entries.append((CMD_MTX_SCALE, 2048))
+        entries.append((CMD_MTX_SCALE, 4096))
+        entries.append((CMD_MTX_SCALE, 4096))
+        entries.append((CMD_DIF_AMB, _rgb555(31, 31, 31)))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+        entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_push_pop_restores_vec(self):
+        entries = [(CMD_MTX_MODE, 2)]
+        _add_load_4x4(entries, _diag(2048, 4096, 4096))
+        entries.append((CMD_MTX_PUSH, 0))
+        _add_load_4x4(entries, _diag(1024, 4096, 4096))
+        entries.append((CMD_MTX_POP, 1))
+        entries.append((CMD_DIF_AMB, _rgb555(31, 31, 31)))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+        entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_dif_amb_bit15_sets_colour(self):
+        diffuse = _rgb555(10, 20, 30)
+        entries = [(CMD_DIF_AMB, diffuse | 0x8000), (CMD_BEGIN_VTXS, 0)]
+        for x, y in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(x, y))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        vertices = self._run_cli(build_v2(entries))
+        expected = [10 / 31.0, 20 / 31.0, 30 / 31.0]
+        self.assertEqual(len(vertices), 3)
+        for vertex in vertices:
+            for channel in range(3):
+                self.assertAlmostEqual(vertex[4 + channel], expected[channel], places=6)
+
+    def test_light_dif_amb_bit15_clear_keeps_colour(self):
+        entries = [
+            (CMD_COLOR, _rgb555(4, 8, 16)),
+            (CMD_DIF_AMB, _rgb555(10, 20, 30)),
+            (CMD_BEGIN_VTXS, 0),
+        ]
+        for x, y in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(x, y))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        vertices = self._run_cli(build_v2(entries))
+        expected = [4 / 31.0, 8 / 31.0, 16 / 31.0]
+        for vertex in vertices:
+            for channel in range(3):
+                self.assertAlmostEqual(vertex[4 + channel], expected[channel], places=6)
+
+    def test_light_diffuse_negative_dot_clamped(self):
+        entries = [
+            (CMD_DIF_AMB, _rgb555(31, 31, 31)),
+            (CMD_LIGHT_COLOR, _light_colour(31, 31, 31)),
+            (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)),
+        ]
+        entries = _lit_entries(entries, _normal_word(0, 0, -4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (0.0, 0.0, 0.0))
+
+    def test_light_shininess_clamp_at_4095(self):
+        # A 2x vector matrix makes dot_h exceed 4096, so shininess saturates.
+        entries = [(CMD_MTX_MODE, 2)]
+        _add_load_4x4(entries, _diag(4096, 4096, 8192))
+        entries.append((CMD_SPE_EMI, _rgb555(31, 31, 31)))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (30 / 31.0, 30 / 31.0, 30 / 31.0))
+
+    def test_light_direction_transformed_at_command_time(self):
+        entries = [(CMD_MTX_MODE, 2)]
+        _add_load_4x4(entries, _diag(2048, 4096, 4096))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+        # Changing the vector matrix afterwards must not move the light.
+        _add_load_4x4(entries, _diag(8192, 4096, 4096))
+        entries.append((CMD_DIF_AMB, _rgb555(31, 31, 31)))
+        entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_light_shininess_applied_after_32_words(self):
+        zeros = [0] * 32
+        table = [0] * 32
+        table[31] = 200 << 24
+        entries = [(CMD_SPE_EMI, _rgb555(31, 31, 31) | 0x8000)]
+        _shininess_entries(entries, zeros)
+        _shininess_entries(entries, table)
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        self._assert_lighting(entries)
+
+    def test_oracle_partial_shininess_not_applied(self):
+        oracle = gx_interp_oracle.LightingOracle()
+        table = [0] * 31
+        table[30] = 0xFF << 24
+        oracle.set_shininess(table)
+        self.assertEqual(oracle.shininess_applied, [0] * 128)
+        self.assertEqual(oracle.shininess_index, 124)
 
     def test_oracle_alpha_table(self):
         # Hand-written table, independent of the oracle implementation: 1..31

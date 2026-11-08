@@ -18,8 +18,11 @@
 #define PROJ_STACK_CAP 1u
 #define POS_STACK_CAP  31u
 
-/* Parameter buffer. The largest GX command (LOAD_4x4 / MULT_4x4) has 16 words. */
-#define PARAM_BUF_SIZE 16u
+/* Parameter buffer. The largest GX command is SHININESS with 32 words. */
+#define PARAM_BUF_SIZE 32u
+
+#define LIGHT_COUNT 4u
+#define SHININESS_TABLE_SIZE 128u
 
 /* Persistent vertex component storage for VTX_XY/XZ/YZ. */
 typedef struct {
@@ -46,8 +49,10 @@ typedef struct {
 
     GxMatrix proj;
     GxMatrix pos;
+    GxMatrix vec;           /* directional (lighting) matrix, modes 1/2. */
     GxStack proj_stack;
     GxStack pos_stack;
+    GxStack vec_stack;      /* parallel to pos_stack, modes 1/2. */
     GxMatrix clip;          /* proj * pos, recomputed after matrix changes. */
     int clip_dirty;
 
@@ -56,6 +61,20 @@ typedef struct {
     float rgba[4];          /* latched colour; rgba[3] comes from the alpha. */
     uint32_t pending_alpha; /* raw 5-bit POLYGON_ATTR alpha, default 31. */
     uint32_t applied_alpha; /* raw alpha copied from pending at BEGIN_VTXS. */
+
+    /* Lighting latch (DeSmuME gfx3d.cpp:1158-1331). */
+    uint32_t diffuse;       /* RGB555, low 15 bits (DIF_AMB low16). */
+    uint32_t ambient;       /* RGB555 (DIF_AMB high16). */
+    uint32_t specular;      /* RGB555 + bit15 shininess-table enable. */
+    uint32_t emission;      /* RGB555 (SPE_EMI high16). */
+    uint32_t light_color[LIGHT_COUNT];      /* raw LIGHT_COLOR words. */
+    int32_t light_dir[LIGHT_COUNT][3];      /* transformed, 20.12. */
+    int32_t light_half_neg[LIGHT_COUNT][3]; /* -normalized half vector, 20.12. */
+    uint8_t shininess_pending[SHININESS_TABLE_SIZE];
+    uint8_t shininess_applied[SHININESS_TABLE_SIZE];
+    uint32_t shininess_index; /* pending byte index (DeSmuME word counter*4). */
+    uint32_t pending_light_mask; /* POLYGON_ATTR bits 0-3. */
+    uint32_t applied_light_mask; /* copied from pending at BEGIN_VTXS. */
 
     /* Primitive assembly state. */
     int in_begin;
@@ -71,6 +90,50 @@ static int32_t fx12_floor_div(uint64_t v) {
      * avoid signed overflow UB, then reinterpret and arithmetic-shift down.
      * gcc/arm-none-eabi perform arithmetic right shift for int64_t. */
     return (int32_t)((int64_t)v >> FX_SHIFT);
+}
+
+/*
+ * DeSmuME saturating 20.12 shiftdown (matrix.cpp:560-575). The clamp is
+ * applied to the whole 64-bit sum, not to each partial sum: above
+ * 0x7FFFFFFFFFF -> INT32_MAX, below -0x80000000000 -> INT32_MIN, otherwise
+ * (s64)acc >> 12.
+ */
+static int32_t sat_shiftdown_accum(uint64_t acc) {
+    int64_t s = (int64_t)acc;
+
+    if (s > (int64_t)0x000007FFFFFFFFFFLL) return INT32_MAX;
+    if (s < -0x80000000000LL) return INT32_MIN;
+    return (int32_t)(s >> FX_SHIFT);
+}
+
+/* fx32_mul then arithmetic >>12 (gfx3d.cpp:476-479). */
+static int32_t mul_fixed32(int32_t a, int32_t b) {
+    return (int32_t)(((int64_t)a * (int64_t)b) >> FX_SHIFT);
+}
+
+/* 3-component dot, no saturation (gfx3d.cpp:481-483). */
+static int32_t vec3dot_fixed32(const int32_t a[3], const int32_t b[3]) {
+    uint64_t acc = (uint64_t)((int64_t)a[0] * (int64_t)b[0]) +
+                   (uint64_t)((int64_t)a[1] * (int64_t)b[1]) +
+                   (uint64_t)((int64_t)a[2] * (int64_t)b[2]);
+    return (int32_t)((int64_t)acc >> FX_SHIFT);
+}
+
+/* 3x3 of a column-major matrix times a 20.12 vector, saturating
+ * (matrix.cpp:592-610). */
+static void matrix_transform_vec3(const GxMatrix *m, int32_t v[3]) {
+    uint32_t row;
+    int32_t out[3];
+
+    for (row = 0; row < 3u; row++) {
+        uint64_t acc = (uint64_t)((int64_t)m->m[0 * 4 + row] * (int64_t)v[0]) +
+                       (uint64_t)((int64_t)m->m[1 * 4 + row] * (int64_t)v[1]) +
+                       (uint64_t)((int64_t)m->m[2 * 4 + row] * (int64_t)v[2]);
+        out[row] = sat_shiftdown_accum(acc);
+    }
+    v[0] = out[0];
+    v[1] = out[1];
+    v[2] = out[2];
 }
 
 static void matrix_identity(GxMatrix *d) {
@@ -126,13 +189,6 @@ static void matrix_load_4x3(GxMatrix *d, const uint32_t *params) {
     d->m[3 * 4 + 3] = FX_ONE;
 }
 
-static void matrix_mult_4x3(GxMatrix *current, const uint32_t *params) {
-    GxMatrix op;
-
-    matrix_load_4x3(&op, params);
-    matrix_multiply(current, &op);
-}
-
 static void matrix_load_3x3(GxMatrix *d, const uint32_t *params) {
     uint32_t col;
 
@@ -144,13 +200,6 @@ static void matrix_load_3x3(GxMatrix *d, const uint32_t *params) {
     }
 }
 
-static void matrix_mult_3x3(GxMatrix *current, const uint32_t *params) {
-    GxMatrix op;
-
-    matrix_load_3x3(&op, params);
-    matrix_multiply(current, &op);
-}
-
 static void matrix_scale(GxMatrix *current, const uint32_t *params) {
     GxMatrix op;
 
@@ -158,16 +207,6 @@ static void matrix_scale(GxMatrix *current, const uint32_t *params) {
     op.m[0] = (int32_t)params[0];
     op.m[4 + 1] = (int32_t)params[1];
     op.m[8 + 2] = (int32_t)params[2];
-    matrix_multiply(current, &op);
-}
-
-static void matrix_translate(GxMatrix *current, const uint32_t *params) {
-    GxMatrix op;
-
-    matrix_identity(&op);
-    op.m[12 + 0] = (int32_t)params[0];
-    op.m[12 + 1] = (int32_t)params[1];
-    op.m[12 + 2] = (int32_t)params[2];
     matrix_multiply(current, &op);
 }
 
@@ -209,6 +248,12 @@ static int stack_push(GxInterp *g) {
         return 0;
     }
     matrix_copy(&s->stack[s->sp], current_matrix(g));
+    if (g->mode == 1u || g->mode == 2u) {
+        /* DeSmuME pushes position and vector together (gfx3d.cpp:875-895);
+         * texture mode keeps its own stack and must not touch the vector. */
+        matrix_copy(&g->vec_stack.stack[g->vec_stack.sp], &g->vec);
+        g->vec_stack.sp++;
+    }
     s->sp++;
     return 1;
 }
@@ -241,6 +286,10 @@ static int stack_pop(GxInterp *g, int32_t n) {
     }
     new_sp = s->sp - (uint32_t)n;
     matrix_copy(current_matrix(g), &s->stack[new_sp]);
+    if (g->mode == 1u || g->mode == 2u) {
+        matrix_copy(&g->vec, &g->vec_stack.stack[new_sp]);
+        g->vec_stack.sp = new_sp;
+    }
     s->sp = new_sp;
     return 1;
 }
@@ -259,6 +308,9 @@ static int stack_store(GxInterp *g, uint32_t index) {
         return 0;
     }
     matrix_copy(&s->stack[index], current_matrix(g));
+    if (g->mode == 1u || g->mode == 2u) {
+        matrix_copy(&g->vec_stack.stack[index], &g->vec);
+    }
     return 1;
 }
 
@@ -276,6 +328,9 @@ static int stack_restore(GxInterp *g, uint32_t index) {
         return 0;
     }
     matrix_copy(current_matrix(g), &s->stack[index]);
+    if (g->mode == 1u || g->mode == 2u) {
+        matrix_copy(&g->vec, &g->vec_stack.stack[index]);
+    }
     return 1;
 }
 
@@ -306,6 +361,131 @@ static void set_rgba_from_rgb555(GxInterp *g, uint32_t value) {
     g->rgba[1] = (float)((value >> 5) & 0x1Fu) / 31.0f;
     g->rgba[2] = (float)((value >> 10) & 0x1Fu) / 31.0f;
     /* rgba[3] is set from the applied POLYGON_ATTR alpha at BEGIN_VTXS. */
+}
+
+static void rgb555_unpack(uint32_t value, int32_t c[3]) {
+    c[0] = (int32_t)(value & 0x1Fu);
+    c[1] = (int32_t)((value >> 5) & 0x1Fu);
+    c[2] = (int32_t)((value >> 10) & 0x1Fu);
+}
+
+/*
+ * Integer floor(sqrt(v)) for v >= 0. Equivalent to DeSmuME's
+ * (s32)sqrt((double)vec3dot_fixed32(...)) because the dot product is an
+ * integer and doubles represent it exactly; avoids linking libm on the DS.
+ */
+static int32_t isqrt32(int32_t v) {
+    uint32_t x;
+    uint32_t r = 0u;
+    uint32_t bit = 1u << 30;
+
+    if (v <= 0) return 0;
+    x = (uint32_t)v;
+    while (bit > x) bit >>= 2;
+    while (bit != 0u) {
+        if (x >= r + bit) {
+            x -= r + bit;
+            r = (r >> 1) + bit;
+        } else {
+            r >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (int32_t)r;
+}
+
+/*
+ * Half vector from the line of sight (0,0,-1), stored negated
+ * (DeSmuME gfx3d.cpp:2117-2150). The integer normalize is reproduced
+ * verbatim, including the zero-length branch that leaves half unchanged.
+ */
+static void update_half_vector(const int32_t l[3], int32_t out_neg[3]) {
+    int32_t half[3];
+    int32_t half_length;
+    uint32_t i;
+
+    half[0] = l[0];
+    half[1] = l[1];
+    half[2] = l[2] - FX_ONE;
+
+    half_length = (int32_t)((uint32_t)isqrt32(
+        vec3dot_fixed32(half, half)) << 6);
+    if (half_length != 0) {
+        if (half_length < 0) half_length = -half_length;
+        half_length >>= 6;
+        for (i = 0; i < 3u; i++) {
+            half[i] = (int32_t)(((int64_t)half[i] * 64) / half_length);
+        }
+    }
+    for (i = 0; i < 3u; i++) out_neg[i] = -half[i];
+}
+
+/* Per-NORMAL vertex colour (DeSmuME gfx3d.cpp:1217-1331). */
+static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
+    int32_t n[3];
+    int32_t diffuse[3];
+    int32_t ambient[3];
+    int32_t specular[3];
+    int64_t vc[3];
+    uint32_t i;
+    uint32_t c;
+
+    n[0] = sign_extend10(param) * 8;
+    n[1] = sign_extend10(param >> 10) * 8;
+    n[2] = sign_extend10(param >> 20) * 8;
+    matrix_transform_vec3(&g->vec, n);
+
+    rgb555_unpack(g->diffuse, diffuse);
+    rgb555_unpack(g->ambient, ambient);
+    rgb555_unpack(g->specular, specular);
+    vc[0] = (int32_t)(g->emission & 0x1Fu);
+    vc[1] = (int32_t)((g->emission >> 5) & 0x1Fu);
+    vc[2] = (int32_t)((g->emission >> 10) & 0x1Fu);
+
+    for (i = 0; i < LIGHT_COUNT; i++) {
+        int32_t light[3];
+        int32_t dot;
+        /* int64 keeps the negation and the 2*dot^2 expression free of the
+         * signed overflow that DeSmuME's s32 arithmetic can hit; the
+         * [0,4095] clamp below makes the extreme case identical. */
+        int64_t fixed_diffuse;
+        int64_t shininess;
+
+        if (((g->applied_light_mask >> i) & 1u) == 0u) continue;
+
+        rgb555_unpack(g->light_color[i], light);
+
+        fixed_diffuse = -(int64_t)vec3dot_fixed32(g->light_dir[i], n);
+        if (fixed_diffuse < 0) fixed_diffuse = 0;
+
+        dot = vec3dot_fixed32(g->light_half_neg[i], n);
+        shininess = 0;
+        if (dot > 0) {
+            /* cos(2a) = 2*cos^2(a) - 1 in 20.12. */
+            shininess = 2 * (int64_t)mul_fixed32(dot, dot) - FX_ONE;
+        }
+        if (shininess > 4095) shininess = 4095;
+        if (shininess < 0) shininess = 0;
+        if ((g->specular & 0x8000u) != 0u) {
+            /* 128-entry table, 8-bit entries, back to 20.12. */
+            shininess = (int32_t)g->shininess_applied[shininess >> 5] << 4;
+        }
+
+        for (c = 0; c < 3u; c++) {
+            int64_t spec = ((int64_t)specular[c] * light[c] * shininess) >> 17;
+            int64_t diff =
+                ((int64_t)diffuse[c] * light[c] * fixed_diffuse) >> 17;
+            int64_t amb = ((int64_t)ambient[c] * light[c]) >> 5;
+            vc[c] += spec + diff + amb;
+        }
+    }
+
+    for (c = 0; c < 3u; c++) {
+        if (vc[c] > 31) vc[c] = 31;
+    }
+    set_rgba_from_rgb555(g, (uint32_t)vc[0] |
+                               ((uint32_t)vc[1] << 5) |
+                               ((uint32_t)vc[2] << 10));
 }
 
 static void transform_vertex(GxInterp *g, float x, float y, float z,
@@ -521,6 +701,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
             g->stats->ignored_no_effect++;
         } else {
             matrix_identity(current_matrix(g));
+            if (g->mode == 2u) matrix_identity(&g->vec);
             mark_matrix_dirty(g);
         }
         break;
@@ -530,6 +711,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
             g->stats->ignored_no_effect++;
         } else {
             matrix_load_4x4(current_matrix(g), params);
+            if (g->mode == 2u) matrix_load_4x4(&g->vec, params);
             mark_matrix_dirty(g);
         }
         break;
@@ -539,6 +721,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
             g->stats->ignored_no_effect++;
         } else {
             matrix_load_4x3(current_matrix(g), params);
+            if (g->mode == 2u) matrix_load_4x3(&g->vec, params);
             mark_matrix_dirty(g);
         }
         break;
@@ -550,6 +733,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
             GxMatrix op;
             matrix_load_4x4(&op, params);
             matrix_multiply(current_matrix(g), &op);
+            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
             mark_matrix_dirty(g);
         }
         break;
@@ -558,7 +742,10 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         if (g->mode == 3u) {
             g->stats->ignored_no_effect++;
         } else {
-            matrix_mult_4x3(current_matrix(g), params);
+            GxMatrix op;
+            matrix_load_4x3(&op, params);
+            matrix_multiply(current_matrix(g), &op);
+            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
             mark_matrix_dirty(g);
         }
         break;
@@ -567,7 +754,10 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         if (g->mode == 3u) {
             g->stats->ignored_no_effect++;
         } else {
-            matrix_mult_3x3(current_matrix(g), params);
+            GxMatrix op;
+            matrix_load_3x3(&op, params);
+            matrix_multiply(current_matrix(g), &op);
+            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
             mark_matrix_dirty(g);
         }
         break;
@@ -576,6 +766,8 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         if (g->mode == 3u) {
             g->stats->ignored_no_effect++;
         } else {
+            /* Vector matrix is deliberately left unscaled (DeSmuME
+             * gfx3d.cpp:1118-1133: it keeps the vector matrix orthogonal). */
             matrix_scale(current_matrix(g), params);
             mark_matrix_dirty(g);
         }
@@ -585,7 +777,13 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         if (g->mode == 3u) {
             g->stats->ignored_no_effect++;
         } else {
-            matrix_translate(current_matrix(g), params);
+            GxMatrix op;
+            matrix_identity(&op);
+            op.m[12 + 0] = (int32_t)params[0];
+            op.m[12 + 1] = (int32_t)params[1];
+            op.m[12 + 2] = (int32_t)params[2];
+            matrix_multiply(current_matrix(g), &op);
+            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
             mark_matrix_dirty(g);
         }
         break;
@@ -596,19 +794,71 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
 
     case TWLHD_V2_CMD_POLYGON_ATTR:
         /* Latch only; BEGIN_VTXS copies pending -> applied (DeSmuME
-         * gfx3d.cpp:2681, 2729-2731). Bits outside 16..20 are ignored. */
+         * gfx3d.cpp:2681, 2729-2731). Alpha = bits 16..20, light mask =
+         * bits 0..3. */
         g->pending_alpha = (params[0] >> 16) & 0x1Fu;
+        g->pending_light_mask = params[0] & 0xFu;
         break;
 
     case TWLHD_V2_CMD_NORMAL:
+        /* Lighting runs at the NORMAL command, even outside BEGIN..END. */
+        gx_compute_normal_colour(g, params[0]);
+        break;
+
+    case TWLHD_V2_CMD_DIF_AMB:
+        g->diffuse = params[0] & 0xFFFFu;
+        g->ambient = (params[0] >> 16) & 0xFFFFu;
+        if ((params[0] & 0x8000u) != 0u) {
+            /* Bit 15 sets the vertex colour to the diffuse RGB555. */
+            set_rgba_from_rgb555(g, params[0] & 0x7FFFu);
+        }
+        break;
+
+    case TWLHD_V2_CMD_SPE_EMI:
+        g->specular = params[0] & 0xFFFFu;
+        g->emission = (params[0] >> 16) & 0xFFFFu;
+        break;
+
+    case TWLHD_V2_CMD_LIGHT_VECTOR: {
+        uint32_t index = (params[0] >> 30) & 0x3u;
+        int32_t dir[3];
+
+        dir[0] = sign_extend10(params[0]) * 8;
+        dir[1] = sign_extend10(params[0] >> 10) * 8;
+        dir[2] = sign_extend10(params[0] >> 20) * 8;
+        /* Direction is transformed by the vector matrix at command time. */
+        matrix_transform_vec3(&g->vec, dir);
+        g->light_dir[index][0] = dir[0];
+        g->light_dir[index][1] = dir[1];
+        g->light_dir[index][2] = dir[2];
+        update_half_vector(dir, g->light_half_neg[index]);
+        break;
+    }
+
+    case TWLHD_V2_CMD_LIGHT_COLOR:
+        g->light_color[(params[0] >> 30) & 0x3u] = params[0];
+        break;
+
+    case TWLHD_V2_CMD_SHININESS: {
+        uint32_t k;
+        for (k = 0; k < 32u; k++) {
+            uint32_t b;
+            for (b = 0; b < 4u; b++) {
+                g->shininess_pending[g->shininess_index++] =
+                    (uint8_t)((params[k] >> (b * 8u)) & 0xFFu);
+            }
+            if (g->shininess_index >= SHININESS_TABLE_SIZE) {
+                memcpy(g->shininess_applied, g->shininess_pending,
+                       SHININESS_TABLE_SIZE);
+                g->shininess_index = 0u;
+            }
+        }
+        break;
+    }
+
     case TWLHD_V2_CMD_TEX_COORD:
     case TWLHD_V2_CMD_TEXIMAGE_PARAM:
     case TWLHD_V2_CMD_PLTT_BASE:
-    case TWLHD_V2_CMD_DIF_AMB:
-    case TWLHD_V2_CMD_SPE_EMI:
-    case TWLHD_V2_CMD_LIGHT_VECTOR:
-    case TWLHD_V2_CMD_LIGHT_COLOR:
-    case TWLHD_V2_CMD_SHININESS:
     case TWLHD_V2_CMD_BOX_TEST:
     case TWLHD_V2_CMD_POS_TEST:
     case TWLHD_V2_CMD_VEC_TEST:
@@ -668,8 +918,10 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         g->prim_count = 0u;
         g->prim_tri_index = 0u;
         g->prim_emitted = 0;
-        /* Apply the pending POLYGON_ATTR alpha once per BEGIN group. */
+        /* Apply the pending POLYGON_ATTR alpha and light mask once per BEGIN
+         * group (DeSmuME gfx3d.cpp:2727-2729). */
         g->applied_alpha = g->pending_alpha;
+        g->applied_light_mask = g->pending_light_mask;
         g->rgba[3] = gx_alpha_float(g->applied_alpha);
         if (g->applied_alpha == 0u) {
             g->stats->alpha_wireframe_polys++;
@@ -730,6 +982,7 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
 
     matrix_identity(&g.proj);
     matrix_identity(&g.pos);
+    matrix_identity(&g.vec);
     matrix_identity(&g.clip);
     g.clip_dirty = 1;
     g.mode = 0u;
@@ -740,6 +993,15 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
 
     g.proj_stack.capacity = PROJ_STACK_CAP;
     g.pos_stack.capacity = POS_STACK_CAP;
+    g.vec_stack.capacity = POS_STACK_CAP;
+
+    /* DeSmuME starts with zero light directions but a valid (negated) half
+     * vector for each of them (gfx3d.cpp:608-621). */
+    for (i = 0u; i < LIGHT_COUNT; i++) {
+        int32_t zero[3] = {0, 0, 0};
+        update_half_vector(zero, g.light_half_neg[i]);
+    }
+    i = 0u;
 
     while (i < view->gxcm_count) {
         uint32_t word = twlhd_v2_gxcm_cmd_word(view, i);
