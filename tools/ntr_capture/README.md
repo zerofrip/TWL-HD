@@ -1,14 +1,20 @@
-# ntr_capture — headless NTR-HR remote-play capture
+# ntr_capture / ntr_input — headless NTR-HR remote play and input
 
-Opt-in, headless client for NTR-HR's **JPEG Compat (UDP)** remote play. It
-connects to the console's TCP port 8000, sends the same start command
-NTRViewer-HR sends, reassembles the UDP stream on port 8001, JPEG-decodes each
-screen, rotates the portrait framebuffer to landscape, and writes one P6 PPM
-per screen.
+This directory holds two independent, opt-in host tools:
 
-Status: **BUILD/UNIT only**. This tool was built and tested on the host with
-synthetic packets; it was **not connected to a console** during implementation.
-Nothing from NTRViewer-HR or libjpeg is vendored in this repository.
+- **`ntr_capture`** — headless client for NTR-HR's **JPEG Compat (UDP)** remote
+  play. It connects to the console's TCP port 8000, sends the same start
+  command NTRViewer-HR sends, reassembles the UDP stream on port 8001,
+  JPEG-decodes each screen, rotates the portrait framebuffer to landscape, and
+  writes one P6 PPM per screen.
+- **`ntr_input`** — button/touch input redirection (20-byte UDP frames to port
+  4950), for automating hardware tests. See
+  [ntr_input](#ntr_input--input-redirection-buttons-and-touch) below.
+
+Status: **BUILD/UNIT only**. Both tools were built and tested on the host
+(`ntr_capture` with synthetic packets, `ntr_input` with a pure frame builder);
+neither was **connected to a console** during implementation. Nothing from
+NTRViewer-HR or libjpeg is vendored in this repository.
 
 ## Build and run
 
@@ -226,7 +232,9 @@ is not a console packet trace.
   portrait JPEG cap does not cover it. KCP / reliable stream, delta, lossless,
   audio and full-width *requests* are not implemented: the remote-play
   `args[6]` full-width field remains 0.
-- **No input redirection** and no console writes of any kind.
+- **No input redirection from `ntr_capture`** and no console writes of any
+  kind. Input redirection lives in the separate `ntr_input` binary below; the
+  capture binary and its target are unchanged.
 - PPM is uncompressed: about 288 KB for the top screen and 230 KB for the
   bottom.
 
@@ -326,3 +334,217 @@ Sample heartbeat-rate logging from a 6 s run against a silent fake console
 [2026-11-08 19:14:47] heartbeats sent: 15 total, seq 15 latest
 [2026-11-08 19:14:49] heartbeats sent: 19 total
 ```
+
+## ntr_input — input redirection (buttons and touch)
+
+Headless presser for Rosalina's (Luma3DS) **input redirection**, so hardware
+tests can be automated (the motivating case: `--press Y` in the Homebrew
+Launcher starts netloader). It sends 20-byte UDP datagrams to the console on
+port **4950**; there is no TCP connection and the console never replies.
+
+The frame layout and idle values come from NTRViewer-HR's own input
+redirection client, and the receiver is Luma3DS Rosalina — NTR-HR's README
+calls its NFC patch the "alternative to Input Redirection/Debugger in
+Rosalina".
+
+### Build and run
+
+```sh
+make ntr-input
+./tools/ntr_capture/build/ntr_input --console-ip 192.168.1.32 --press Y
+```
+
+`make ntr-input` is opt-in: it is not part of `make all` or `make test`. The
+binary lands in the same `tools/ntr_capture/build/` directory, so the existing
+`tools/ntr_capture/build/` ignore rule and `make clean` cover it. It needs only
+a C11 compiler and POSIX sockets (no libjpeg). The pure frame builder is tested
+by `make test` (`test_ntr_input_util`), like `test_ntr_capture_util`.
+
+Options:
+
+| Option | Meaning |
+|---|---|
+| `--console-ip <ip>` | console IPv4 (required unless `--dry-run`; no hostnames) |
+| `--press A,B,X,...` | buttons to hold while the frame is held; comma-separated, OR-ed |
+| `--hold-ms <n>` | hold duration, **clamped** to `50..5000`, default `150` |
+| `--repeat <n>` | iterations, `1..20`, default `1` (out of range is a usage error) |
+| `--gap-ms <n>` | idle wait between iterations, `0..60000`, default `250` |
+| `--touch <x>,<y>` | touch the bottom screen at pixel `x 0..319`, `y 0..239` while holding |
+| `--release-frames <n>` | idle frames after each hold, `1..600`, default `6` |
+| `--dry-run` | print the exact 20-byte frames; open no sockets |
+
+There is **no port option**: 4950 is fixed (`NTR_INPUT_UDP_PORT`). There is no
+`--pc-ip`: UDP sends need no local bind. Exit codes: `2` usage/validation,
+`1` runtime errors, `0` success. Every console-facing action is one
+timestamped stderr line stating what was sent and how many frames.
+
+Per iteration the tool sends ~60 Hz frames carrying the pressed buttons (and
+the touch, if any) for `--hold-ms`, then `--release-frames` idle frames, then
+waits `--gap-ms`. The release burst is also sent before exiting on
+`SIGINT`/`SIGTERM`, because the console's HID patch keeps applying the last
+frame it received — a missing release would leave a button held.
+
+### Protocol
+
+`input_redirection_frame_t` is five `uint32_t` fields, `sizeof` 20, sent with a
+plain `sendto()` to `ntr_ip:4950` (`ntr_rp.h:6-12`, `ntr_rp.c:2738-2763`). The
+viewer `memcpy()`s the native struct and the reference build is little-endian,
+so the wire bytes are little-endian.
+
+| Offset | Field |
+|---|---|
+| 0 | `hidPad` |
+| 4 | `touchScreenState` |
+| 8 | `circlePadState` |
+| 12 | `cppState` |
+| 16 | `interfaceButtons` |
+
+Idle values, exactly as the viewer's default initializer
+(`ui_input_redirection.c:467-473`): `hidPad=0x00000fff`,
+`touchScreenState=0x02000000`, `circlePadState=0x007ff7ff`,
+`cppState=0x80800081`, `interfaceButtons=0`.
+
+`hidPad` is the HID module's **active-low** pad register: a cleared bit is a
+pressed button. The console side proves the polarity (`ntr-hr/include/func.h:34`
+inverts the register: `getKeys() ((REG(IoBasePad) & 0xFFF) ^ 0xFFF)`), and the
+viewer clears bits with `&= ~(1 << n)` (`ui_input_redirection.c:651-703`). Idle
+`0xfff` therefore means "nothing pressed".
+
+| Bit | Button | `--press` name | `hidPad` when only this is pressed |
+|---|---|---|---|
+| 0 | A | `A` | `0xffe` |
+| 1 | B | `B` | `0xffd` |
+| 2 | Select | `SELECT` | `0xffb` |
+| 3 | Start | `START` | `0xff7` |
+| 4 | D-pad right | `RIGHT` | `0xfef` |
+| 5 | D-pad left | `LEFT` | `0xfdf` |
+| 6 | D-pad up | `UP` | `0xfbf` |
+| 7 | D-pad down | `DOWN` | `0xf7f` |
+| 8 | R | `R` | `0xeff` |
+| 9 | L | `L` | `0xdff` |
+| 10 | X | `X` | `0xbff` |
+| 11 | Y | `Y` | `0x7ff` |
+
+**No A/B or X/Y swap is applied.** The viewer's "swap face buttons" setting
+(`ui_controller_swap_face_buttons`, `ui_input_redirection.c:647,662-671`) swaps
+the *SDL gamepad* mapping, not the wire bits. `ntr_input` names the physical
+console bits directly, so `--press Y` is the 3DS Y button.
+
+Touch is `(1 << 24) | (y << 12) | x` (`ui_input_redirection.c:481`), with the
+last non-touch value `0x02000000`. The encoded `x`/`y` are 12-bit raw
+coordinates (0..0xfff), not pixels: the viewer scales the bottom-screen mouse
+position by `TOUCH_SCREEN_COORD_RANGE` (0xfff) over the screen dimensions before
+encoding (`ui_input_redirection.c:383,417-429,478-481`). The HID module converts
+raw to pixels — the shared-memory touch entries consumed by applications are
+pixel coordinates (3dbrew "HID Shared Memory", 0xA8+0x20), while +0x18 holds the
+raw entry. `ntr_input` therefore scales its pixel argument the same way:
+`raw = 0xfff * pixel / 320` for x, `0xfff * pixel / 240` for y (so pixel
+`319,239` → raw `4082,4077`). Pixel arguments are range-checked: 320, 240 or a
+negative value is a usage error (exit 2), never a silent clamp.
+
+Cadence: the viewer's input timer fires every `1000/60` ms from `main.c:883`.
+The viewer only calls `sendto()` when the frame differs from the previous one
+(`ui_input_redirection.c:792-795`); `ntr_input` instead repeats the frame at
+60 Hz for the whole hold. Repetition is harmless (the receiver simply
+overwrites its HID data, Luma3DS
+`sysmodules/rosalina/source/input_redirection.c:95,142-145`) and keeps the timing
+independent of that send-on-change optimisation. The loop is deadline-based on
+`CLOCK_MONOTONIC`, so sleeps do not accumulate drift.
+
+### Safety rules
+
+- **`interfaceButtons` is always 0.** The builder has no parameter for it and
+  no other code writes the field, so HOME, POWER and the long-POWER press are
+  structurally unreachable.
+- **Button whitelist only.** The 12 names in the table; anything else is a
+  usage error (exit 2). No analog circle pad or C-stick/trigger input:
+  `circlePadState` and `cppState` always carry their centre/idle values.
+- **Ranges.** Touch pixels are range-checked; `--hold-ms` is clamped to
+  `50..5000`; `--repeat` 1..20; `--gap-ms` 0..60000; `--release-frames` ≥ 1.
+  Release frames are always sent, including on interrupt.
+- **One target, one port.** Only `--console-ip` (validated dotted-quad IPv4,
+  no DNS) and the fixed port 4950. No option can redirect traffic elsewhere.
+- `--dry-run` opens no socket and prints the exact frame bytes.
+
+### Netloader example
+
+In the Homebrew Launcher (bottom screen is the HBL UI):
+
+```sh
+# 1. Y in the Homebrew Launcher starts netloader.
+./tools/ntr_capture/build/ntr_input --console-ip 192.168.1.32 --press Y
+
+# 2. Send a homebrew binary with 3dslink, then confirm/launch it.
+3dslink -a 192.168.1.32 app.3dsx
+./tools/ntr_capture/build/ntr_input --console-ip 192.168.1.32 --press B
+./tools/ntr_capture/build/ntr_input --console-ip 192.168.1.32 --press A
+```
+
+`--dry-run --press Y` prints the exact press and release frames:
+
+```
+dry-run: no sockets opened
+udp 0.0.0.0:4950, 9 frame(s) per hold, 6 release frame(s), 1 iteration(s)
+pressed frame (20 bytes):
+  0000  ff 07 00 00 00 00 00 02 ff f7 7f 00 81 00 80 80
+  0016  00 00 00 00
+release frame (20 bytes):
+  0000  ff 0f 00 00 00 00 00 02 ff f7 7f 00 81 00 80 80
+  0016  00 00 00 00
+```
+
+`0xfff & ~(1 << 11) = 0x7ff` is the pressed `hidPad`; the release frame is the
+idle frame.
+
+### UNVERIFIED items (ntr_input)
+
+- No console connection was made in this task. Whether Rosalina's input
+  redirection is enabled, and whether a repeated press/release sequence lands
+  in the Homebrew Launcher, is unobserved.
+- The viewer's send-on-change behaviour means a real viewer sends each state
+  once, not at 60 Hz; `ntr_input`'s repetition is a deliberate deviation and
+  its necessity is unverified.
+- The pixel → 12-bit raw scaling is transcribed from the viewer at a 1:1 window
+  (`ui_input_redirection.c:417-429,478-481`); rounding can differ by one raw
+  unit. That the console converts the raw fields to pixels is inferred from the
+  HID shared-memory layout (3dbrew), not observed on this console.
+- UDP has no acknowledgement, so exit 0 means "datagrams sent", not "buttons
+  were applied".
+- The Homebrew Launcher/netloader key sequence above was not executed.
+- IPv4 only; the console must be reachable on the local network.
+
+### Mutation evidence (ntr_input)
+
+Baseline: `make test` green — all host tests plus 8 groups in
+`test_ntr_input_util`, and 86 Python tests OK, exit 0.
+
+Each mutant was applied to a copy of `ntr_input_util.h`, the unchanged test
+source was rebuilt by `make test` with the same `-Wall -Wextra -Werror` +
+ASan/UBSan flags, and `make test` was run. Every mutant turned `make test` red
+(`rc=2`, the host-test loop stops at the first failing test). The header was
+restored after each run; the final header is byte-identical to the tested one
+(`diff` clean) and the baseline is green again.
+
+| Helper | Mutant | Before | After (verbatim first failing check) |
+|---|---|---|---|
+| `ntr_input_button_bit` | (a) A and B bits swapped | PASS | exit 1: `test_ntr_input_util.c:38: expected cases[i].bit == 0, got 1` |
+| `ntr_input_button_bit` | (b) LEFT bit 5 → 4 | PASS | exit 1: `test_ntr_input_util.c:38: expected cases[i].bit == 5, got 4` |
+| `ntr_input_parse_buttons` | (c) OR → assignment (last button wins) | PASS | exit 1: `test_ntr_input_util.c:150: expected 0x003 == 3, got 2` |
+| `ntr_input_parse_buttons` | (d) unknown name silently becomes A | PASS | exit 1: `test_ntr_input_util.c:158: expected -1 == -1, got 0` |
+| `ntr_input_build_frame` | (e) `interfaceButtons` written as 1 | PASS | exit 1: `test_ntr_input_util.c:62: CHECK failed: memcmp(frame, expected, sizeof(expected)) == 0` |
+| `ntr_input_build_frame` | (f) `touch_valid` ignored | PASS | exit 1: `test_ntr_input_util.c:62: CHECK failed: memcmp(frame, expected, sizeof(expected)) == 0` |
+| `ntr_input_build_frame` | (g) press-mask range check removed | PASS | exit 1: `test_ntr_input_util.c:140: expected -1 == -1, got 0` |
+| `ntr_input_touch_raw` | (h) pixel passed through unscaled | PASS | exit 1: `test_ntr_input_util.c:110: expected cases[i].touch == 33480690, got 17756479` |
+| `ntr_input_touch_raw` | (i) divided by `dimension - 1` | PASS | exit 1: `test_ntr_input_util.c:110: expected cases[i].touch == 33480690, got 33554431` |
+| `ntr_input_validate_ipv4` | (j) every string accepted | PASS | exit 1: `test_ntr_input_util.c:175: expected 0 == 0, got 1` |
+| `ntr_input_validate_ipv4` | (k) `inet_pton` failure treated as valid | PASS | exit 1: `test_ntr_input_util.c:175: expected 0 == 0, got 1` |
+| `ntr_input_clamp` | (l) lower bound not clamped | PASS | exit 1: `test_ntr_input_util.c:186: expected 50 == 50, got 49` |
+| `ntr_input_clamp` | (m) upper bound not clamped | PASS | exit 1: `test_ntr_input_util.c:189: expected 5000 == 5000, got 5001` |
+| `ntr_input_hold_frames` | (n) round-up constant 999 → 1 | PASS | exit 1: `test_ntr_input_util.c:209: expected 1 == 1, got 0` |
+| `ntr_input_hold_frames` | (o) divides by 1024 instead of 1000 | PASS | exit 1: `test_ntr_input_util.c:208: expected 300 == 300, got 293` |
+
+The CLI-only checks (`--press`/`--touch`/`--repeat` usage errors, `--dry-run`
+socket-free path, the fixed port) are not reachable by mutants of the header;
+they were verified by running the built binary (exit 2 for an unknown button
+name, a hostname IPv4, `320,0` touch and `--repeat 21`; `--dry-run` prints and
+exits 0).
