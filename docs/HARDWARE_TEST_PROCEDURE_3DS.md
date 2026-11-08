@@ -1,5 +1,7 @@
 # New 3DS — Triangle-Only Hardware Test: Final Procedure (FOR APPROVAL)
 
+> CORRECTION (2026-11-08, Run 17): the statements in the Run 14/15/16 sections that the console does not alpha-blend (alpha 16/4 quads opaque, cause unknown) are WRONG; see section "Run 17" at the end of this file.
+
 > **Status update (later; the text below is the original Run 1 procedure and is kept as written).**
 > The owner ran this and later builds on the console themselves; results are recorded in section 12 and in
 > `docs/PHASE4_HARDWARE_FINDINGS.md`. The assistant never connected to or executed anything on the console.
@@ -769,3 +771,17 @@ rendering and print the RGB values on the bottom screen).
 **Not covered / still open:** draw order/depth write of overlapping
 translucent polygons; wireframe; cull; lighting; textures; the
 `(alpha + 1) / 32` scale.
+
+## Run 17 (2026-11-08): numeric NTR measurement — the console DOES alpha-blend (corrects Runs 14-16)
+
+Measured with the NTR-HR screen capture (tools/ntr_capture, exact RGB from the JPEG stream, no camera) on the real New 3DS, diag build `twlhd-arm11-diag.3dsx` (sha256 9bf74bc6…, build id `e6e6c88-diag`), SD frame scene4_alpha (sha256 2decd74d…), clear colour (16,16,24). Mean RGB over a 9x9 patch per quad (JPEG, so about +-2):
+
+| mode | blue (a 0.156) | red (a 1.0) | green (a 0.531) | white (a 0) |
+|---|---|---|---|---|
+| 0 normal, measured | (12,12,59) | (252,0,0) | (6,142,10) | (16,16,24) = background |
+| 0 predicted for standard alpha blend over the background | (13,13,61) | (255,0,0) | (8,143,11) | background |
+| 1 alpha-as-gray, measured | (40,40,40) | (255,255,254) | (136,135,136) | (0,0,0) |
+| 2 const-alpha-0.5, measured | (7,8,140) | (137,8,10) | (7,136,12) | (135,135,139) |
+| 2 predicted for a 50 % blend | (8,8,140) | (136,8,12) | (8,136,12) | (136,136,140) |
+
+HARDWARE OBSERVED (numeric): the console blends vertex alpha correctly: mode 0 matches the standard blend within about 2 levels, mode 1 shows grey = alpha x 255 (40 / 136 / 255 / 0), mode 2 matches a 50 % blend for all four quads. The alpha-0 quad is "not visible" in mode 0 simply because its blend weight is 0 (it equals the background); it is not discarded. The earlier statements "the console does NOT alpha-blend / the alpha 16 and 4 quads are opaque / cause UNKNOWN" (Runs 14, 15, 16) were WRONG: they came from reading colours off camera photos, where ambient light lifted dark levels and made faint blends look saturated. There is no console blend defect to diagnose. Still unverified: the DS `(alpha + 1) / 32` scale and DS translucent-polygon depth/ordering rules.
