@@ -2,6 +2,7 @@
 */build/
 tests/host/build/
 tools/azahar_host/build/
+tools/ntr_capture/build/
 
 # binaries
 *.nds
