@@ -363,12 +363,12 @@ static void test_tex_golden(void) {
 static void test_tex_formats(void) {
     TwlhdV2WriteParams params = golden_params();
     static const uint32_t texel_sizes[7] = {64u, 16u, 32u, 64u, 16u, 64u, 128u};
-    static const uint32_t palette_sizes[7] = {64u, 8u, 32u, 512u, 0u, 16u, 0u};
+    static const uint32_t palette_sizes[7] = {64u, 8u, 32u, 512u, 8u, 16u, 0u};
     static const uint32_t index_sizes[7] = {0u, 0u, 0u, 0u, 8u, 0u, 0u};
     static const uint32_t texel_offsets[7] = {0u, 64u, 80u, 112u,
                                               176u, 200u, 264u};
     static const uint32_t palette_offsets[7] = {0u, 64u, 72u, 104u,
-                                                0u, 616u, 0u};
+                                                616u, 624u, 0u};
     TwlhdV2View view;
     TwlhdV2TexRecord rec;
     uint32_t expected_txdt = 0;
@@ -441,7 +441,7 @@ static void test_tex_formats(void) {
 
     /* A file whose textures carry no palette omits the PLDT chunk. */
     params.tex_count = 1u;
-    params.tex = &g_fmt_entries[4]; /* 4x4: texel + index, no palette */
+    params.tex = &g_fmt_entries[6]; /* 16bpp: texel only, no palette */
     CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
                  TWLHD_V2_OK);
     CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
@@ -449,6 +449,54 @@ static void test_tex_formats(void) {
     CHECK_EQ_INT(view.txds_count, 1u);
     CHECK_EQ_INT(view.pldt_size, 0u);
     CHECK(view.pldt == NULL);
+}
+
+static void test_tex_4x4_palette(void) {
+    TwlhdV2WriteParams params = golden_params();
+    TwlhdV2TexEntry entry;
+    static uint8_t palette[TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES];
+    static uint8_t texel[16];
+    static uint8_t index[8];
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    size_t size = 0;
+    uint32_t i;
+
+    for (i = 0; i < sizeof palette; i++) palette[i] = (uint8_t)(i & 0xFFu);
+    for (i = 0; i < sizeof texel; i++) texel[i] = (uint8_t)(0x40u + i);
+
+    entry.teximage_param = 5u << 26;
+    entry.pltt_base = 0u;
+    entry.texel = texel;
+    entry.palette = palette;
+    entry.index = index;
+    entry.texel_bytes = 16u;
+    entry.palette_bytes = 8u;
+    entry.index_bytes = 8u;
+
+    params.tex = &entry;
+    params.tex_count = 1u;
+
+    /* 8-byte window round trip. */
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 8u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0)[7] == palette[7]);
+
+    /* Maximum-size window round trip. */
+    entry.palette_bytes = TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0)[sizeof palette - 1u] ==
+          palette[sizeof palette - 1u]);
 }
 
 static void test_tex_errors(void) {
@@ -465,8 +513,17 @@ static void test_tex_errors(void) {
                  TWLHD_V2_ERR_TXDS_SIZE);
     memcpy(bad, g_tex_entries, sizeof bad);
 
-    bad[0].palette_bytes = 8u;
-    bad[0].teximage_param = 5u << 26; /* 4x4 has no palette */
+    /* Format 5 accepts an even caller-chosen palette window. */
+    bad[0].teximage_param = 5u << 26;
+    bad[0].index = g_fmt_index[4];
+    bad[0].index_bytes = 8u;
+    bad[0].palette_bytes = 0u;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_ERR_TXDS_SIZE);
+    bad[0].palette_bytes = 3u;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_ERR_TXDS_SIZE);
+    bad[0].palette_bytes = 65537u;
     CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
                  TWLHD_V2_ERR_TXDS_SIZE);
     memcpy(bad, g_tex_entries, sizeof bad);
@@ -542,6 +599,8 @@ int main(void) {
     test_report("v2-write/tex-golden");
     test_tex_formats();
     test_report("v2-write/tex-formats");
+    test_tex_4x4_palette();
+    test_report("v2-write/tex-4x4-palette");
     test_tex_errors();
     test_report("v2-write/tex-errors");
     test_tex_only_adds_chunks();

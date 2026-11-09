@@ -33,6 +33,13 @@ extern "C" {
 #define TWLHD_V2_TXDT_MAX_BYTES          524288u
 #define TWLHD_V2_PLDT_MAX_BYTES          98304u
 
+/*
+ * Format 5 (4x4 compressed) reads palette RAM per block window, so its
+ * PLDT block is a caller/capture-chosen even window, not a fixed table.
+ */
+#define TWLHD_V2_TEX_PALETTE_4X4_MIN_BYTES 2u
+#define TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES 65536u
+
 /* FourCC packing: 'a' occupies the lowest byte, matching little-endian order. */
 #define TWLHD_FOURCC(a, b, c, d)                                             \
     ((uint32_t)(uint8_t)(a) | ((uint32_t)(uint8_t)(b) << 8) |                 \
@@ -145,13 +152,26 @@ int twlhd_v2_rsta_addr_in_range(uint32_t addr);
  * valid format 1..7; returns 0 (outputs untouched) for format 0.
  *
  * texel_bytes: width*height * bytes/texel (1, 1/4, 1/2, 1, 1/4, 1, 2).
- * palette_bytes: 2 * palette entries for A3I5/I2/I4/I8/A5I3, else 0.
+ * palette_bytes: 2 * palette entries for A3I5/I2/I4/I8/A5I3, 0 for format 7.
+ *   Format 5 writes 0 here: its palette is not a fixed table but a
+ *   caller-chosen window validated by twlhd_v2_tex_palette_size_ok().
  * index_bytes: width*height >> 3 for 4x4 only, else 0.
  *
  * Shared by the parser and the writer so the formula exists once.
  */
 int twlhd_v2_tex_sizes(uint32_t teximage_param, uint32_t *texel_bytes,
                        uint32_t *palette_bytes, uint32_t *index_bytes);
+
+/*
+ * True when palette_bytes is a legal PLDT block size for teximage_param.
+ * Formats 1/2/3/4/6 must equal twlhd_v2_tex_sizes(); format 7 must be 0;
+ * format 5 is an even window in [TWLHD_V2_TEX_PALETTE_4X4_MIN_BYTES,
+ * TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES]. Returns 0 for format 0 (fail closed).
+ *
+ * The parser and the writer both call this one helper.
+ */
+int twlhd_v2_tex_palette_size_ok(uint32_t teximage_param,
+                                 uint32_t palette_bytes);
 
 /* Input entry layouts for the writer and recorder. Host structs only. */
 typedef struct {

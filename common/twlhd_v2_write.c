@@ -67,21 +67,21 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
     for (i = 0; i < params->tex_count; i++) {
         const TwlhdV2TexEntry *e = &params->tex[i];
         uint32_t texel_bytes;
-        uint32_t palette_bytes;
         uint32_t index_bytes;
         uint32_t j;
 
-        if (!twlhd_v2_tex_sizes(e->teximage_param, &texel_bytes,
-                                &palette_bytes, &index_bytes)) {
+        if (!twlhd_v2_tex_sizes(e->teximage_param, &texel_bytes, NULL,
+                                &index_bytes)) {
             return TWLHD_V2_ERR_TXDS;
         }
         if (e->texel_bytes != texel_bytes ||
-            e->palette_bytes != palette_bytes ||
+            !twlhd_v2_tex_palette_size_ok(e->teximage_param,
+                                          e->palette_bytes) ||
             e->index_bytes != index_bytes) {
             return TWLHD_V2_ERR_TXDS_SIZE;
         }
         if ((texel_bytes != 0u && !e->texel) ||
-            (palette_bytes != 0u && !e->palette) ||
+            (e->palette_bytes != 0u && !e->palette) ||
             (index_bytes != 0u && !e->index)) {
             return TWLHD_V2_ERR_TXDS;
         }
@@ -92,7 +92,7 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
             }
         }
         txdt_bytes += texel_bytes + index_bytes;
-        pldt_bytes += palette_bytes;
+        pldt_bytes += e->palette_bytes;
     }
 
     total = (uint64_t)TWLHD_V2_HEADER_SIZE +
@@ -173,18 +173,17 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
         for (i = 0; i < params->tex_count; i++) {
             const TwlhdV2TexEntry *e = &params->tex[i];
             uint32_t texel_bytes;
-            uint32_t palette_bytes;
             uint32_t index_bytes;
 
-            (void)twlhd_v2_tex_sizes(e->teximage_param, &texel_bytes,
-                                     &palette_bytes, &index_bytes);
+            (void)twlhd_v2_tex_sizes(e->teximage_param, &texel_bytes, NULL,
+                                     &index_bytes);
             put_le32(out + record_offset + 0, e->teximage_param);
             put_le32(out + record_offset + 4, e->pltt_base);
             put_le32(out + record_offset + 8, texel_pos);
             put_le32(out + record_offset + 12, texel_bytes);
             put_le32(out + record_offset + 16,
-                     palette_bytes != 0u ? palette_pos : 0u);
-            put_le32(out + record_offset + 20, palette_bytes);
+                     e->palette_bytes != 0u ? palette_pos : 0u);
+            put_le32(out + record_offset + 20, e->palette_bytes);
             put_le32(out + record_offset + 24,
                      index_bytes != 0u ? texel_pos + texel_bytes : 0u);
             put_le32(out + record_offset + 28, index_bytes);
@@ -192,7 +191,7 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
             put_le32(out + record_offset + 36, 0);
             record_offset += TWLHD_V2_TXDS_RECORD_SIZE;
             texel_pos += texel_bytes + index_bytes;
-            palette_pos += palette_bytes;
+            palette_pos += e->palette_bytes;
         }
         offset += (size_t)params->tex_count * TWLHD_V2_TXDS_RECORD_SIZE;
 

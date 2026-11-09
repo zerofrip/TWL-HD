@@ -157,6 +157,22 @@ int twlhd_v2_tex_sizes(uint32_t teximage_param, uint32_t *texel_bytes,
     return 1;
 }
 
+int twlhd_v2_tex_palette_size_ok(uint32_t teximage_param,
+                                 uint32_t palette_bytes) {
+    uint32_t format = (teximage_param >> 26) & 7u;
+    uint32_t fixed_bytes;
+
+    if (!twlhd_v2_tex_sizes(teximage_param, NULL, &fixed_bytes, NULL)) {
+        return 0;
+    }
+    if (format == 5u) {
+        return palette_bytes >= TWLHD_V2_TEX_PALETTE_4X4_MIN_BYTES &&
+               palette_bytes <= TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES &&
+               (palette_bytes & 1u) == 0u;
+    }
+    return palette_bytes == fixed_bytes;
+}
+
 static int is_raw_entry(uint32_t word) {
     return word == TWLHD_V2_RAW_FIFO_BIT;
 }
@@ -352,15 +368,15 @@ static TwlhdV2Result validate_tex(const uint8_t *txds, uint32_t txds_size,
     for (i = 0; i < count; i++) {
         TwlhdV2TexRecord rec;
         uint32_t texel_bytes;
-        uint32_t palette_bytes;
         uint32_t index_bytes;
 
         read_tex_record(txds + (size_t)i * TWLHD_V2_TXDS_RECORD_SIZE, &rec);
-        (void)twlhd_v2_tex_sizes(rec.teximage_param, &texel_bytes,
-                                 &palette_bytes, &index_bytes);
+        (void)twlhd_v2_tex_sizes(rec.teximage_param, &texel_bytes, NULL,
+                                 &index_bytes);
 
         if (rec.texel_size != texel_bytes ||
-            rec.palette_size != palette_bytes ||
+            !twlhd_v2_tex_palette_size_ok(rec.teximage_param,
+                                          rec.palette_size) ||
             rec.index_size != index_bytes) {
             return TWLHD_V2_ERR_TXDS_SIZE;
         }

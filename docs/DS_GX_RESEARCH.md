@@ -310,8 +310,9 @@ other formats (`texcache.cpp:438`).
   (`texcache.cpp:443-446`).
 
 **READ:** minimum payload to reproduce one texture: TEXIMAGE_PARAM + PLTT_BASE
-(8 B), raw texel data (`_packSize`), palette (`_paletteSize`; 0 for 4x4/16bpp)
-and, for 4x4, the index block (`_packIndexSize`).
+(8 B), raw texel data (`_packSize`), palette (`_paletteSize`; 0 for 16bpp,
+format 5 reads a per-block palette window instead of a fixed table) and, for
+4x4, the index block (`_packIndexSize`).
 
 ### TEX_COORD (0x22) and coordinate transform
 **VERIFIED:** `gfx3d_glTexCoord(param)` forwards the word to
@@ -343,13 +344,21 @@ TEX_COORD and VTX are observed.
 | 2 I2 | 2 | 4 | entry opaque; index 0 optionally transparent | `texcache.cpp:429-436` |
 | 3 I4 | 4 | 16 | same | |
 | 4 I8 | 8 | 256 | same | |
-| 5 4x4 | 2 + index block | 4 per block | block mode 0 = 3 colours + transparent | `texcache.cpp:1789-1843` |
+| 5 4x4 | 2 + index block | 4 per block, reads palette RAM | block mode 0 = 3 colours + transparent | `texcache.cpp:1789-1843` |
 | 6 A5I3 | 8 | 8 | texel bits 3-7, 0 transparent, 31 opaque | `texcache.cpp:1745-1746` |
 | 7 16bpp | 16 | none | bit 15: 1 = opaque, 0 = transparent | `texcache.cpp:2007-2026` |
 
 **VERIFIED:** palette entries are 16-bit RGB555 with bit 15 ignored
 (`src & 0x7FFF`, `utils/colorspacehandler/colorspacehandler.h:128-131`).
 The I-formats carry no texel alpha; 4x4 block modes 1 and 3 derive the last two colours (average / 5:3 interpolation) from the first two (`texcache.cpp:1806-1843`). 4x4 unpacking receives only the first 128 KB slot of texel data and warns when it overruns the slot (`texcache.cpp:646-654`).
+**VERIFIED (format 5 palette):** the PAL4X4 macro (`texcache.cpp` ~1752) reads
+palette RAM per block: `palAddress = PLTT_BASE<<4 + pal1offset`,
+`pal1offset = (blockword & 0x3FFF)<<1`, consumed by the unpacker at
+`texcache.cpp:1789-1843`. `paletteSizeList[5] = 0` (`texcache.cpp:418/441`)
+sizes only the texture-cache copy, not the palette read, so it is not evidence
+that 4x4 has no palette. A capture therefore records a caller-chosen even
+palette window in `[2, 65536]` bytes; colours beyond the captured window are a
+later decoder-stage error.
 
 ### Texture application (TexEnv / polygon modes)
 **VERIFIED:** `PolygonMode` is `MODULATE=0, DECAL=1, TOONHIGHLIGHT=2, SHADOW=3`
