@@ -130,6 +130,18 @@ static void add_trans(uint32_t *n, uint32_t tx, uint32_t ty, uint32_t tz) {
     add_entry(n, TWLHD_V2_CMD_MTX_TRANS, tz);
 }
 
+static void add_identity(uint32_t *n) {
+    add_entry(n, TWLHD_V2_CMD_MTX_IDENTITY, 0u);
+}
+
+static void add_store(uint32_t *n, uint32_t index) {
+    add_entry(n, TWLHD_V2_CMD_MTX_STORE, index);
+}
+
+static void add_restore(uint32_t *n, uint32_t index) {
+    add_entry(n, TWLHD_V2_CMD_MTX_RESTORE, index);
+}
+
 static void add_vtx_16(uint32_t *n, int32_t x, int32_t y, int32_t z) {
     add_entry(n, TWLHD_V2_CMD_VTX_16,
               ((uint32_t)(uint16_t)x) | ((uint32_t)(uint16_t)y << 16));
@@ -3266,6 +3278,345 @@ static void test_light_mode3_stack_commands_ignored(void) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Vec-matrix lighting streams (Phase 5B-1 mutants)                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * MTX_TRANS on vec is an equivalent mutant (translation column never read by
+ * the 3x3 lighting transform); no lighting stream can observe it.
+ *
+ * The matrix op is issued between LIGHT_VECTOR (transformed by identity vec)
+ * and NORMAL (rotated by the new vec), so only the normal moves. A 90 deg
+ * rotation makes the fixed light and the rotated normal perpendicular (0),
+ * while an untouched identity vec gives 29.
+ */
+
+/* Column-major 20.12 Ry rotations: (0,0,n) rotates into the xz plane. */
+static const uint32_t g_rot_y45[16] = {
+    2896u, 0u, (uint32_t)(int32_t)-2896, 0u,
+    0u, 4096u, 0u, 0u,
+    2896u, 0u, 2896u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_rot_y60[16] = {
+    2048u, 0u, (uint32_t)(int32_t)-3547, 0u,
+    0u, 4096u, 0u, 0u,
+    3547u, 0u, 2048u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_rot_y90[16] = {
+    0u, 0u, (uint32_t)(int32_t)-4096, 0u,
+    0u, 4096u, 0u, 0u,
+    4096u, 0u, 0u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_identity[16] = {
+    4096u, 0u, 0u, 0u,
+    0u, 4096u, 0u, 0u,
+    0u, 0u, 4096u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_rot_y90_4x3[12] = {
+    0u, 0u, (uint32_t)(int32_t)-4096,
+    0u, 4096u, 0u,
+    4096u, 0u, 0u,
+    0u, 0u, 0u,
+};
+
+static const uint32_t g_rot_y90_3x3[9] = {
+    0u, 0u, (uint32_t)(int32_t)-4096,
+    0u, 4096u, 0u,
+    4096u, 0u, 0u,
+};
+
+/* Guards MTX_LOAD_4x3 writing g->vec (line 724): removal leaves 29. */
+static void test_light_load_4x3_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MTX_LOAD_4x3 (line 724): vec stays identity. */
+static void test_light_load_4x3_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MULT_4x4 writing g->vec (line 736): removal leaves 29. */
+static void test_light_mult_4x4_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x4(&n, g_rot_y90);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MULT_4x4 (line 736): vec stays identity. */
+static void test_light_mult_4x4_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x4(&n, g_rot_y90);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MULT_4x3 writing g->vec (line 748): removal leaves 29. */
+static void test_light_mult_4x3_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MULT_4x3 (line 748): vec stays identity. */
+static void test_light_mult_4x3_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MULT_3x3 writing g->vec (line 760): removal leaves 29. */
+static void test_light_mult_3x3_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_3x3(&n, g_rot_y90_3x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MULT_3x3 (line 760): vec stays identity. */
+static void test_light_mult_3x3_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_3x3(&n, g_rot_y90_3x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MTX_IDENTITY resetting g->vec (line 704): removal leaves 0. */
+static void test_light_identity_mode2_resets_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y90);
+    add_identity(&n);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards `g->mode >= 1u` on MTX_IDENTITY (line 704): vec stays rotated. */
+static void test_light_identity_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y90);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_identity(&n);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards stack_store saving g->vec (line 312): removal restores zero (0). */
+static void test_light_store_restore_mode2_slot3(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 3u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* Guards slot indexing: slot 7 holds rot_y60 (14), slot 3 rot_y45 (21). */
+static void test_light_store_restore_mode2_slots_distinct(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_rot_y60);
+    add_store(&n, 7u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 7u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(14, 14, 14);
+}
+
+/* Guards mode-1 MTX_STORE saving g->vec (line 312): removal gives 0. */
+static void test_light_store_restore_mode1_store_saves_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 3u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* Guards mode-1 MTX_RESTORE of g->vec (line 332) plus slot distinctness. */
+static void test_light_store_restore_mode1_restore_slot7(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_rot_y60);
+    add_store(&n, 7u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 7u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(14, 14, 14);
+}
+
+/* Mode-0 stack ops touch only the projection matrix: vec stays rot_y45. */
+static void test_light_store_restore_mode0_leaves_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_store(&n, 0u);
+    add_restore(&n, 0u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* Mode-3 STORE/RESTORE are ignored: vec stays rot_y45 (21). */
+static void test_light_store_restore_mode3_leaves_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_store(&n, 2u);
+    add_restore(&n, 2u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* ------------------------------------------------------------------------- */
 /* Main                                                                      */
 /* ------------------------------------------------------------------------- */
 
@@ -3425,5 +3776,37 @@ int main(void) {
     test_report("gx_interp/light-saturating-transform");
     test_light_mode3_stack_commands_ignored();
     test_report("gx_interp/light-mode3-stack-ignored");
+    test_light_load_4x3_mode2_rotates_vec();
+    test_report("gx_interp/light-load-4x3-mode2-rotates-vec");
+    test_light_load_4x3_mode1_keeps_vec();
+    test_report("gx_interp/light-load-4x3-mode1-keeps-vec");
+    test_light_mult_4x4_mode2_rotates_vec();
+    test_report("gx_interp/light-mult-4x4-mode2-rotates-vec");
+    test_light_mult_4x4_mode1_keeps_vec();
+    test_report("gx_interp/light-mult-4x4-mode1-keeps-vec");
+    test_light_mult_4x3_mode2_rotates_vec();
+    test_report("gx_interp/light-mult-4x3-mode2-rotates-vec");
+    test_light_mult_4x3_mode1_keeps_vec();
+    test_report("gx_interp/light-mult-4x3-mode1-keeps-vec");
+    test_light_mult_3x3_mode2_rotates_vec();
+    test_report("gx_interp/light-mult-3x3-mode2-rotates-vec");
+    test_light_mult_3x3_mode1_keeps_vec();
+    test_report("gx_interp/light-mult-3x3-mode1-keeps-vec");
+    test_light_identity_mode2_resets_vec();
+    test_report("gx_interp/light-identity-mode2-resets-vec");
+    test_light_identity_mode1_keeps_vec();
+    test_report("gx_interp/light-identity-mode1-keeps-vec");
+    test_light_store_restore_mode2_slot3();
+    test_report("gx_interp/light-store-restore-mode2-slot3");
+    test_light_store_restore_mode2_slots_distinct();
+    test_report("gx_interp/light-store-restore-mode2-slots-distinct");
+    test_light_store_restore_mode1_store_saves_vec();
+    test_report("gx_interp/light-store-restore-mode1-store-saves-vec");
+    test_light_store_restore_mode1_restore_slot7();
+    test_report("gx_interp/light-store-restore-mode1-restore-slot7");
+    test_light_store_restore_mode0_leaves_vec();
+    test_report("gx_interp/light-store-restore-mode0-leaves-vec");
+    test_light_store_restore_mode3_leaves_vec();
+    test_report("gx_interp/light-store-restore-mode3-leaves-vec");
     return test_exit_code();
 }
