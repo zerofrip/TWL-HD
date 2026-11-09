@@ -883,18 +883,48 @@ static void test_tex(void) {
     CHECK(twlhd_v2_tex_palette_ptr(NULL, 0) == NULL);
     CHECK(twlhd_v2_tex_index_ptr(NULL, 0) == NULL);
 
-    /* 4x4 record: the index block follows the texel block inside TXDT. */
-    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 0u, 16u, 8u);
-    size = build_tex_default(g_txds, 40u, g_txdt, 24u, NULL, 0u);
+    /* 4x4 record: a caller-chosen palette window plus the index block. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
     CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
     CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK_EQ_INT(view.pldt_size, 8u);
     CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
     CHECK_EQ_INT(rec.index_offset, 16u);
     CHECK_EQ_INT(rec.index_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
     CHECK(twlhd_v2_tex_index_ptr(&view, 0) == view.txdt + 16);
     CHECK(twlhd_v2_tex_index_ptr(&view, 0)[0] == g_txdt[16]);
-    CHECK_EQ_INT(view.pldt_size, 0u);
-    CHECK(view.pldt == NULL);
+
+    /* 4x4 palette windows: even sizes in [2, 65536] are accepted. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 2u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 4u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65536u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 65536u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 65536u);
+
+    /* 4x4 negatives: zero, odd, and just past the upper bound. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 0u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 3u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65537u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 65540u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* 65,538 is even, so only the upper bound can reject it. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65538u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 65540u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
 
     /* A texture-free file keeps the old view exactly. */
     size = build_tex_default(NULL, 0u, NULL, 0u, NULL, 0u);
@@ -959,9 +989,16 @@ static void test_tex(void) {
     size = build_tex_default(g_txds, 40u, g_txdt, 16u, NULL, 0u);
     CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_MISSING_CHUNK);
 
+    /* A 4x4 record with palette_size 0 is no longer valid. */
     put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 0u, 16u, 8u);
     size = build_tex_default(g_txds, 40u, g_txdt, 24u, NULL, 0u);
-    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* A 4x4 palette window requires PLDT like every other palette. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_MISSING_CHUNK);
 
     /* Bounds: past the end of TXDT. */
     put_tex_record(0, 0x08000000u, 0u, 24u, 16u, 0u, 8u, 0u, 0u);

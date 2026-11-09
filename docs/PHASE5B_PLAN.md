@@ -190,6 +190,12 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   proposal.
 - Not done: recorder-side texture capture, the Python mirror extension,
   interpreter texcoords, vertex-layout change and PICA upload.
+- Repair round 1: format 5 (4x4) `palette_size` is now a caller-chosen even
+  window in `[2, 65536]` bytes, not the fixed 0 this stage originally
+  specified. DeSmuME's PAL4X4 unpacker reads palette RAM per block
+  (`texcache.cpp` ~1752/1789-1843), so the old missing-palette rule was a
+  design defect; the parser and writer now share
+  `twlhd_v2_tex_palette_size_ok()`. Still BUILD/UNIT only.
 
 ## 4. Where the DS GX equations must come from
 
