@@ -256,3 +256,148 @@ The vertex colour starts as the emission colour and is clamped with `min(31, x)`
 - Needed interpreter state: vector matrix (3x3) as of the NORMAL / LIGHT_VECTOR command, 4 light directions already transformed at LIGHT_VECTOR time, 4 light colours, diffuse/ambient/specular/emission, a 128-entry shininess table, light mask from the latched POLYGON_ATTR.
 - CHECK items (state after 5B-1 implementation, BUILD/UNIT only): (a) vector-matrix semantics — resolved from source: the interpreter keeps a separate vector matrix with matrix mode 2 dual-applying except SCALE, and mode 1 leaving it untouched; (b) `sfx32_shiftdown`/`fx32_mul` rounding — resolved from source (64-bit product, arithmetic `>>12`, saturating 3x3 accumulate); (c) GBATEK cross-check of the specular exponent — **still CHECK** (DeSmuME comment: GBATEK is slightly off); (d) integer arithmetic order (>>17, >>5) — reproduced and golden-tested; (e) light mask latched at BEGIN while NORMAL reads the applied mask — implemented; (f) NORMAL outside BEGIN/END — implemented as applied (global colour latch in DeSmuME), **still CHECK** on hardware.
 - Test plan hint (UNIT): an independent Python oracle that re-implements the integer equations above, golden streams for one light diffuse-only, ambient-only, emission-only, specular with and without the shininess table, light mask bits, clamping at 31; mutation tests for each shift constant.
+
+## Textures (5B-2 research)
+Status: research only; no source, test or Makefile change. Sources are the DeSmuME checkout cited at the top (commit `fc504ee0`); GBATEK was not consulted. Labels: **VERIFIED** = read at the cited line, **READ** = derived from the cited source, **UNVERIFIED** = not checked against hardware or register docs.
+
+### TEXIMAGE_PARAM (0x2A) and PLTT_BASE (0x2B)
+**VERIFIED:** command ids `GFX3D_TEXIMAGE_PARAM = 0x2A`, `GFX3D_PLTT_BASE = 0x2B`
+(`gfx3d.h:57-58`); IOREG words at `0x040004A8` / `0x040004AC` (`gfx3d.h:508-509`).
+Both latch immediately in their handlers (`gfx3d.cpp:1375-1395`), unlike
+POLYGON_ATTR which is deferred to BEGIN_VTXS.
+
+Bit table, little-endian branch (`gfx3d.h:289-358`):
+
+| Bits | Field | Meaning |
+|---|---|---|
+| 0-15 | `VRAMOffset` | texture data base, in units of 8 bytes |
+| 16 | `RepeatS_Enable` | 0 = clamp, 1 = repeat |
+| 17 | `RepeatT_Enable` | 0 = clamp, 1 = repeat |
+| 18 | `MirroredRepeatS_Enable` | flip S, interacts with bit 16 |
+| 19 | `MirroredRepeatT_Enable` | flip T, interacts with bit 17 |
+| 20-22 | `SizeShiftS` | width = 8 << N (8..1024) |
+| 23-25 | `SizeShiftT` | height = 8 << N (8..1024) |
+| 26-28 | `PackedFormat` | 0 none, 1 A3I5, 2 I2, 3 I4, 4 I8, 5 4x4, 6 A5I3, 7 16bpp |
+| 29 | `KeyColor0_Enable` | use palette index 0 as transparent |
+| 30-31 | `TexCoordTransformMode` | 0 none, 1 texcoord, 2 normal, 3 vertex |
+
+**VERIFIED:** bits 16-19 are also exposed as a 4-bit `TextureWrapMode`
+(`gfx3d.h:346-357`) which the software rasteriser consumes
+(`rasterize.cpp:527`). Decoder (`rasterize.cpp:1814-1843`): bit 0 = repeat S,
+bit 1 = repeat T, bit 2 = flip S, bit 3 = flip T. A flip bit with its repeat bit
+clear behaves as clamp (cases 4, 8 and 0xC are identical to case 0).
+
+**VERIFIED:** `KeyColor0_Enable` becomes `_isPalZeroTransparent` only for
+I2/I4/I8 (`texcache.cpp:429-436`); A3I5/A5I3/4x4/16bpp ignore it.
+PLTT_BASE is stored as a raw `u32` (`gfx3d.cpp:1392-1395`) and used without
+masking: palette byte address = `PLTT_BASE << 3` for I2, `PLTT_BASE << 4` for all
+other formats (`texcache.cpp:438`).
+
+### Texture memory addressing and capture payload
+**VERIFIED** from `TextureStore::TextureStore` (`texcache.cpp:412-499`):
+- width = `8 << SizeShiftS`, height = `8 << SizeShiftT` (`texcache.cpp:422-423`);
+  DS dimensions are therefore always powers of two in 8..1024.
+- `_packAddress = VRAMOffset << 3`; `_packSize = width*height*texSizes[PackedFormat] >> 2`
+  (`texcache.cpp:426-427`) with `texSizes[] = {0,4,1,2,4,1,4,8}`
+  (`texcache.cpp:414`), i.e. bytes/texel 1, 0.25, 0.5, 1, 0.25, 1, 2 for formats 1-7.
+- texture RAM is 4 slots x 128 KB: `slot = (ofs >> 17) & 3`, physical address =
+  `textureSlotAddr[slot] + (ofs & 0x1FFFF)`, wrapping across slots
+  (`texcache.cpp:144-165`).
+- palette RAM is 6 slots x 16 KB: `slot = (ofs >> 14) & 7`; slot values 6-7 have 5
+  subtracted (wrap into 1-2) (`texcache.cpp:169-197`).
+- 4x4 only: `indexBase = ((VRAMOffset & 0xC000) == 0x8000) ? 0x30000 : 0x20000`,
+  `indexOffset = (VRAMOffset & 0x3FFF) << 2`, index size = `width*height >> 3`
+  (`texcache.cpp:443-446`).
+
+**READ:** minimum payload to reproduce one texture: TEXIMAGE_PARAM + PLTT_BASE
+(8 B), raw texel data (`_packSize`), palette (`_paletteSize`; 0 for 4x4/16bpp)
+and, for 4x4, the index block (`_packIndexSize`).
+
+### TEX_COORD (0x22) and coordinate transform
+**VERIFIED:** `gfx3d_glTexCoord(param)` forwards the word to
+`SetTextureCoordinates2s16` (`gfx3d.cpp:2635-2639`, overload
+`gfx3d.cpp:1397-1403`). It is two packed s16 values (S low half, T high half) in
+s1.11.4. The setter latches `_texCoord16` and raises
+`_doesTransformedTexCoordsNeedUpdate` (`gfx3d.cpp:1405-1414`).
+
+**VERIFIED:** the transform runs in `AddCurrentVertexToList` at VTX time
+(`gfx3d.cpp:1579-1611`) and is re-evaluated for every vertex in VertexSource
+mode even when the flag is clear (`gfx3d.cpp:1579-1580`). Modes come from
+`TexCoordTransformMode` (`gfx3d.h:124-129`):
+- 0 none: `s = texCoord.s`, `t = texCoord.t` (raw latch passed on).
+- 1 texcoord source: texture-matrix rows 0/1 x (s,t) + translation, `>> 12`.
+- 2 normal source: rows 0/1 x (nx,ny,nz) + (s<<24, t<<24), `>> 24`.
+- 3 vertex source: rows 0/1 x (vx,vy,vz) + (s<<24, t<<24), `>> 24`.
+
+**READ:** all modes are integer fixed point with no normalisation; the texture
+matrix is `MATRIXMODE_TEXTURE` as latched at VTX time, so matrix changes between
+TEX_COORD and VTX are observed.
+
+### Texture formats 1-7
+**VERIFIED:** `NDSTextureFormat` (`gfx3d.h:111-120`) and per-format unpacking
+(`texcache.cpp:622-668`, signatures `texcache.h:185-191`):
+
+| Fmt | Bits/texel | Palette entries | Alpha | Source |
+|---|---|---|---|---|
+| 1 A3I5 | 8 | 32 | texel bits 5-7, 0 transparent, 7 opaque | `texcache.cpp:1524-1525` |
+| 2 I2 | 2 | 4 | entry opaque; index 0 optionally transparent | `texcache.cpp:429-436` |
+| 3 I4 | 4 | 16 | same | |
+| 4 I8 | 8 | 256 | same | |
+| 5 4x4 | 2 + index block | 4 per block | block mode 0 = 3 colours + transparent | `texcache.cpp:1789-1843` |
+| 6 A5I3 | 8 | 8 | texel bits 3-7, 0 transparent, 31 opaque | `texcache.cpp:1745-1746` |
+| 7 16bpp | 16 | none | bit 15: 1 = opaque, 0 = transparent | `texcache.cpp:2007-2026` |
+
+**VERIFIED:** palette entries are 16-bit RGB555 with bit 15 ignored
+(`src & 0x7FFF`, `utils/colorspacehandler/colorspacehandler.h:128-131`).
+The I-formats carry no texel alpha; 4x4 block modes 1 and 3 derive the last two colours (average / 5:3 interpolation) from the first two (`texcache.cpp:1806-1843`). 4x4 unpacking receives only the first 128 KB slot of texel data and warns when it overruns the slot (`texcache.cpp:646-654`).
+
+### Texture application (TexEnv / polygon modes)
+**VERIFIED:** `PolygonMode` is `MODULATE=0, DECAL=1, TOONHIGHLIGHT=2, SHADOW=3`
+(`gfx3d.h:94-99`); the mode is POLYGON_ATTR bits 4-5 (`gfx3d.h:212-216`, latched at
+BEGIN as in section A). `_shade` implements it (`rasterize.cpp:562-655`); the
+lookup tables are built in `rasterize.cpp:2074-2085` as
+`modulate_table[i][j] = ((i+1)*(j+1)-1) >> 6` and
+`decal_table[a][i][j] = (i*a + j*(31-a)) >> 5`.
+- **READ** MODULATE: `rgb = tex_rgb * vtx_rgb / 63`, `a = tex_a * vtx_a / 31`
+  (six-bit components; `rasterize.cpp:578-586`).
+- **READ** DECAL: `rgb = tex_rgb*tex_a/31 + vtx_rgb*(1 - tex_a/31)`, `a = vtx_a`
+  (`rasterize.cpp:596-611`); without a texture the vertex colour is returned.
+- **READ** TOONHIGHLIGHT: toon mode multiplies tex RGB by the toon colour;
+  highlight mode adds the toon colour to the modulated RGB
+  (`rasterize.cpp:612-641`).
+- **READ** SHADOW: output is the vertex colour, texture ignored
+  (`rasterize.cpp:645-648`).
+- **VERIFIED:** with `!IsSamplingEnabled()`, MODULATE/TOONHIGHLIGHT substitute a
+  synthetic white `{63,63,63,31}` (`rasterize.cpp:573-574`).
+
+### Mapping to PICA200 (analysis, not DeSmuME facts)
+- **READ** Capture format: `TXDS`/`TXDT`/`PLDT` are already reserved and unimplemented
+  (`docs/TWLHD_V2_FORMAT.md:90-98`); stage 5B-2 is planned as a format extension
+  plus a texcoord attribute (`docs/PHASE5B_PLAN.md:144-177`). Payload layout is
+  UNVERIFIED until that approval.
+- **READ** Wrap: DS bits 16-19 (repeat/flip per axis) should map to PICA `GPU_TEXTURE_WRAP_S/T`: clamp -> `GPU_CLAMP_TO_EDGE`, repeat -> `GPU_REPEAT`, repeat+flip -> `GPU_MIRRORED_REPEAT`. Exact PICA mirror/flip behaviour is **UNVERIFIED** (not stated in project docs).
+- **READ** Size: DS textures are powers of two (8..1024) by construction, so NPOT support
+  is not required. PICA maximum texture size and mipmap support are **UNVERIFIED**.
+- **READ** Format conversion: I2/I4/I8/A3I5/A5I3, 16bpp RGB555+1-bit and 4x4 must be
+  decoded offline to a PICA upload format. RGBA8 is the safe first choice (no
+  paletted PICA textures exist). Whether RGB565, ETC1 or ETC1A4 is preferable is
+  **UNVERIFIED**; project docs only name PICA `C3D_TexEnv` as the conceptual
+  TexEnv analog (`docs/PHASE4A_PICA200_FEASIBILITY.md:113-116`).
+- **UNVERIFIED** TexEnv: MODULATE/DECAL map to TexEnv configurations; TOONHIGHLIGHT and SHADOW
+  likely need shader-side emulation. **UNVERIFIED** against citro3d.
+
+### Open questions for 5B-2
+- Capture only the bytes a texture references, or the whole 128 KB / 16 KB slots
+  (bank spanning makes partial capture harder)?
+- Which TEXIMAGE_PARAM/PLTT_BASE is bound at each polygon when they change
+  mid-BEGIN, and is TEX_COORD per-vertex or mutable per primitive?
+- Confirm on hardware that DS sizes are always `8 << SizeShift` (max 1024) and
+  that TEXIMAGE_PARAM bits 16-19 cover all mirrored-repeat combinations.
+- Is palette index 0 transparency (KeyColor0_Enable) honoured for all I-formats,
+  and is palette bit 15 really unused on hardware?
+- Which PICA upload format (RGBA8 vs RGB565/ETC1) and sampler state (filter,
+  mipmap) should the renderer use?
+- Texcoords as a new vertex attribute (stride change, re-opens the Run 5 risk) or
+  a separate buffer?
+- Payload layout of `TXDS`/`TXDT`/`PLDT`: per-texture records vs raw VRAM dumps,
+  and how to key textures to the polygons that use them.
