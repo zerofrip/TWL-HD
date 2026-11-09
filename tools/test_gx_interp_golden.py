@@ -27,9 +27,14 @@ CLI = os.path.join(
 CMD_MTX_MODE = 0x10
 CMD_MTX_PUSH = 0x11
 CMD_MTX_POP = 0x12
+CMD_MTX_STORE = 0x13
+CMD_MTX_RESTORE = 0x14
 CMD_MTX_IDENTITY = 0x15
 CMD_MTX_LOAD_4x4 = 0x16
+CMD_MTX_LOAD_4x3 = 0x17
 CMD_MTX_MULT_4x4 = 0x18
+CMD_MTX_MULT_4x3 = 0x19
+CMD_MTX_MULT_3x3 = 0x1A
 CMD_MTX_SCALE = 0x1B
 CMD_MTX_TRANS = 0x1C
 CMD_COLOR = 0x20
@@ -142,6 +147,66 @@ def _rotate_z_90():
             -4096, 0, 0, 0,
             0, 0, 4096, 0,
             0, 0, 0, 4096]
+
+
+# MTX_TRANS on vec is an equivalent mutant (translation column never read by
+# the 3x3 lighting transform); no lighting stream can observe it.
+
+# 20.12 cos/sin pairs. The rounding of these constants fixes the exact
+# fixed-point diffuse channel the literals below assert.
+_ROT_Y_WORDS = {45: (2896, 2896), 60: (2048, 3547), 90: (0, 4096)}
+
+
+def _rot_y(deg):
+    """Column-major Ry(deg) as 16 words: maps (0,0,n) into the xz plane."""
+    c, s = _ROT_Y_WORDS[deg]
+    return [c, 0, -s, 0,
+            0, 4096, 0, 0,
+            s, 0, c, 0,
+            0, 0, 0, 4096]
+
+
+def _rot_y_columns(deg, columns):
+    """First `columns` columns of _rot_y(deg), three rows each (4x3/3x3)."""
+    m = _rot_y(deg)
+    return [m[col * 4 + row] for col in range(columns) for row in range(3)]
+
+
+def _vec_light_prefix(mode):
+    """White diffuse (ambient 0), white light 0 pointing -z, in `mode`."""
+    return [
+        (CMD_MTX_MODE, mode),
+        (CMD_DIF_AMB, _rgb555(31, 31, 31)),
+        (CMD_LIGHT_COLOR, _light_colour(31, 31, 31)),
+        (CMD_LIGHT_VECTOR, _vector_word(0, 0, -4096)),
+    ]
+
+
+def _add_load_4x3(entries, words):
+    for word in words:
+        entries.append((CMD_MTX_LOAD_4x3, _u32(word)))
+
+
+def _add_mult_4x3(entries, words):
+    for word in words:
+        entries.append((CMD_MTX_MULT_4x3, _u32(word)))
+
+
+def _add_mult_3x3(entries, words):
+    for word in words:
+        entries.append((CMD_MTX_MULT_3x3, _u32(word)))
+
+
+def _add_identity(entries):
+    entries.append((CMD_MTX_IDENTITY, 0))
+
+
+def _add_store(entries, index):
+    entries.append((CMD_MTX_STORE, index))
+
+
+def _add_restore(entries, index):
+    entries.append((CMD_MTX_RESTORE, index))
 
 
 def _lit_entries(pre_entries, normal, mask=None, normal_inside=True):
@@ -404,6 +469,176 @@ class GxInterpGoldenTest(unittest.TestCase):
         entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
         entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
         self._assert_lighting(entries)
+
+    # BUILD/UNIT only: vec-matrix lighting streams. The matrix op is issued
+    # between LIGHT_VECTOR (transformed by identity vec) and NORMAL (rotated
+    # by the new vec), so only the normal moves and the diffuse term changes.
+    # A 90 deg rotation makes the fixed light and the rotated normal
+    # perpendicular (0), while an untouched identity vec gives 29.
+
+    def test_light_load_4x3_mode2_rotates_vec(self):
+        # Guards MTX_LOAD_4x3 writing g->vec (line 724): removal leaves 29.
+        entries = _vec_light_prefix(2)
+        _add_load_4x3(entries, _rot_y_columns(90, 4))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (0.0, 0.0, 0.0))
+
+    def test_light_load_4x3_mode1_keeps_vec(self):
+        # Guards `g->mode >= 1u` on MTX_LOAD_4x3 (line 724): vec must stay
+        # identity in mode 1, so the diffuse result is 29, not 0.
+        entries = _vec_light_prefix(1)
+        _add_load_4x3(entries, _rot_y_columns(90, 4))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (29 / 31.0, 29 / 31.0, 29 / 31.0))
+
+    def test_light_mult_4x4_mode2_rotates_vec(self):
+        # Guards MULT_4x4 writing g->vec (line 736): removal leaves 29.
+        entries = _vec_light_prefix(2)
+        _add_mult_4x4(entries, _rot_y(90))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (0.0, 0.0, 0.0))
+
+    def test_light_mult_4x4_mode1_keeps_vec(self):
+        # Guards `g->mode >= 1u` on MULT_4x4 (line 736): vec stays identity.
+        entries = _vec_light_prefix(1)
+        _add_mult_4x4(entries, _rot_y(90))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (29 / 31.0, 29 / 31.0, 29 / 31.0))
+
+    def test_light_mult_4x3_mode2_rotates_vec(self):
+        # Guards MULT_4x3 writing g->vec (line 748): removal leaves 29.
+        entries = _vec_light_prefix(2)
+        _add_mult_4x3(entries, _rot_y_columns(90, 4))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (0.0, 0.0, 0.0))
+
+    def test_light_mult_4x3_mode1_keeps_vec(self):
+        # Guards `g->mode >= 1u` on MULT_4x3 (line 748): vec stays identity.
+        entries = _vec_light_prefix(1)
+        _add_mult_4x3(entries, _rot_y_columns(90, 4))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (29 / 31.0, 29 / 31.0, 29 / 31.0))
+
+    def test_light_mult_3x3_mode2_rotates_vec(self):
+        # Guards MULT_3x3 writing g->vec (line 760): removal leaves 29.
+        entries = _vec_light_prefix(2)
+        _add_mult_3x3(entries, _rot_y_columns(90, 3))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (0.0, 0.0, 0.0))
+
+    def test_light_mult_3x3_mode1_keeps_vec(self):
+        # Guards `g->mode >= 1u` on MULT_3x3 (line 760): vec stays identity.
+        entries = _vec_light_prefix(1)
+        _add_mult_3x3(entries, _rot_y_columns(90, 3))
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (29 / 31.0, 29 / 31.0, 29 / 31.0))
+
+    def test_light_identity_mode2_resets_vec(self):
+        # Guards MTX_IDENTITY resetting g->vec (line 704): removal leaves the
+        # 90 deg rotation in place and gives 0, not 29.
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(90))
+        _add_identity(entries)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (29 / 31.0, 29 / 31.0, 29 / 31.0))
+
+    def test_light_identity_mode1_keeps_vec(self):
+        # Guards `g->mode >= 1u` on MTX_IDENTITY (line 704): in mode 1 vec
+        # must stay rotated, so the result is 0, not 29.
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(90))
+        entries.append((CMD_MTX_MODE, 1))
+        _add_identity(entries)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (0.0, 0.0, 0.0))
+
+    def test_light_store_restore_mode2_slot3(self):
+        # Guards stack_store saving g->vec (line 312): removal restores the
+        # zero matrix (0) instead of rot_y45 (21); a dropped RESTORE (line
+        # 332) leaves identity (29).
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(45))
+        _add_store(entries, 3)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 3)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))
+
+    def test_light_store_restore_mode2_slots_distinct(self):
+        # Guards slot indexing: slot 7 holds rot_y60 (14), slot 3 rot_y45
+        # (21). A mixed-up index gives 21 and an un-stored slot gives 0.
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(45))
+        _add_store(entries, 3)
+        _add_load_4x4(entries, _rot_y(60))
+        _add_store(entries, 7)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 7)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (14 / 31.0, 14 / 31.0, 14 / 31.0))
+
+    def test_light_store_restore_mode1_store_saves_vec(self):
+        # Guards mode-1 MTX_STORE saving g->vec (line 312): removal restores
+        # the zero matrix (0) instead of rot_y45 (21).
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(45))
+        entries.append((CMD_MTX_MODE, 1))
+        _add_store(entries, 3)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 3)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))
+
+    def test_light_store_restore_mode1_restore_slot7(self):
+        # Guards mode-1 MTX_RESTORE of g->vec (line 332) plus slot
+        # distinctness: slot 7 is rot_y60 (14), slot 3 rot_y45 (21).
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(45))
+        _add_store(entries, 3)
+        _add_load_4x4(entries, _rot_y(60))
+        _add_store(entries, 7)
+        entries.append((CMD_MTX_MODE, 1))
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 7)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (14 / 31.0, 14 / 31.0, 14 / 31.0))
+
+    def test_light_store_restore_mode0_leaves_vec(self):
+        # Mode-0 stack ops touch only the projection matrix: vec stays
+        # rot_y45, so the diffuse result is 21.
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(45))
+        entries.append((CMD_MTX_MODE, 0))
+        _add_store(entries, 0)
+        _add_restore(entries, 0)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))
+
+    def test_light_store_restore_mode3_leaves_vec(self):
+        # Mode-3 STORE/RESTORE are ignored: vec stays rot_y45 (21).
+        entries = _vec_light_prefix(2)
+        _add_load_4x4(entries, _rot_y(45))
+        entries.append((CMD_MTX_MODE, 3))
+        _add_store(entries, 2)
+        _add_restore(entries, 2)
+        entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))
 
     def test_light_dif_amb_bit15_sets_colour(self):
         diffuse = _rgb555(10, 20, 30)
