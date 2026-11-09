@@ -3081,8 +3081,9 @@ static void test_light_shininess_clamp_table_entry_127(void) {
     add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
     run_view(n);
     /* dot_h = 8176 -> raw shininess 28544 clamps to 4095; index 4095>>5 = 127
-     * (200) -> 3200 -> (31*31*3200)>>17 = 23. A 4096 clamp indexes 128, the
-     * byte after shininess_applied (LSB of shininess_index = 0) and gives 0. */
+     * (200) -> 3200 -> (31*31*3200)>>17 = 23. The off-by-one 4096 clamp is
+     * already killed by test_light_shininess_clamp_uses_4095 ((32*4095)>>17 =
+     * 0 vs (32*4096)>>17 = 1 with no shininess table). */
     check_lit_rgb(23, 23, 23);
 }
 
@@ -3282,8 +3283,13 @@ static void test_light_mode3_stack_commands_ignored(void) {
 /* ------------------------------------------------------------------------- */
 
 /*
- * MTX_TRANS on vec is an equivalent mutant (translation column never read by
- * the 3x3 lighting transform); no lighting stream can observe it.
+ * MTX_TRANS on vec cannot be observed through affine-only lighting streams:
+ * the translation column is never read by the 3x3 transform. But a LATER
+ * non-affine MTX_MULT_4x4 with a non-zero row 3 in columns 0-2 copies that
+ * translation into the 3x3 part lighting reads. The paired streams
+ * `light-trans-mode2-reaches-vec-via-nonaffine-mult` and
+ * `light-trans-mode1-skips-vec` kill both the removal of the TRANS-on-vec
+ * multiply and the `g->mode >= 1u` mutant.
  *
  * The matrix op is issued between LIGHT_VECTOR (transformed by identity vec)
  * and NORMAL (rotated by the new vec), so only the normal moves. A 90 deg
@@ -3494,6 +3500,60 @@ static void test_light_identity_mode1_keeps_vec(void) {
     add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
     run_view(n);
     check_lit_rgb(0, 0, 0);
+}
+
+/* Guards MTX_TRANS writing g->vec (line 786): with the TRANS skipped the
+ * later non-affine MULT_4x4 cannot fold the translation into the 3x3 block,
+ * so the normal is not doubled and the channel is 15 instead of 31. */
+static void test_light_trans_mode2_reaches_vec_via_nonaffine_mult(void) {
+    static const uint32_t op[16] = {
+        4096u, 0u, 0u, 4096u, /* col 0: row 3 folds the col-3 translation in */
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_mult_4x4(&n, op);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(16, 16, 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0u));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0u));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* Translation folded into col 0 row 0: normal x 2 -> fixed_diffuse 16352
+     * saturates every channel. */
+    check_lit_rgb(31, 31, 31);
+}
+
+/* Guards `g->mode >= 1u` on MTX_TRANS (line 786): in mode 1 TRANS must leave
+ * vec alone, so the later MULT_4x4 sees an identity vec and the channel stays
+ * 15 instead of the mutant's 31. */
+static void test_light_trans_mode1_skips_vec(void) {
+    static const uint32_t op[16] = {
+        4096u, 0u, 0u, 4096u, /* col 0: row 3 folds the col-3 translation in */
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_mult_4x4(&n, op);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(16, 16, 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0u));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0u));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* Mode-1 TRANS skipped: vec stays identity and the channel is 15. */
+    check_lit_rgb(15, 15, 15);
 }
 
 /* Guards stack_store saving g->vec (line 312): removal restores zero (0). */
@@ -3808,5 +3868,9 @@ int main(void) {
     test_report("gx_interp/light-store-restore-mode0-leaves-vec");
     test_light_store_restore_mode3_leaves_vec();
     test_report("gx_interp/light-store-restore-mode3-leaves-vec");
+    test_light_trans_mode2_reaches_vec_via_nonaffine_mult();
+    test_report("gx_interp/light-trans-mode2-reaches-vec-via-nonaffine-mult");
+    test_light_trans_mode1_skips_vec();
+    test_report("gx_interp/light-trans-mode1-skips-vec");
     return test_exit_code();
 }

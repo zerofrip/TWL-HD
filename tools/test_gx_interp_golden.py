@@ -149,8 +149,11 @@ def _rotate_z_90():
             0, 0, 0, 4096]
 
 
-# MTX_TRANS on vec is an equivalent mutant (translation column never read by
-# the 3x3 lighting transform); no lighting stream can observe it.
+# MTX_TRANS on vec cannot be observed through affine-only lighting streams:
+# the translation column is never read by the 3x3 transform. A later non-affine
+# MTX_MULT_4x4 with a non-zero row 3 in columns 0-2 copies the translation into
+# the 3x3 part lighting reads; the paired mode-2/mode-1 streams below kill the
+# TRANS-on-vec removal and the `mode >= 1u` mutant.
 
 # 20.12 cos/sin pairs. The rounding of these constants fixes the exact
 # fixed-point diffuse channel the literals below assert.
@@ -640,6 +643,40 @@ class GxInterpGoldenTest(unittest.TestCase):
         _, expected = self._assert_lighting(entries)
         self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))
 
+    def test_light_trans_mode2_reaches_vec_via_nonaffine_mult(self):
+        # Guards MTX_TRANS writing g->vec (line 786): without the TRANS the
+        # later non-affine MULT_4x4 cannot fold the translation into the 3x3
+        # block, so the doubled normal (31) drops to 15.
+        entries = [(CMD_MTX_MODE, 2)]
+        for value in (4096, 0, 0):
+            entries.append((CMD_MTX_TRANS, value))
+        op = _diag(4096, 4096, 4096)
+        op[3] = 4096  # row 3 of column 0 folds the col-3 translation in
+        _add_mult_4x4(entries, op)
+        entries.append((CMD_DIF_AMB, _rgb555(16, 16, 16)))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+        entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (31 / 31.0, 31 / 31.0, 31 / 31.0))
+
+    def test_light_trans_mode1_skips_vec(self):
+        # Guards `g->mode >= 1u` on MTX_TRANS (line 786): mode 1 must leave
+        # vec alone, so the later MULT_4x4 sees identity and yields 15.
+        entries = [(CMD_MTX_MODE, 1)]
+        for value in (4096, 0, 0):
+            entries.append((CMD_MTX_TRANS, value))
+        entries.append((CMD_MTX_MODE, 2))
+        op = _diag(4096, 4096, 4096)
+        op[3] = 4096  # row 3 of column 0 folds the col-3 translation in
+        _add_mult_4x4(entries, op)
+        entries.append((CMD_DIF_AMB, _rgb555(16, 16, 16)))
+        entries.append((CMD_LIGHT_COLOR, _light_colour(31, 31, 31)))
+        entries.append((CMD_LIGHT_VECTOR, _vector_word(-4096, 0, 0)))
+        entries = _lit_entries(entries, _normal_word(4088, 0, 0), mask=0x1)
+        _, expected = self._assert_lighting(entries)
+        self.assertEqual(expected, (15 / 31.0, 15 / 31.0, 15 / 31.0))
+
     def test_light_dif_amb_bit15_sets_colour(self):
         diffuse = _rgb555(10, 20, 30)
         entries = [(CMD_DIF_AMB, diffuse | 0x8000), (CMD_BEGIN_VTXS, 0)]
@@ -778,8 +815,9 @@ class GxInterpGoldenTest(unittest.TestCase):
 
     def test_light_shininess_clamp_table_entry_127(self):
         # dot_h = 8176 -> raw shininess 28544 must clamp to 4095 so the table
-        # index is 127 (200). Clamping to 4096 reads index 128 (byte after the
-        # array: LSB of shininess_index = 0) and the specular term vanishes.
+        # index is 127 (200). The off-by-one 4096 clamp is already killed by
+        # test_light_shininess_clamp_uses_4095 ((32*4095)>>17 = 0 vs
+        # (32*4096)>>17 = 1 with no shininess table).
         words = [0] * 32
         words[31] = 200 << 24  # applied entry 127 = 200
         entries = [(CMD_MTX_MODE, 2)]
