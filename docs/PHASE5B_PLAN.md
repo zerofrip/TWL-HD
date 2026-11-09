@@ -177,6 +177,20 @@ texture parameters.
 Rollback: disable texture path and texcoord attribute; revert to 32 B stride and
 5B-1 state. Keep format chunks optional/unknown if already shipped.
 
+#### Status 5B-2a — capture-format chunks (`TXDS`/`TXDT`/`PLDT`)
+
+Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+
+- Parser: the three chunks are known and validated (`ERR_TXDS`,
+  `ERR_TXDS_KEY`, `ERR_TXDS_SIZE`, `ERR_TXDS_BOUNDS`, `ERR_TXDT`, `ERR_PLDT`),
+  with read-only accessors on `TwlhdV2View`.
+- Writer: deterministic emission in the fixed order GXCM, META, RSTA, TXDS,
+  TXDT, PLDT; a file without textures is byte-identical to the 5A golden.
+- Layout: `docs/TWLHD_V2_FORMAT.md` section 7.1, marked owner-reviewable
+  proposal.
+- Not done: recorder-side texture capture, the Python mirror extension,
+  interpreter texcoords, vertex-layout change and PICA upload.
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in

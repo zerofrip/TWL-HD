@@ -42,6 +42,8 @@ static size_t build_file(uint32_t entry_count) {
     p.gxcm_count = entry_count;
     p.rsta = NULL;
     p.rsta_count = 0u;
+    p.tex = NULL;
+    p.tex_count = 0u;
 
     CHECK_EQ_INT(twlhd_v2_write(&p, g_file, sizeof g_file, &size),
                  TWLHD_V2_OK);

@@ -27,6 +27,11 @@ extern "C" {
 #define TWLHD_V2_META_PAYLOAD_SIZE       16u
 #define TWLHD_V2_GXCM_ENTRY_SIZE         8u
 #define TWLHD_V2_RSTA_ENTRY_SIZE         16u
+#define TWLHD_V2_TXDS_RECORD_SIZE        40u
+#define TWLHD_V2_TXDS_MAX_RECORDS        256u
+/* 4 x 128 KiB DS texture slots / 6 x 16 KiB DS palette slots. */
+#define TWLHD_V2_TXDT_MAX_BYTES          524288u
+#define TWLHD_V2_PLDT_MAX_BYTES          98304u
 
 /* FourCC packing: 'a' occupies the lowest byte, matching little-endian order. */
 #define TWLHD_FOURCC(a, b, c, d)                                             \
@@ -36,8 +41,9 @@ extern "C" {
 #define TWLHD_V2_CHUNK_GXCM  TWLHD_FOURCC('G', 'X', 'C', 'M')
 #define TWLHD_V2_CHUNK_META  TWLHD_FOURCC('M', 'E', 'T', 'A')
 #define TWLHD_V2_CHUNK_RSTA  TWLHD_FOURCC('R', 'S', 'T', 'A')
-/* Reserved, NOT implemented. Parsers treat these as unknown chunks. */
+/* CLPM (clip matrix) is still reserved and NOT implemented. */
 #define TWLHD_V2_CHUNK_CLPM  TWLHD_FOURCC('C', 'L', 'P', 'M')
+/* Texture descriptor / texel data / palette data (section 7.1). */
 #define TWLHD_V2_CHUNK_TXDS  TWLHD_FOURCC('T', 'X', 'D', 'S')
 #define TWLHD_V2_CHUNK_TXDT  TWLHD_FOURCC('T', 'X', 'D', 'T')
 #define TWLHD_V2_CHUNK_PLDT  TWLHD_FOURCC('P', 'L', 'D', 'T')
@@ -131,6 +137,21 @@ int twlhd_v2_rsta_whitelisted(uint32_t addr, uint32_t width);
 
 /* True when addr lies inside any whitelisted range (width ignored). */
 int twlhd_v2_rsta_addr_in_range(uint32_t addr);
+
+/*
+ * Decode a TEXIMAGE_PARAM word into the exact byte counts one texture needs.
+ * Bits 20..22 are width shift, 23..25 height shift (width/height = 8 << N) and
+ * bits 26..28 the packed format. Returns 1 and writes all three outputs for a
+ * valid format 1..7; returns 0 (outputs untouched) for format 0.
+ *
+ * texel_bytes: width*height * bytes/texel (1, 1/4, 1/2, 1, 1/4, 1, 2).
+ * palette_bytes: 2 * palette entries for A3I5/I2/I4/I8/A5I3, else 0.
+ * index_bytes: width*height >> 3 for 4x4 only, else 0.
+ *
+ * Shared by the parser and the writer so the formula exists once.
+ */
+int twlhd_v2_tex_sizes(uint32_t teximage_param, uint32_t *texel_bytes,
+                       uint32_t *palette_bytes, uint32_t *index_bytes);
 
 /* Input entry layouts for the writer and recorder. Host structs only. */
 typedef struct {

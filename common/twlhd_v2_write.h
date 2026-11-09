@@ -20,6 +20,17 @@ extern "C" {
 #endif
 
 typedef struct {
+    uint32_t teximage_param;
+    uint32_t pltt_base;
+    const uint8_t *texel;
+    const uint8_t *palette;
+    const uint8_t *index;
+    uint32_t texel_bytes;
+    uint32_t palette_bytes;
+    uint32_t index_bytes;
+} TwlhdV2TexEntry;
+
+typedef struct {
     uint32_t frame_index;
     uint32_t flags;
     uint32_t backend_id;
@@ -28,12 +39,15 @@ typedef struct {
     uint32_t gxcm_count;
     const TwlhdV2RstaEntry *rsta; /* may be NULL when rsta_count == 0 */
     uint32_t rsta_count;
+    const TwlhdV2TexEntry *tex; /* may be NULL when tex_count == 0 */
+    uint32_t tex_count;
 } TwlhdV2WriteParams;
 
 /*
  * Returns TWLHD_V2_OK and the exact byte count in *out_size, or an ERR_* value.
  * On error the contents of `out` are undefined. The RSTA chunk is omitted when
- * rsta_count is zero.
+ * rsta_count is zero; the TXDS/TXDT/PLDT chunks are omitted when tex_count is
+ * zero and PLDT additionally when no entry carries a palette.
  */
 TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
                              size_t capacity, size_t *out_size);

@@ -167,6 +167,8 @@ TwlhdV2Result twlhd_gx_rec_serialize(const TwlhdGxRecorder *rec, uint8_t *out,
     params.gxcm_count = rec->gxcm_count;
     params.rsta = rec->rsta;
     params.rsta_count = rec->rsta_count;
+    params.tex = NULL;
+    params.tex_count = 0u;
 
     return twlhd_v2_write(&params, out, capacity, out_size);
 }

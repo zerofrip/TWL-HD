@@ -40,8 +40,26 @@ typedef enum {
     TWLHD_V2_ERR_GXCM_CMD,
     TWLHD_V2_ERR_GXCM_GROUP,
     TWLHD_V2_ERR_GXCM_FRAME,
-    TWLHD_V2_ERR_RSTA
+    TWLHD_V2_ERR_RSTA,
+    TWLHD_V2_ERR_TXDS,
+    TWLHD_V2_ERR_TXDS_KEY,
+    TWLHD_V2_ERR_TXDS_SIZE,
+    TWLHD_V2_ERR_TXDS_BOUNDS,
+    TWLHD_V2_ERR_TXDT,
+    TWLHD_V2_ERR_PLDT
 } TwlhdV2Result;
+
+/* Decoded TXDS record (host struct; the on-disk record is little-endian). */
+typedef struct {
+    uint32_t teximage_param;
+    uint32_t pltt_base;
+    uint32_t texel_offset;
+    uint32_t texel_size;
+    uint32_t palette_offset;
+    uint32_t palette_size;
+    uint32_t index_offset;
+    uint32_t index_size;
+} TwlhdV2TexRecord;
 
 typedef struct {
     uint32_t total_size;
@@ -55,6 +73,12 @@ typedef struct {
     const uint8_t *rsta;   /* pointer into the caller's buffer, NULL if absent */
     uint32_t meta_backend_id;
     uint32_t meta_coverage_flags;
+    uint32_t txds_count;
+    const uint8_t *txds;   /* raw TXDS records, NULL if absent */
+    const uint8_t *txdt;   /* texel/index data, NULL if absent */
+    uint32_t txdt_size;
+    const uint8_t *pldt;   /* palette data, NULL if absent */
+    uint32_t pldt_size;
 } TwlhdV2View;
 
 /* Parse and validate a complete v2 file. On error *view must be ignored. */
@@ -72,6 +96,25 @@ uint32_t twlhd_v2_rsta_addr(const TwlhdV2View *view, uint32_t index);
 uint32_t twlhd_v2_rsta_value(const TwlhdV2View *view, uint32_t index);
 uint32_t twlhd_v2_rsta_gx_index(const TwlhdV2View *view, uint32_t index);
 uint32_t twlhd_v2_rsta_width(const TwlhdV2View *view, uint32_t index);
+
+/* Number of TXDS records, 0 when the chunk is absent. */
+uint32_t twlhd_v2_txds_count(const TwlhdV2View *view);
+
+/*
+ * Decode TXDS record `index` into *out. Returns 1 on success, 0 for a NULL
+ * view/out or an out-of-range index.
+ */
+int twlhd_v2_txds_record(const TwlhdV2View *view, uint32_t index,
+                         TwlhdV2TexRecord *out);
+
+/*
+ * Read-only pointers into the referenced block, or NULL when the record's size
+ * is 0 or the view/index/bounds are invalid. Never dereference past the chunk.
+ */
+const uint8_t *twlhd_v2_tex_texel_ptr(const TwlhdV2View *view, uint32_t index);
+const uint8_t *twlhd_v2_tex_palette_ptr(const TwlhdV2View *view,
+                                        uint32_t index);
+const uint8_t *twlhd_v2_tex_index_ptr(const TwlhdV2View *view, uint32_t index);
 
 typedef enum {
     TWLHD_FILE_UNKNOWN = 0,

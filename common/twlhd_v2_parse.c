@@ -131,6 +131,32 @@ int twlhd_v2_rsta_whitelisted(uint32_t addr, uint32_t width) {
     return 0;
 }
 
+int twlhd_v2_tex_sizes(uint32_t teximage_param, uint32_t *texel_bytes,
+                       uint32_t *palette_bytes, uint32_t *index_bytes) {
+    static const uint32_t texel_eighths[8] = {0u, 8u, 2u, 4u, 8u, 2u, 8u, 16u};
+    static const uint32_t palette_by_format[8] = {0u, 64u, 8u, 32u,
+                                                  512u, 0u, 16u, 0u};
+    uint32_t format = (teximage_param >> 26) & 7u;
+    uint32_t width;
+    uint32_t height;
+    uint64_t texels;
+
+    if (format == 0u) return 0;
+
+    width = 8u << ((teximage_param >> 20) & 7u);
+    height = 8u << ((teximage_param >> 23) & 7u);
+    texels = (uint64_t)width * (uint64_t)height;
+
+    if (texel_bytes) {
+        *texel_bytes = (uint32_t)(texels * texel_eighths[format] >> 3);
+    }
+    if (palette_bytes) *palette_bytes = palette_by_format[format];
+    if (index_bytes) {
+        *index_bytes = format == 5u ? (uint32_t)(texels >> 3) : 0u;
+    }
+    return 1;
+}
+
 static int is_raw_entry(uint32_t word) {
     return word == TWLHD_V2_RAW_FIFO_BIT;
 }
@@ -263,6 +289,121 @@ static TwlhdV2Result validate_rsta(const uint8_t *payload, uint32_t size,
     return TWLHD_V2_OK;
 }
 
+static void read_tex_record(const uint8_t *p, TwlhdV2TexRecord *rec) {
+    rec->teximage_param = read_le32(p + 0);
+    rec->pltt_base = read_le32(p + 4);
+    rec->texel_offset = read_le32(p + 8);
+    rec->texel_size = read_le32(p + 12);
+    rec->palette_offset = read_le32(p + 16);
+    rec->palette_size = read_le32(p + 20);
+    rec->index_offset = read_le32(p + 24);
+    rec->index_size = read_le32(p + 28);
+}
+
+/*
+ * TXDS/TXDT/PLDT validation. Normative order (docs/TWLHD_V2_FORMAT.md s.8):
+ * structural record checks, duplicate keys, size formula, TXDT/PLDT presence,
+ * bounds, then chunk payload limits.
+ */
+static TwlhdV2Result validate_tex(const uint8_t *txds, uint32_t txds_size,
+                                  int have_txdt, uint32_t txdt_size,
+                                  int have_pldt, uint32_t pldt_size,
+                                  uint32_t *out_count) {
+    uint32_t count;
+    uint32_t i;
+    uint32_t j;
+    int need_pldt = 0;
+
+    if (txds_size % TWLHD_V2_TXDS_RECORD_SIZE != 0u) return TWLHD_V2_ERR_TXDS;
+
+    count = txds_size / TWLHD_V2_TXDS_RECORD_SIZE;
+    if (count == 0u || count > TWLHD_V2_TXDS_MAX_RECORDS) {
+        return TWLHD_V2_ERR_TXDS;
+    }
+
+    for (i = 0; i < count; i++) {
+        const uint8_t *p = txds + (size_t)i * TWLHD_V2_TXDS_RECORD_SIZE;
+        TwlhdV2TexRecord rec;
+
+        read_tex_record(p, &rec);
+        if (read_le32(p + 32) != 0u || read_le32(p + 36) != 0u) {
+            return TWLHD_V2_ERR_TXDS;
+        }
+        if (!twlhd_v2_tex_sizes(rec.teximage_param, NULL, NULL, NULL)) {
+            return TWLHD_V2_ERR_TXDS;
+        }
+    }
+
+    for (i = 0; i < count; i++) {
+        TwlhdV2TexRecord a;
+
+        read_tex_record(txds + (size_t)i * TWLHD_V2_TXDS_RECORD_SIZE, &a);
+        for (j = 0; j < i; j++) {
+            TwlhdV2TexRecord b;
+
+            read_tex_record(txds + (size_t)j * TWLHD_V2_TXDS_RECORD_SIZE, &b);
+            if (a.teximage_param == b.teximage_param &&
+                a.pltt_base == b.pltt_base) {
+                return TWLHD_V2_ERR_TXDS_KEY;
+            }
+        }
+    }
+
+    for (i = 0; i < count; i++) {
+        TwlhdV2TexRecord rec;
+        uint32_t texel_bytes;
+        uint32_t palette_bytes;
+        uint32_t index_bytes;
+
+        read_tex_record(txds + (size_t)i * TWLHD_V2_TXDS_RECORD_SIZE, &rec);
+        (void)twlhd_v2_tex_sizes(rec.teximage_param, &texel_bytes,
+                                 &palette_bytes, &index_bytes);
+
+        if (rec.texel_size != texel_bytes ||
+            rec.palette_size != palette_bytes ||
+            rec.index_size != index_bytes) {
+            return TWLHD_V2_ERR_TXDS_SIZE;
+        }
+        if (rec.texel_size == 0u && rec.texel_offset != 0u) {
+            return TWLHD_V2_ERR_TXDS_SIZE;
+        }
+        if (rec.palette_size == 0u && rec.palette_offset != 0u) {
+            return TWLHD_V2_ERR_TXDS_SIZE;
+        }
+        if (rec.index_size == 0u && rec.index_offset != 0u) {
+            return TWLHD_V2_ERR_TXDS_SIZE;
+        }
+        if (rec.palette_size != 0u) need_pldt = 1;
+    }
+
+    if (!have_txdt) return TWLHD_V2_ERR_MISSING_CHUNK;
+    if (need_pldt && !have_pldt) return TWLHD_V2_ERR_MISSING_CHUNK;
+
+    for (i = 0; i < count; i++) {
+        TwlhdV2TexRecord rec;
+        uint64_t end;
+
+        read_tex_record(txds + (size_t)i * TWLHD_V2_TXDS_RECORD_SIZE, &rec);
+
+        end = (uint64_t)rec.texel_offset + (uint64_t)rec.texel_size;
+        if (end > (uint64_t)txdt_size) return TWLHD_V2_ERR_TXDS_BOUNDS;
+        end = (uint64_t)rec.index_offset + (uint64_t)rec.index_size;
+        if (end > (uint64_t)txdt_size) return TWLHD_V2_ERR_TXDS_BOUNDS;
+        end = (uint64_t)rec.palette_offset + (uint64_t)rec.palette_size;
+        if (end > (uint64_t)pldt_size) return TWLHD_V2_ERR_TXDS_BOUNDS;
+    }
+
+    if (have_txdt && txdt_size > TWLHD_V2_TXDT_MAX_BYTES) {
+        return TWLHD_V2_ERR_TXDT;
+    }
+    if (have_pldt && pldt_size > TWLHD_V2_PLDT_MAX_BYTES) {
+        return TWLHD_V2_ERR_PLDT;
+    }
+
+    *out_count = count;
+    return TWLHD_V2_OK;
+}
+
 static TwlhdV2Result validate_meta(const uint8_t *payload, uint32_t size,
                                    uint32_t *out_backend,
                                    uint32_t *out_coverage) {
@@ -302,10 +443,22 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
     uint32_t rsta_offset = 0;
     uint32_t rsta_size = 0;
     uint32_t rsta_flags = 0;
+    uint32_t txds_offset = 0;
+    uint32_t txds_size = 0;
+    uint32_t txds_flags = 0;
+    uint32_t txdt_offset = 0;
+    uint32_t txdt_size = 0;
+    uint32_t txdt_flags = 0;
+    uint32_t pldt_offset = 0;
+    uint32_t pldt_size = 0;
+    uint32_t pldt_flags = 0;
     uint32_t unknown = 0;
     uint32_t seen_gxcm = 0;
     uint32_t seen_meta = 0;
     uint32_t seen_rsta = 0;
+    uint32_t seen_txds = 0;
+    uint32_t seen_txdt = 0;
+    uint32_t seen_pldt = 0;
     uint64_t offset;
     uint32_t i;
     TwlhdV2Result result;
@@ -390,6 +543,24 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
             rsta_offset = payload_offset;
             rsta_size = payload_size;
             rsta_flags = chunk_flags;
+        } else if (type == TWLHD_V2_CHUNK_TXDS) {
+            if (seen_txds) return TWLHD_V2_ERR_DUP_CHUNK;
+            seen_txds = 1;
+            txds_offset = payload_offset;
+            txds_size = payload_size;
+            txds_flags = chunk_flags;
+        } else if (type == TWLHD_V2_CHUNK_TXDT) {
+            if (seen_txdt) return TWLHD_V2_ERR_DUP_CHUNK;
+            seen_txdt = 1;
+            txdt_offset = payload_offset;
+            txdt_size = payload_size;
+            txdt_flags = chunk_flags;
+        } else if (type == TWLHD_V2_CHUNK_PLDT) {
+            if (seen_pldt) return TWLHD_V2_ERR_DUP_CHUNK;
+            seen_pldt = 1;
+            pldt_offset = payload_offset;
+            pldt_size = payload_size;
+            pldt_flags = chunk_flags;
         } else {
             if ((chunk_flags & TWLHD_V2_CHUNK_FLAG_REQUIRED) != 0u) {
                 return TWLHD_V2_ERR_UNSUPPORTED_REQUIRED;
@@ -413,6 +584,15 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
     if (seen_rsta && (rsta_flags & TWLHD_V2_CHUNK_FLAG_REQUIRED) != 0u) {
         return TWLHD_V2_ERR_CHUNK_FLAGS;
     }
+    if (seen_txds && (txds_flags & TWLHD_V2_CHUNK_FLAG_REQUIRED) != 0u) {
+        return TWLHD_V2_ERR_CHUNK_FLAGS;
+    }
+    if (seen_txdt && (txdt_flags & TWLHD_V2_CHUNK_FLAG_REQUIRED) != 0u) {
+        return TWLHD_V2_ERR_CHUNK_FLAGS;
+    }
+    if (seen_pldt && (pldt_flags & TWLHD_V2_CHUNK_FLAG_REQUIRED) != 0u) {
+        return TWLHD_V2_ERR_CHUNK_FLAGS;
+    }
 
     memset(&local_view, 0, sizeof local_view);
     local_view.total_size = total_size;
@@ -422,6 +602,11 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
     local_view.unknown_chunks_skipped = unknown;
     local_view.gxcm = data + gxcm_offset;
     local_view.rsta = seen_rsta ? data + rsta_offset : NULL;
+    local_view.txds = seen_txds ? data + txds_offset : NULL;
+    local_view.txdt = seen_txdt ? data + txdt_offset : NULL;
+    local_view.txdt_size = txdt_size;
+    local_view.pldt = seen_pldt ? data + pldt_offset : NULL;
+    local_view.pldt_size = pldt_size;
 
     result = validate_gxcm(local_view.gxcm, gxcm_size, flags,
                            &local_view.gxcm_count);
@@ -431,6 +616,12 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
         result = validate_rsta(local_view.rsta, rsta_size,
                                local_view.gxcm_count,
                                &local_view.rsta_count);
+        if (result != TWLHD_V2_OK) goto fail;
+    }
+
+    if (seen_txds) {
+        result = validate_tex(local_view.txds, txds_size, seen_txdt, txdt_size,
+                              seen_pldt, pldt_size, &local_view.txds_count);
         if (result != TWLHD_V2_OK) goto fail;
     }
 
@@ -469,6 +660,12 @@ const char *twlhd_v2_result_string(TwlhdV2Result result) {
     case TWLHD_V2_ERR_GXCM_GROUP:            return "ERR_GXCM_GROUP";
     case TWLHD_V2_ERR_GXCM_FRAME:            return "ERR_GXCM_FRAME";
     case TWLHD_V2_ERR_RSTA:                  return "ERR_RSTA";
+    case TWLHD_V2_ERR_TXDS:                  return "ERR_TXDS";
+    case TWLHD_V2_ERR_TXDS_KEY:              return "ERR_TXDS_KEY";
+    case TWLHD_V2_ERR_TXDS_SIZE:             return "ERR_TXDS_SIZE";
+    case TWLHD_V2_ERR_TXDS_BOUNDS:           return "ERR_TXDS_BOUNDS";
+    case TWLHD_V2_ERR_TXDT:                  return "ERR_TXDT";
+    case TWLHD_V2_ERR_PLDT:                  return "ERR_PLDT";
     default:                                 return "ERR_UNKNOWN";
     }
 }
@@ -501,6 +698,59 @@ uint32_t twlhd_v2_rsta_gx_index(const TwlhdV2View *view, uint32_t index) {
 uint32_t twlhd_v2_rsta_width(const TwlhdV2View *view, uint32_t index) {
     if (!view || !view->rsta || index >= view->rsta_count) return 0;
     return read_le32(view->rsta + (size_t)index * TWLHD_V2_RSTA_ENTRY_SIZE + 12);
+}
+
+uint32_t twlhd_v2_txds_count(const TwlhdV2View *view) {
+    return view ? view->txds_count : 0u;
+}
+
+int twlhd_v2_txds_record(const TwlhdV2View *view, uint32_t index,
+                         TwlhdV2TexRecord *out) {
+    if (!view || !out || !view->txds || index >= view->txds_count) return 0;
+    read_tex_record(view->txds + (size_t)index * TWLHD_V2_TXDS_RECORD_SIZE, out);
+    return 1;
+}
+
+const uint8_t *twlhd_v2_tex_texel_ptr(const TwlhdV2View *view,
+                                      uint32_t index) {
+    TwlhdV2TexRecord rec;
+
+    if (!view || !view->txdt) return NULL;
+    if (!twlhd_v2_txds_record(view, index, &rec)) return NULL;
+    if (rec.texel_size == 0u) return NULL;
+    if ((uint64_t)rec.texel_offset + (uint64_t)rec.texel_size >
+        (uint64_t)view->txdt_size) {
+        return NULL;
+    }
+    return view->txdt + rec.texel_offset;
+}
+
+const uint8_t *twlhd_v2_tex_palette_ptr(const TwlhdV2View *view,
+                                        uint32_t index) {
+    TwlhdV2TexRecord rec;
+
+    if (!view || !view->pldt) return NULL;
+    if (!twlhd_v2_txds_record(view, index, &rec)) return NULL;
+    if (rec.palette_size == 0u) return NULL;
+    if ((uint64_t)rec.palette_offset + (uint64_t)rec.palette_size >
+        (uint64_t)view->pldt_size) {
+        return NULL;
+    }
+    return view->pldt + rec.palette_offset;
+}
+
+const uint8_t *twlhd_v2_tex_index_ptr(const TwlhdV2View *view,
+                                      uint32_t index) {
+    TwlhdV2TexRecord rec;
+
+    if (!view || !view->txdt) return NULL;
+    if (!twlhd_v2_txds_record(view, index, &rec)) return NULL;
+    if (rec.index_size == 0u) return NULL;
+    if ((uint64_t)rec.index_offset + (uint64_t)rec.index_size >
+        (uint64_t)view->txdt_size) {
+        return NULL;
+    }
+    return view->txdt + rec.index_offset;
 }
 
 TwlhdFileFormat twlhd_detect_format(const uint8_t *data, size_t size) {
