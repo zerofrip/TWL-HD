@@ -445,9 +445,12 @@ static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
     for (i = 0; i < LIGHT_COUNT; i++) {
         int32_t light[3];
         int32_t dot;
-        /* int64 keeps the negation and the 2*dot^2 expression free of the
-         * signed overflow that DeSmuME's s32 arithmetic can hit; the
-         * [0,4095] clamp below makes the extreme case identical. */
+        /* int64 avoids signed-overflow UB in the negation and in 2*dot^2.
+         * For shininess, the [0,4095] clamp makes the extreme case identical
+         * to DeSmuME. For fixed_diffuse it is a deliberate defined-behaviour
+         * divergence in the unreachable-in-practice case
+         * vec3dot_fixed32 == INT32_MIN (DeSmuME: UB / wraps to 0 after
+         * max(0,.); ours: clamps that channel high). */
         int64_t fixed_diffuse;
         int64_t shininess;
 
