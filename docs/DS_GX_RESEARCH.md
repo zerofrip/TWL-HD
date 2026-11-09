@@ -223,6 +223,14 @@ Demo scenes that would settle 3 and 5 (no code proposed here):
 
 Source read: DeSmuME `gfx3d.cpp` (cited as `gfx3d.cpp:LINE`). Labels: **READ** = read from the DeSmuME source in this repository checkout; **CHECK** = not yet confirmed against GBATEK or real DS output. Nothing here is a hardware fact; DeSmuME is an emulator.
 
+**STATUS (2026-11-08): implemented BUILD/UNIT, HARDWARE UNVERIFIED.** The
+interpreter reproduces the integer equations below; host unit tests and golden
+streams compare against an independent Python oracle (`tools/gx_interp_oracle.py`).
+Still CHECK: GBATEK cross-check of the specular exponent/rounding; NORMAL outside
+BEGIN..END (implemented as applied, unverified on hardware); initial material
+colours, the half-vector zero-length branch and the shininess word-counter reset
+(implemented from DeSmuME source only).
+
 ### Command decoding (READ)
 - NORMAL (0x21), `SetNormal` (`gfx3d.cpp:1217-1224`): 3 signed 10-bit components (bits 0-9, 10-19, 20-29), each sign-extended then `* 8`, i.e. 1 sign + 9 fractional bits widened to 20.12 fixed point (4096 = 1.0, so a 10-bit 0x1FF = 511/512*4096).
 - LIGHT_VECTOR (0x32), `SetLightDirection` (`gfx3d.cpp:1179-1193`): same 10-bit unpack; light number in bits 30-31. The direction is multiplied by the *current vector matrix* (`MATRIXMODE_POSITION_VECTOR`, upper-left 3x3) **at command time**, not at vertex time. The vector matrix is the one used in matrix mode 2 (position+vector).
@@ -234,6 +242,7 @@ Source read: DeSmuME `gfx3d.cpp` (cited as `gfx3d.cpp:LINE`). Labels: **READ** =
 - Light enable mask: `regPolyAttrApplied.LightMask` (POLYGON_ATTR bits 0-3, `gfx3d.h:208-211`), applied on BEGIN_VTXS (`gfx3d_glBegin`, `gfx3d.cpp:2727`).
 
 ### Per-vertex lighting equation (READ, `gfx3d.cpp:1217-1331`), run at every NORMAL command
+
 Colour channels are 5-bit integers. For each enabled light i (0..3), with N = transformed normal (20.12), L = transformed light direction (20.12):
 1. `fixed_diffuse = max(0, -dot(L, N))`, where `dot` = `sfx32_shiftdown(sum fx32_mul)` (20.12 result, `gfx3d.cpp:476-483`).
 2. Half vector: `H = normalize(L + (0, 0, -4096))` (line of sight (0,0,-1), `gfx3d.cpp:2117-2150`); the length uses `sqrt(dot(h,h)) << 6` and a shifted integer division (not an exact float normalize). The code uses `-H` (`_vecLightDirectionHalfNegative`).
@@ -245,5 +254,5 @@ The vertex colour starts as the emission colour and is clamped with `min(31, x)`
 ### Consequences for the 3DS port (analysis, not DeSmuME facts)
 - Lighting is per NORMAL command on the geometry engine, so a CPU implementation in the interpreter fits: latch material/lights/shininess, and at each NORMAL compute the colour that the following VTX commands will inherit. TwlhdGxVertex stays 32 B.
 - Needed interpreter state: vector matrix (3x3) as of the NORMAL / LIGHT_VECTOR command, 4 light directions already transformed at LIGHT_VECTOR time, 4 light colours, diffuse/ambient/specular/emission, a 128-entry shininess table, light mask from the latched POLYGON_ATTR.
-- Open **CHECK** items before coding: (a) the exact vector-matrix semantics in our interpreter (does it keep a separate vector matrix, matrix mode 2 vs 3?); (b) fx32 rounding of `sfx32_shiftdown` / `fx32_mul`; (c) GBATEK cross-check of the specular exponent (DeSmuME comment: GBATEK is slightly off); (d) integer arithmetic order must be reproduced exactly (>>17, >>5) for golden tests; (e) light mask applies at BEGIN (latched) while NORMAL reads the applied mask; (f) behaviour when a NORMAL is sent outside BEGIN/END.
+- CHECK items (state after 5B-1 implementation, BUILD/UNIT only): (a) vector-matrix semantics — resolved from source: the interpreter keeps a separate vector matrix with matrix mode 2 dual-applying except SCALE, and mode 1 leaving it untouched; (b) `sfx32_shiftdown`/`fx32_mul` rounding — resolved from source (64-bit product, arithmetic `>>12`, saturating 3x3 accumulate); (c) GBATEK cross-check of the specular exponent — **still CHECK** (DeSmuME comment: GBATEK is slightly off); (d) integer arithmetic order (>>17, >>5) — reproduced and golden-tested; (e) light mask latched at BEGIN while NORMAL reads the applied mask — implemented; (f) NORMAL outside BEGIN/END — implemented as applied (global colour latch in DeSmuME), **still CHECK** on hardware.
 - Test plan hint (UNIT): an independent Python oracle that re-implements the integer equations above, golden streams for one light diffuse-only, ambient-only, emission-only, specular with and without the shininess table, light mask bits, clamping at 31; mutation tests for each shift constant.

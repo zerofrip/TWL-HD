@@ -218,6 +218,347 @@ def expected_vertices(angle_units=61440):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Phase 5B-1 lighting oracle.
+#
+# Independently implements DeSmuME's integer lighting equations (gfx3d.cpp
+# 1158-1331, 2117-2150 and matrix.cpp 560-610) plus the vector-matrix state
+# those commands use. It does not read the C interpreter's state. Values are
+# 20.12 fixed point unless stated otherwise.
+# ---------------------------------------------------------------------------
+
+FX_ONE = 4096
+LIGHT_COUNT = 4
+SHININESS_TABLE_SIZE = 128
+
+CMD_MTX_MODE = 0x10
+CMD_MTX_PUSH = 0x11
+CMD_MTX_POP = 0x12
+CMD_MTX_STORE = 0x13
+CMD_MTX_RESTORE = 0x14
+CMD_MTX_IDENTITY = 0x15
+CMD_MTX_LOAD_4x4 = 0x16
+CMD_MTX_LOAD_4x3 = 0x17
+CMD_MTX_MULT_4x4 = 0x18
+CMD_MTX_MULT_4x3 = 0x19
+CMD_MTX_MULT_3x3 = 0x1A
+CMD_MTX_SCALE = 0x1B
+CMD_MTX_TRANS = 0x1C
+CMD_COLOR = 0x20
+CMD_NORMAL = 0x21
+CMD_POLYGON_ATTR = 0x29
+CMD_DIF_AMB = 0x30
+CMD_SPE_EMI = 0x31
+CMD_LIGHT_VECTOR = 0x32
+CMD_LIGHT_COLOR = 0x33
+CMD_SHININESS = 0x34
+CMD_BEGIN_VTXS = 0x40
+CMD_END_VTXS = 0x41
+CMD_SWAP_BUFFERS = 0x50
+
+PARAM_COUNT = {
+    CMD_MTX_MODE: 1, CMD_MTX_PUSH: 0, CMD_MTX_POP: 1,
+    CMD_MTX_STORE: 1, CMD_MTX_RESTORE: 1, CMD_MTX_IDENTITY: 0,
+    CMD_MTX_LOAD_4x4: 16, CMD_MTX_LOAD_4x3: 12, CMD_MTX_MULT_4x4: 16,
+    CMD_MTX_MULT_4x3: 12, CMD_MTX_MULT_3x3: 9, CMD_MTX_SCALE: 3,
+    CMD_MTX_TRANS: 3, CMD_COLOR: 1, CMD_NORMAL: 1, CMD_POLYGON_ATTR: 1,
+    CMD_DIF_AMB: 1, CMD_SPE_EMI: 1, CMD_LIGHT_VECTOR: 1,
+    CMD_LIGHT_COLOR: 1, CMD_SHININESS: 32, CMD_BEGIN_VTXS: 1,
+    CMD_END_VTXS: 0, CMD_SWAP_BUFFERS: 1,
+}
+
+
+def s32(value):
+    value &= 0xFFFFFFFF
+    return value - 0x100000000 if value & 0x80000000 else value
+
+
+def sign_extend10(word):
+    value = word & 0x3FF
+    return value - 0x400 if value & 0x200 else value
+
+
+def mat_identity_fixed():
+    return [FX_ONE if (i % 5) == 0 else 0 for i in range(16)]
+
+
+def mat_mult_fixed(a, b):
+    out = [0] * 16
+    for col in range(4):
+        for row in range(4):
+            acc = 0
+            for k in range(4):
+                acc += a[k * 4 + row] * b[col * 4 + k]
+            out[col * 4 + row] = acc >> 12
+    return out
+
+
+def sat_shiftdown(acc):
+    """matrix.cpp:560-575: clamp the summed 64-bit accumulator, then >>12."""
+    if acc > 0x000007FFFFFFFFFF:
+        return 0x7FFFFFFF
+    if acc < -0x80000000000:
+        return -0x80000000
+    return acc >> 12
+
+
+def mat3_transform(matrix, vec):
+    out = []
+    for row in range(3):
+        acc = (matrix[0 * 4 + row] * vec[0] +
+               matrix[1 * 4 + row] * vec[1] +
+               matrix[2 * 4 + row] * vec[2])
+        out.append(sat_shiftdown(acc))
+    return out
+
+
+def mul_fixed32(a, b):
+    return (a * b) >> 12
+
+
+def vec3dot_fixed32(a, b):
+    return (a[0] * b[0] + a[1] * b[1] + a[2] * b[2]) >> 12
+
+
+def rgb555_channels(word):
+    return [(word >> 0) & 0x1F, (word >> 5) & 0x1F, (word >> 10) & 0x1F]
+
+
+def _cdiv_trunc(a, b):
+    """C integer division truncates toward zero; b must be positive."""
+    return a // b if a >= 0 else -((-a) // b)
+
+
+class LightingOracle:
+    """Vector matrix plus latched material/light state, driven by a command
+    list in the same v2 entry format the golden streams use."""
+
+    def __init__(self):
+        self.mode = 0
+        self.vec = mat_identity_fixed()
+        self.stack = []
+        self.diffuse = 0
+        self.ambient = 0
+        self.specular = 0
+        self.emission = 0
+        self.light_color = [0] * LIGHT_COUNT
+        self.light_dir = [[0, 0, 0] for _ in range(LIGHT_COUNT)]
+        self.light_half_neg = [[0, 0, 0] for _ in range(LIGHT_COUNT)]
+        self.shininess_pending = [0] * SHININESS_TABLE_SIZE
+        self.shininess_applied = [0] * SHININESS_TABLE_SIZE
+        self.shininess_index = 0
+        self.pending_mask = 0
+        self.applied_mask = 0
+        self.colour = (0.0, 0.0, 0.0)
+        for index in range(LIGHT_COUNT):
+            self._update_half_vector(index)
+
+    # -- vector matrix operations (only the vector matrix moves) -----------
+    def load_4x4(self, words):
+        self.vec = [s32(w) for w in words]
+
+    def load_4x3(self, words):
+        vec = [0] * 16
+        for col in range(3):
+            for row in range(3):
+                vec[col * 4 + row] = s32(words[col * 3 + row])
+        vec[15] = FX_ONE
+        self.vec = vec
+
+    def mult_4x4(self, words):
+        self.vec = mat_mult_fixed(self.vec, [s32(w) for w in words])
+
+    def mult_4x3(self, words):
+        self.vec = mat_mult_fixed(self.vec, self._load_4x3_matrix(words))
+
+    def mult_3x3(self, words):
+        self.vec = mat_mult_fixed(self.vec, self._load_3x3_matrix(words))
+
+    def translate(self, words):
+        op = mat_identity_fixed()
+        op[12 + 0] = s32(words[0])
+        op[12 + 1] = s32(words[1])
+        op[12 + 2] = s32(words[2])
+        self.vec = mat_mult_fixed(self.vec, op)
+
+    @staticmethod
+    def _load_4x3_matrix(words):
+        vec = [0] * 16
+        for col in range(3):
+            for row in range(3):
+                vec[col * 4 + row] = s32(words[col * 3 + row])
+        vec[15] = FX_ONE
+        return vec
+
+    @staticmethod
+    def _load_3x3_matrix(words):
+        vec = mat_identity_fixed()
+        for col in range(3):
+            for row in range(3):
+                vec[col * 4 + row] = s32(words[col * 3 + row])
+        return vec
+
+    def push(self):
+        if len(self.stack) < 31:
+            self.stack.append(list(self.vec))
+
+    def pop(self, count):
+        if count <= 0 or count > len(self.stack):
+            return
+        self.vec = self.stack[-count]
+        del self.stack[-count:]
+
+    def store(self, index):
+        if index < 31:
+            while len(self.stack) <= index:
+                self.stack.append(mat_identity_fixed())
+            self.stack[index] = list(self.vec)
+
+    def restore(self, index):
+        if index < len(self.stack):
+            self.vec = list(self.stack[index])
+
+    # -- lighting state ----------------------------------------------------
+    def set_light_vector(self, param):
+        index = (param >> 30) & 3
+        direction = [
+            sign_extend10(param) * 8,
+            sign_extend10(param >> 10) * 8,
+            sign_extend10(param >> 20) * 8,
+        ]
+        self.light_dir[index] = mat3_transform(self.vec, direction)
+        self._update_half_vector(index)
+
+    def _update_half_vector(self, index):
+        light = self.light_dir[index]
+        half = [light[0], light[1], light[2] - FX_ONE]
+        dot = vec3dot_fixed32(half, half)
+        half_length = (math.isqrt(dot) if dot > 0 else 0) << 6
+        if half_length != 0:
+            half_length = abs(half_length) >> 6
+            half = [_cdiv_trunc(c * 64, half_length) for c in half]
+        self.light_half_neg[index] = [-c for c in half]
+
+    def set_shininess(self, words):
+        for word in words:
+            for byte_index in range(4):
+                self.shininess_pending[self.shininess_index] = (
+                    (word >> (byte_index * 8)) & 0xFF
+                )
+                self.shininess_index += 1
+            if self.shininess_index >= SHININESS_TABLE_SIZE:
+                self.shininess_applied = list(self.shininess_pending)
+                self.shininess_index = 0
+
+    def normal(self, param):
+        normal = [
+            sign_extend10(param) * 8,
+            sign_extend10(param >> 10) * 8,
+            sign_extend10(param >> 20) * 8,
+        ]
+        normal = mat3_transform(self.vec, normal)
+
+        diffuse = rgb555_channels(self.diffuse)
+        ambient = rgb555_channels(self.ambient)
+        specular = rgb555_channels(self.specular)
+        vertex = rgb555_channels(self.emission)
+
+        for index in range(LIGHT_COUNT):
+            if not ((self.applied_mask >> index) & 1):
+                continue
+            light = rgb555_channels(self.light_color[index])
+
+            fixed_diffuse = -vec3dot_fixed32(self.light_dir[index], normal)
+            fixed_diffuse = max(0, fixed_diffuse)
+
+            dot = vec3dot_fixed32(self.light_half_neg[index], normal)
+            shininess = 0
+            if dot > 0:
+                shininess = 2 * mul_fixed32(dot, dot) - FX_ONE
+            shininess = min(shininess, 4095)
+            shininess = max(shininess, 0)
+            if self.specular & 0x8000:
+                shininess = self.shininess_applied[shininess >> 5] << 4
+
+            for channel in range(3):
+                vertex[channel] += (
+                    (specular[channel] * light[channel] * shininess) >> 17
+                ) + (
+                    (diffuse[channel] * light[channel] * fixed_diffuse) >> 17
+                ) + (
+                    (ambient[channel] * light[channel]) >> 5
+                )
+
+        return tuple(min(31, c) / 31.0 for c in vertex)
+
+    # -- command stream driver --------------------------------------------
+    def process(self, entries):
+        """Run the lighting-relevant commands of a v2 entry list in order and
+        leave the final latched colour in self.colour."""
+        index = 0
+        while index < len(entries):
+            command, _ = entries[index]
+            count = PARAM_COUNT.get(command, 0)
+            params = [entries[index + i][1] for i in range(count)]
+            index += count if count else 1
+
+            if command == CMD_MTX_MODE:
+                self.mode = params[0] & 3
+            elif command == CMD_MTX_PUSH:
+                # C touches the vector stack only in modes 1/2 (mode 3 ignores).
+                if self.mode in (1, 2):
+                    self.push()
+            elif command == CMD_MTX_POP:
+                if self.mode not in (0, 3):
+                    count_words = params[0] & 0x3F
+                    if params[0] & 0x20:
+                        count_words -= 0x40
+                    self.pop(count_words)
+            elif command == CMD_MTX_STORE:
+                if self.mode not in (0, 3):
+                    self.store(params[0] & 0x1F)
+            elif command == CMD_MTX_RESTORE:
+                if self.mode not in (0, 3):
+                    self.restore(params[0] & 0x1F)
+            elif self.mode == 2:
+                if command == CMD_MTX_IDENTITY:
+                    self.vec = mat_identity_fixed()
+                elif command == CMD_MTX_LOAD_4x4:
+                    self.load_4x4(params)
+                elif command == CMD_MTX_LOAD_4x3:
+                    self.load_4x3(params)
+                elif command == CMD_MTX_MULT_4x4:
+                    self.mult_4x4(params)
+                elif command == CMD_MTX_MULT_4x3:
+                    self.mult_4x3(params)
+                elif command == CMD_MTX_MULT_3x3:
+                    self.mult_3x3(params)
+                elif command == CMD_MTX_TRANS:
+                    self.translate(params)
+                # CMD_MTX_SCALE deliberately leaves the vector matrix alone.
+
+            if command == CMD_POLYGON_ATTR:
+                self.pending_mask = params[0] & 0xF
+            elif command == CMD_BEGIN_VTXS:
+                self.applied_mask = self.pending_mask
+            elif command == CMD_DIF_AMB:
+                self.diffuse = params[0] & 0xFFFF
+                self.ambient = (params[0] >> 16) & 0xFFFF
+            elif command == CMD_SPE_EMI:
+                self.specular = params[0] & 0xFFFF
+                self.emission = (params[0] >> 16) & 0xFFFF
+            elif command == CMD_LIGHT_COLOR:
+                self.light_color[(params[0] >> 30) & 3] = params[0]
+            elif command == CMD_LIGHT_VECTOR:
+                self.set_light_vector(params[0])
+            elif command == CMD_SHININESS:
+                self.set_shininess(params)
+            elif command == CMD_NORMAL:
+                self.colour = self.normal(params[0])
+
+        return self.colour
+
+
 def main():
     angle = int(sys.argv[1]) if len(sys.argv) > 1 else 61440
     verts = expected_vertices(angle)

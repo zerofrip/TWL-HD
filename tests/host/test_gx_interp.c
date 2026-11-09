@@ -130,6 +130,18 @@ static void add_trans(uint32_t *n, uint32_t tx, uint32_t ty, uint32_t tz) {
     add_entry(n, TWLHD_V2_CMD_MTX_TRANS, tz);
 }
 
+static void add_identity(uint32_t *n) {
+    add_entry(n, TWLHD_V2_CMD_MTX_IDENTITY, 0u);
+}
+
+static void add_store(uint32_t *n, uint32_t index) {
+    add_entry(n, TWLHD_V2_CMD_MTX_STORE, index);
+}
+
+static void add_restore(uint32_t *n, uint32_t index) {
+    add_entry(n, TWLHD_V2_CMD_MTX_RESTORE, index);
+}
+
 static void add_vtx_16(uint32_t *n, int32_t x, int32_t y, int32_t z) {
     add_entry(n, TWLHD_V2_CMD_VTX_16,
               ((uint32_t)(uint16_t)x) | ((uint32_t)(uint16_t)y << 16));
@@ -156,6 +168,81 @@ static void add_vtx_xz(uint32_t *n, int32_t x, int32_t z) {
 static void add_vtx_yz(uint32_t *n, int32_t y, int32_t z) {
     add_entry(n, TWLHD_V2_CMD_VTX_YZ,
               ((uint32_t)(uint16_t)y) | ((uint32_t)(uint16_t)z << 16));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Lighting helpers (Phase 5B-1)                                             */
+/* ------------------------------------------------------------------------- */
+
+static uint32_t rgb555(uint32_t r, uint32_t g, uint32_t b) {
+    return (r & 0x1Fu) | ((g & 0x1Fu) << 5) | ((b & 0x1Fu) << 10);
+}
+
+/* 20.12 component -> 10-bit field (1 sign + 9 fractional bits). */
+static uint32_t comp10(int32_t value) {
+    return ((uint32_t)(value / 8)) & 0x3FFu;
+}
+
+static uint32_t light_vector_word(int32_t x, int32_t y, int32_t z,
+                                  uint32_t light) {
+    return comp10(x) | (comp10(y) << 10) | (comp10(z) << 20) |
+           ((light & 0x3u) << 30);
+}
+
+static uint32_t normal_word(int32_t x, int32_t y, int32_t z) {
+    return light_vector_word(x, y, z, 0u);
+}
+
+static uint32_t light_colour_word(uint32_t r, uint32_t g, uint32_t b,
+                                  uint32_t light) {
+    return rgb555(r, g, b) | ((light & 0x3u) << 30);
+}
+
+static void add_shininess(uint32_t *n, const uint32_t *words) {
+    uint32_t i;
+    for (i = 0u; i < 32u; i++) {
+        add_entry(n, TWLHD_V2_CMD_SHININESS, words[i]);
+    }
+}
+
+/*
+ * Three VTX_16 vertices carrying the current latched colour. NORMAL is sent
+ * inside BEGIN when normal_inside is set (the light mask applied at BEGIN is
+ * then visible to it), otherwise before BEGIN (mask still 0).
+ */
+static void add_lit_triangle(uint32_t *n, uint32_t normal, int normal_inside,
+                             int apply_mask, uint32_t mask) {
+    if (apply_mask) {
+        add_entry(n, TWLHD_V2_CMD_POLYGON_ATTR, (31u << 16) | (mask & 0xFu));
+    }
+    if (normal_inside) add_entry(n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_entry(n, TWLHD_V2_CMD_NORMAL, normal);
+    if (!normal_inside) add_entry(n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(n, 0, 0, 0);
+    add_vtx_16(n, 0x1000, 0, 0);
+    add_vtx_16(n, 0, 0x1000, 0);
+    add_entry(n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+}
+
+static void run_view(uint32_t entry_count) {
+    TwlhdV2View view;
+    build_view(entry_count, &view);
+    CHECK_EQ_INT(twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp,
+                                    &g_st),
+                 TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+}
+
+/* Exact literals: the interpreter divides the 5-bit channel by 31.0f. */
+static void check_lit_rgb(uint32_t r, uint32_t g, uint32_t b) {
+    uint32_t i;
+    for (i = 0u; i < g_out_count; i++) {
+        CHECK_NEAR(g_out[i].rgba[0], (float)r / 31.0f, 0.0f);
+        CHECK_NEAR(g_out[i].rgba[1], (float)g / 31.0f, 0.0f);
+        CHECK_NEAR(g_out[i].rgba[2], (float)b / 31.0f, 0.0f);
+        CHECK_NEAR(g_out[i].rgba[3], 1.0f, 0.0f);
+    }
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2490,6 +2577,1106 @@ static void test_null_args(void) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Lighting tests (Phase 5B-1)                                               */
+/* ------------------------------------------------------------------------- */
+
+static void test_light_ambient_only(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB,
+              rgb555(0, 0, 0) | (rgb555(16, 8, 4) << 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* amb = (ambient * light) >> 5 = 16*31>>5, 8*31>>5, 4*31>>5. */
+    check_lit_rgb(15, 7, 3);
+}
+
+static void test_light_diffuse_only(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 16, 8));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* fixed_diffuse = 4088. The 3x3 transform accumulates the products in
+     * 64 bits and shifts >>12 (saturating); (diffuse*light*4088) >> 17. */
+    check_lit_rgb(29, 15, 7);
+}
+
+static void test_light_emission_only(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(10, 20, 30) << 16);
+    /* NORMAL before any BEGIN: the applied light mask is still 0. */
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 0, 0, 0u);
+    run_view(n);
+    /* Vertex colour starts at emission, not black. */
+    check_lit_rgb(10, 20, 30);
+}
+
+static void test_light_specular_without_table(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* Half vector normalize: sqrt(dot)<<6, abs >>6, component*64/len, stored
+     * negated (-H); dot_h>0 then 2*(4088*4088>>12) - 4096 = 4064. */
+    check_lit_rgb(29, 29, 29);
+}
+
+static void test_light_specular_with_table(void) {
+    uint32_t n = 0u;
+    uint32_t words[32];
+
+    clear_state();
+    memset(words, 0, sizeof words);
+    words[31] = 200u << 24; /* applied entry 127 = 200 */
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31) | 0x8000u);
+    add_shininess(&n, words);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* specular bit15 selects the table; table[4064>>5] << 4 = 200<<4 = 3200;
+     * (31*31*3200) >> 17 = 23. */
+    check_lit_rgb(23, 23, 23);
+}
+
+static void test_light_two_lights(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 0, 0, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(0, 31, 0, 1));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 1));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 3u);
+    run_view(n);
+    check_lit_rgb(29, 29, 0);
+}
+
+static void test_light_each_index_alone(void) {
+    uint32_t light;
+
+    for (light = 0u; light < 4u; light++) {
+        uint32_t n = 0u;
+
+        clear_state();
+        add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+        add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR,
+                  light_colour_word(16, 12, 20, light));
+        add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+                  light_vector_word(0, 0, -4096, light));
+        add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u << light);
+        run_view(n);
+        /* Mask bit test: only light `light` is enabled and only it has a
+         * non-zero colour/direction. */
+        check_lit_rgb(15, 11, 19);
+        CHECK_EQ_INT(g_st.stack_errors, 0u);
+    }
+}
+
+static void test_light_saturation_at_31(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB,
+              rgb555(31, 31, 31) | (rgb555(31, 31, 31) << 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* 29 (diffuse) + 30 (ambient) clamps with min(31, ...). */
+    check_lit_rgb(31, 31, 31);
+}
+
+static void test_light_rotated_vec_normal(void) {
+    static const uint32_t rot[16] = {
+        0u, 4096u, 0u, 0u,
+        (uint32_t)(int32_t)-4096, 0u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, rot);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* Both N and L rotate by +90 deg about z; dot is preserved. */
+    check_lit_rgb(29, 29, 29);
+}
+
+static void test_light_mode1_vec_untouched(void) {
+    static const uint32_t diag[16] = {
+        8192u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t mode;
+
+    for (mode = 1u; mode <= 2u; mode++) {
+        uint32_t n = 0u;
+
+        clear_state();
+        add_entry(&n, TWLHD_V2_CMD_MTX_MODE, mode);
+        add_load_4x4(&n, diag);
+        add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+        add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR,
+                  light_colour_word(31, 31, 31, 0));
+        add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+                  light_vector_word(-4096, 0, 0, 0));
+        add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+        run_view(n);
+        /* Mode 1 leaves the vector matrix at identity: 29. Mode 2 doubles
+         * x, so fixed_diffuse is 16352 and the result clamps to 31. */
+        if (mode == 1u) {
+            check_lit_rgb(29, 29, 29);
+        } else {
+            check_lit_rgb(31, 31, 31);
+        }
+    }
+}
+
+static void test_light_scale_scales_position_only(void) {
+    static const uint32_t diag[16] = {
+        2048u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, diag);
+    add_scale(&n, 2048u, 4096u, 4096u); /* position only */
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* vec stays at 0.5: fixed_diffuse = 1022 -> (31*31*1022)>>17 = 7.
+     * If SCALE also hit the vector matrix it would be 255 -> 1. */
+    check_lit_rgb(7, 7, 7);
+}
+
+static void test_light_push_pop_restores_vec(void) {
+    static const uint32_t half[16] = {
+        2048u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    static const uint32_t quarter[16] = {
+        1024u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, half);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, quarter);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* POP restores the vector matrix to 0.5, not the pushed-under 0.25. */
+    check_lit_rgb(7, 7, 7);
+}
+
+static void test_light_dif_amb_bit15(void) {
+    uint32_t n = 0u;
+
+    /* Bit 15 set: the diffuse colour becomes the vertex colour. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(10, 20, 30) | 0x8000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view(n);
+    check_lit_rgb(10, 20, 30);
+
+    /* Bit 15 clear: the previous COLOR wins. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_COLOR, rgb555(4, 8, 16));
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(10, 20, 30));
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view(n);
+    check_lit_rgb(4, 8, 16);
+}
+
+static void test_light_diffuse_negative_dot_clamped(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    /* Light behind the surface: max(0, -dot) must clamp the term to 0. */
+    add_lit_triangle(&n, normal_word(0, 0, -4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+static void test_light_shininess_clamp_at_4095(void) {
+    static const uint32_t doubled_z[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 8192u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, doubled_z);
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* dot_h = 8176 -> raw shininess 28544 clamps to 4095 -> 30. Without the
+     * clamp the specular term would push the channel to 31. */
+    check_lit_rgb(30, 30, 30);
+}
+
+static void test_light_direction_transformed_at_command_time(void) {
+    static const uint32_t half[16] = {
+        2048u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    static const uint32_t doubled[16] = {
+        8192u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, half);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0));
+    /* Changing the matrix afterwards must not move the light. */
+    add_load_4x4(&n, doubled);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* L was fixed at -2048, N becomes 8176: fd = 4088 -> 29.
+     * A lazy transform with the doubled matrix would give 31. */
+    check_lit_rgb(29, 29, 29);
+}
+
+static void test_light_shininess_applied_only_after_32_words(void) {
+    uint32_t n = 0u;
+    uint32_t words[32];
+
+    /* Specular table enabled but no SHININESS command: table is all zero. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31) | 0x8000u);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+
+    /* Two complete SHININESS commands: the second table replaces the first. */
+    n = 0u;
+    clear_state();
+    memset(words, 0, sizeof words);
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31) | 0x8000u);
+    add_shininess(&n, words);
+    words[31] = 200u << 24;
+    add_shininess(&n, words);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(23, 23, 23);
+}
+
+static void test_light_commands_not_ignored(void) {
+    uint32_t n = 0u;
+    uint32_t words[32];
+
+    clear_state();
+    memset(words, 0, sizeof words);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(1, 2, 3));
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(4, 5, 6));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR, light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(7, 8, 9, 0));
+    add_entry(&n, TWLHD_V2_CMD_NORMAL, normal_word(0, 0, 4088));
+    add_shininess(&n, words);
+    add_entry(&n, TWLHD_V2_CMD_TEX_COORD, 0u);
+    add_entry(&n, TWLHD_V2_CMD_TEXIMAGE_PARAM, 0u);
+    add_entry(&n, TWLHD_V2_CMD_PLTT_BASE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_BOX_TEST, 0u);
+    add_entry(&n, TWLHD_V2_CMD_BOX_TEST, 0u);
+    add_entry(&n, TWLHD_V2_CMD_BOX_TEST, 0u);
+    add_entry(&n, TWLHD_V2_CMD_POS_TEST, 0u);
+    add_entry(&n, TWLHD_V2_CMD_POS_TEST, 0u);
+    add_entry(&n, TWLHD_V2_CMD_VEC_TEST, 0u);
+    {
+        TwlhdV2View view;
+        build_view(n, &view);
+        CHECK_EQ_INT(twlhd_gx_interpret(&view, g_out, 12u, &g_out_count,
+                                        &g_vp, &g_st),
+                     TWLHD_GX_OK);
+    }
+    /* The six lighting commands have an effect now; the other six do not. */
+    CHECK_EQ_INT(g_st.ignored_no_effect, 6u);
+}
+
+static void test_light_mask_zero_ignores_configured_lights(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    /* Every light is fully configured; mask 0 must still skip all of them. */
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 0, 0, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(0, 31, 0, 1));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(0, 0, 31, 2));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(8, 16, 24, 3));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 1));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 2));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 3));
+    /* Non-zero diffuse material: if the mask test were dropped, these lights
+     * would visibly add to the emission-only colour. */
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(3, 4, 5));
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(5, 7, 9) << 16);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 0u);
+    run_view(n);
+    /* Mask test: no light term, so only emission remains. */
+    check_lit_rgb(5, 7, 9);
+}
+
+static void test_light_mask_one_skips_other_configured_lights(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 0, 0, 1));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(0, 31, 0, 2));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(0, 0, 31, 3));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 1));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 2));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 3));
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(9, 9, 9));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* Only light 0: (9*31*4088) >> 17 = 8, not a mask != 0 all-lights sum. */
+    check_lit_rgb(8, 8, 8);
+}
+
+static void test_light_mask_each_index_with_others_configured(void) {
+    static const uint32_t colours[4][3] = {
+        {31u, 0u, 0u}, {0u, 31u, 0u}, {0u, 0u, 31u}, {8u, 16u, 24u},
+    };
+    static const uint32_t expected[4][3] = {
+        {29u, 0u, 0u}, {0u, 29u, 0u}, {0u, 0u, 29u}, {7u, 15u, 23u},
+    };
+    uint32_t light;
+
+    for (light = 0u; light < 4u; light++) {
+        uint32_t n = 0u;
+        uint32_t index;
+
+        clear_state();
+        add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+        for (index = 0u; index < 4u; index++) {
+            add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR,
+                      light_colour_word(colours[index][0], colours[index][1],
+                                        colours[index][2], index));
+            add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+                      light_vector_word(0, 0, -4096, index));
+        }
+        /* Per-index mask test: only `light` is enabled even though all four
+         * have distinct colours that would change the sum if applied. */
+        add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u << light);
+        run_view(n);
+        check_lit_rgb(expected[light][0], expected[light][1],
+                      expected[light][2]);
+    }
+}
+
+static void test_light_shininess_clamp_table_entry_127(void) {
+    static const uint32_t doubled_z[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 8192u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t words[32];
+
+    clear_state();
+    memset(words, 0, sizeof words);
+    words[31] = 200u << 24; /* applied entry 127 = 200 */
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, doubled_z);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31) | 0x8000u);
+    add_shininess(&n, words);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* dot_h = 8176 -> raw shininess 28544 clamps to 4095; index 4095>>5 = 127
+     * (200) -> 3200 -> (31*31*3200)>>17 = 23. The off-by-one 4096 clamp is
+     * already killed by test_light_shininess_clamp_uses_4095 ((32*4095)>>17 =
+     * 0 vs (32*4096)>>17 = 1 with no shininess table). */
+    check_lit_rgb(23, 23, 23);
+}
+
+static void test_light_shininess_clamp_uses_4095(void) {
+    static const uint32_t doubled_z[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 8192u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, doubled_z);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(2, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(16, 31, 31));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* No table: red uses specular 16 * light 2. (32*4095)>>17 = 0 while
+     * (32*4096)>>17 = 1; green/blue stay 30 at either bound. */
+    check_lit_rgb(0, 30, 30);
+}
+
+static void test_light_shininess_4096_constant_boundary(void) {
+    static const uint32_t scaled_z[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 3180u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    /* k = 3180: n_z = (4088*3180)>>12 = 3173, so raw shininess j = 818.
+     * (961*818)>>17 = 5, but an off-by-one 4096 constant gives j = 819 -> 6. */
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, scaled_z);
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    /* Raw shininess 818 is below the clamp: (31*31*818)>>17 = 5. */
+    check_lit_rgb(5, 5, 5);
+}
+
+static void test_light_dot_zero_table_entry_zero(void) {
+    /* EQUIVALENT MUTANT DECLARATION — mutant 3b: `if (dot >= 0)` vs `if (dot > 0)`
+     * common/twlhd_gx_interp.c lines 462-468: shininess is initialized to 0 (line 462)
+     * before the guard (line 463). At dot==0, the mutant path computes
+     * 2*mul_fixed32(0,0)-4096 = -4096, which the `< 0` clamp (line 468) resets to 0,
+     * identical to the initialized value from the correct path.
+     * Table lookup (line 471) and specular accumulation (line 475) are outside the guard
+     * and see shininess=0 in both paths. No test can distinguish the two guards without
+     * a C change (prohibited). This test verifies correct behavior but does NOT kill
+     * mutant 3b. EQUIVALENT MUTANT: cannot be killed without C change. */
+    uint32_t n = 0u;
+    uint32_t words[32];
+
+    clear_state();
+    memset(words, 0, sizeof words);
+    words[0] = 255u; /* applied entry 0 = 255 */
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31) | 0x8000u);
+    add_shininess(&n, words);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    /* Perpendicular normal: dot_h == 0 -> shininess 0 -> table[0]. */
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* (31*31*(255<<4))>>17 = 29. */
+    check_lit_rgb(29, 29, 29);
+}
+
+static void test_light_negative_dot_specular_ignored(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI,
+              rgb555(31, 31, 31) | (rgb555(5, 5, 5) << 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    /* dot_h = -4088: only dot > 0 may enter the specular path. */
+    add_lit_triangle(&n, normal_word(0, 0, -4088), 1, 1, 1u);
+    run_view(n);
+    /* A dot >= -100000 branch would add specular 29 and clamp to 31. */
+    check_lit_rgb(5, 5, 5);
+}
+
+static void test_light_negative_shininess_clamped_to_zero(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(16, 16, 16) << 16);
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI,
+              rgb555(16, 31, 31) | (rgb555(9, 0, 0) << 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(2, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    /* dot_h = 8 -> raw shininess 2*0 - 4096 = -4096; the < 0 clamp keeps the
+     * specular term at zero. Emission (9,0,0) + ambient (1,15,15). */
+    add_lit_triangle(&n, normal_word(0, 0, 8), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(10, 15, 15);
+}
+
+static void test_light_saturating_transform_clamps_both_ends(void) {
+    static const uint32_t positive_row[16] = {
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    static const uint32_t negative_row[16] = {
+        0x80000001u, 0u, 0u, 0u,
+        0x80000001u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    /* Positive overflow: 2 * INT32_MAX * 4088 exceeds 0x7FFFFFFFFFF, so the
+     * saturating shift returns INT32_MAX (a fall-through cast would go
+     * negative and lose the specular term). */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR, light_vector_word(-8, 0, -4096, 0));
+    add_load_4x4(&n, positive_row);
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, 0u);
+    add_lit_triangle(&n, normal_word(4088, 4088, 0), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(30, 30, 30);
+
+    /* Negative overflow: the lower clamp must return INT32_MIN so the dot is
+     * negative and the final colour stays black. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR, light_vector_word(-8, 0, -4096, 0));
+    add_load_4x4(&n, negative_row);
+    add_entry(&n, TWLHD_V2_CMD_SPE_EMI, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, 0u);
+    add_lit_triangle(&n, normal_word(4088, 4088, 0), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+static void test_light_mode3_stack_commands_ignored(void) {
+    static const uint32_t half[16] = {
+        8192u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    static const uint32_t quarter[16] = {
+        1024u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    static const uint32_t zeros[16] = {0u};
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_load_4x4(&n, half);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, quarter);
+    /* Mode 3 ignores PUSH and matrix loads; POP afterwards restores `half`,
+     * not the mode-3-pushed `quarter`. */
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, zeros);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* vec = half (x2): fixed_diffuse = 8176 saturates the channel to 31. */
+    check_lit_rgb(31, 31, 31);
+    CHECK_EQ_INT(g_st.ignored_no_effect, 2u);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Vec-matrix lighting streams (Phase 5B-1 mutants)                          */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * MTX_TRANS on vec cannot be observed through affine-only lighting streams:
+ * the translation column is never read by the 3x3 transform. But a LATER
+ * non-affine MTX_MULT_4x4 with a non-zero row 3 in columns 0-2 copies that
+ * translation into the 3x3 part lighting reads. The paired streams
+ * `light-trans-mode2-reaches-vec-via-nonaffine-mult` and
+ * `light-trans-mode1-skips-vec` kill both the removal of the TRANS-on-vec
+ * multiply and the `g->mode >= 1u` mutant.
+ *
+ * The matrix op is issued between LIGHT_VECTOR (transformed by identity vec)
+ * and NORMAL (rotated by the new vec), so only the normal moves. A 90 deg
+ * rotation makes the fixed light and the rotated normal perpendicular (0),
+ * while an untouched identity vec gives 29.
+ */
+
+/* Column-major 20.12 Ry rotations: (0,0,n) rotates into the xz plane. */
+static const uint32_t g_rot_y45[16] = {
+    2896u, 0u, (uint32_t)(int32_t)-2896, 0u,
+    0u, 4096u, 0u, 0u,
+    2896u, 0u, 2896u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_rot_y60[16] = {
+    2048u, 0u, (uint32_t)(int32_t)-3547, 0u,
+    0u, 4096u, 0u, 0u,
+    3547u, 0u, 2048u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_rot_y90[16] = {
+    0u, 0u, (uint32_t)(int32_t)-4096, 0u,
+    0u, 4096u, 0u, 0u,
+    4096u, 0u, 0u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_identity[16] = {
+    4096u, 0u, 0u, 0u,
+    0u, 4096u, 0u, 0u,
+    0u, 0u, 4096u, 0u,
+    0u, 0u, 0u, 4096u,
+};
+
+static const uint32_t g_rot_y90_4x3[12] = {
+    0u, 0u, (uint32_t)(int32_t)-4096,
+    0u, 4096u, 0u,
+    4096u, 0u, 0u,
+    0u, 0u, 0u,
+};
+
+static const uint32_t g_rot_y90_3x3[9] = {
+    0u, 0u, (uint32_t)(int32_t)-4096,
+    0u, 4096u, 0u,
+    4096u, 0u, 0u,
+};
+
+/* Guards MTX_LOAD_4x3 writing g->vec (line 724): removal leaves 29. */
+static void test_light_load_4x3_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MTX_LOAD_4x3 (line 724): vec stays identity. */
+static void test_light_load_4x3_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MULT_4x4 writing g->vec (line 736): removal leaves 29. */
+static void test_light_mult_4x4_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x4(&n, g_rot_y90);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MULT_4x4 (line 736): vec stays identity. */
+static void test_light_mult_4x4_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x4(&n, g_rot_y90);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MULT_4x3 writing g->vec (line 748): removal leaves 29. */
+static void test_light_mult_4x3_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MULT_4x3 (line 748): vec stays identity. */
+static void test_light_mult_4x3_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_4x3(&n, g_rot_y90_4x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MULT_3x3 writing g->vec (line 760): removal leaves 29. */
+static void test_light_mult_3x3_mode2_rotates_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_3x3(&n, g_rot_y90_3x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards `g->mode >= 1u` on MULT_3x3 (line 760): vec stays identity. */
+static void test_light_mult_3x3_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_mult_3x3(&n, g_rot_y90_3x3);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards MTX_IDENTITY resetting g->vec (line 704): removal leaves 0. */
+static void test_light_identity_mode2_resets_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y90);
+    add_identity(&n);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(29, 29, 29);
+}
+
+/* Guards `g->mode >= 1u` on MTX_IDENTITY (line 704): vec stays rotated. */
+static void test_light_identity_mode1_keeps_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y90);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_identity(&n);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(0, 0, 0);
+}
+
+/* Guards MTX_TRANS writing g->vec (line 786): with the TRANS skipped the
+ * later non-affine MULT_4x4 cannot fold the translation into the 3x3 block,
+ * so the normal is not doubled and the channel is 15 instead of 31. */
+static void test_light_trans_mode2_reaches_vec_via_nonaffine_mult(void) {
+    static const uint32_t op[16] = {
+        4096u, 0u, 0u, 4096u, /* col 0: row 3 folds the col-3 translation in */
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_mult_4x4(&n, op);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(16, 16, 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0u));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0u));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* Translation folded into col 0 row 0: normal x 2 -> fixed_diffuse 16352
+     * saturates every channel. */
+    check_lit_rgb(31, 31, 31);
+}
+
+/* Guards `g->mode >= 1u` on MTX_TRANS (line 786): in mode 1 TRANS must leave
+ * vec alone, so the later MULT_4x4 sees an identity vec and the channel stays
+ * 15 instead of the mutant's 31. */
+static void test_light_trans_mode1_skips_vec(void) {
+    static const uint32_t op[16] = {
+        4096u, 0u, 0u, 4096u, /* col 0: row 3 folds the col-3 translation in */
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_mult_4x4(&n, op);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(16, 16, 16));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0u));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(-4096, 0, 0, 0u));
+    add_lit_triangle(&n, normal_word(4088, 0, 0), 1, 1, 1u);
+    run_view(n);
+    /* Mode-1 TRANS skipped: vec stays identity and the channel is 15. */
+    check_lit_rgb(15, 15, 15);
+}
+
+/* Guards stack_store saving g->vec (line 312): removal restores zero (0). */
+static void test_light_store_restore_mode2_slot3(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 3u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* Guards slot indexing: slot 7 holds rot_y60 (14), slot 3 rot_y45 (21). */
+static void test_light_store_restore_mode2_slots_distinct(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_rot_y60);
+    add_store(&n, 7u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 7u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(14, 14, 14);
+}
+
+/* Guards mode-1 MTX_STORE saving g->vec (line 312): removal gives 0. */
+static void test_light_store_restore_mode1_store_saves_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 3u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* Guards mode-1 MTX_RESTORE of g->vec (line 332) plus slot distinctness. */
+static void test_light_store_restore_mode1_restore_slot7(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_store(&n, 3u);
+    add_load_4x4(&n, g_rot_y60);
+    add_store(&n, 7u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_load_4x4(&n, g_identity);
+    add_restore(&n, 7u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(14, 14, 14);
+}
+
+/* Mode-0 stack ops touch only the projection matrix: vec stays rot_y45. */
+static void test_light_store_restore_mode0_leaves_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_store(&n, 0u);
+    add_restore(&n, 0u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* Mode-3 STORE/RESTORE are ignored: vec stays rot_y45 (21). */
+static void test_light_store_restore_mode3_leaves_vec(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 2u);
+    add_entry(&n, TWLHD_V2_CMD_DIF_AMB, rgb555(31, 31, 31));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_COLOR, light_colour_word(31, 31, 31, 0));
+    add_entry(&n, TWLHD_V2_CMD_LIGHT_VECTOR,
+              light_vector_word(0, 0, -4096, 0));
+    add_load_4x4(&n, g_rot_y45);
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_store(&n, 2u);
+    add_restore(&n, 2u);
+    add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
+    run_view(n);
+    check_lit_rgb(21, 21, 21);
+}
+
+/* ------------------------------------------------------------------------- */
 /* Main                                                                      */
 /* ------------------------------------------------------------------------- */
 
@@ -2591,5 +3778,99 @@ int main(void) {
     test_report("gx_interp/alpha-default-and-extra-bits");
     test_alpha_rgb_unaffected();
     test_report("gx_interp/alpha-rgb-unaffected");
+    test_light_commands_not_ignored();
+    test_report("gx_interp/light-commands-not-ignored");
+    test_light_ambient_only();
+    test_report("gx_interp/light-ambient-only");
+    test_light_diffuse_only();
+    test_report("gx_interp/light-diffuse-only");
+    test_light_emission_only();
+    test_report("gx_interp/light-emission-only");
+    test_light_specular_without_table();
+    test_report("gx_interp/light-specular-without-table");
+    test_light_specular_with_table();
+    test_report("gx_interp/light-specular-with-table");
+    test_light_two_lights();
+    test_report("gx_interp/light-two-lights");
+    test_light_each_index_alone();
+    test_report("gx_interp/light-each-index-alone");
+    test_light_saturation_at_31();
+    test_report("gx_interp/light-saturation-at-31");
+    test_light_rotated_vec_normal();
+    test_report("gx_interp/light-rotated-vec-normal");
+    test_light_mode1_vec_untouched();
+    test_report("gx_interp/light-mode1-vec-untouched");
+    test_light_scale_scales_position_only();
+    test_report("gx_interp/light-scale-position-only");
+    test_light_push_pop_restores_vec();
+    test_report("gx_interp/light-push-pop-restores-vec");
+    test_light_dif_amb_bit15();
+    test_report("gx_interp/light-dif-amb-bit15");
+    test_light_diffuse_negative_dot_clamped();
+    test_report("gx_interp/light-diffuse-negative-dot");
+    test_light_shininess_clamp_at_4095();
+    test_report("gx_interp/light-shininess-clamp");
+    test_light_direction_transformed_at_command_time();
+    test_report("gx_interp/light-direction-at-command-time");
+    test_light_shininess_applied_only_after_32_words();
+    test_report("gx_interp/light-shininess-after-32-words");
+    test_light_mask_zero_ignores_configured_lights();
+    test_report("gx_interp/light-mask-zero-ignores-lights");
+    test_light_mask_one_skips_other_configured_lights();
+    test_report("gx_interp/light-mask-one-skips-others");
+    test_light_mask_each_index_with_others_configured();
+    test_report("gx_interp/light-mask-each-index-others-configured");
+    test_light_shininess_clamp_table_entry_127();
+    test_report("gx_interp/light-shininess-clamp-table-127");
+    test_light_shininess_clamp_uses_4095();
+    test_report("gx_interp/light-shininess-clamp-uses-4095");
+    test_light_shininess_4096_constant_boundary();
+    test_report("gx_interp/light-shininess-4096-constant-boundary");
+    test_light_dot_zero_table_entry_zero();
+    test_report("gx_interp/light-dot-zero-table-entry-zero");
+    test_light_negative_dot_specular_ignored();
+    test_report("gx_interp/light-negative-dot-specular");
+    test_light_negative_shininess_clamped_to_zero();
+    test_report("gx_interp/light-negative-shininess-clamped");
+    test_light_saturating_transform_clamps_both_ends();
+    test_report("gx_interp/light-saturating-transform");
+    test_light_mode3_stack_commands_ignored();
+    test_report("gx_interp/light-mode3-stack-ignored");
+    test_light_load_4x3_mode2_rotates_vec();
+    test_report("gx_interp/light-load-4x3-mode2-rotates-vec");
+    test_light_load_4x3_mode1_keeps_vec();
+    test_report("gx_interp/light-load-4x3-mode1-keeps-vec");
+    test_light_mult_4x4_mode2_rotates_vec();
+    test_report("gx_interp/light-mult-4x4-mode2-rotates-vec");
+    test_light_mult_4x4_mode1_keeps_vec();
+    test_report("gx_interp/light-mult-4x4-mode1-keeps-vec");
+    test_light_mult_4x3_mode2_rotates_vec();
+    test_report("gx_interp/light-mult-4x3-mode2-rotates-vec");
+    test_light_mult_4x3_mode1_keeps_vec();
+    test_report("gx_interp/light-mult-4x3-mode1-keeps-vec");
+    test_light_mult_3x3_mode2_rotates_vec();
+    test_report("gx_interp/light-mult-3x3-mode2-rotates-vec");
+    test_light_mult_3x3_mode1_keeps_vec();
+    test_report("gx_interp/light-mult-3x3-mode1-keeps-vec");
+    test_light_identity_mode2_resets_vec();
+    test_report("gx_interp/light-identity-mode2-resets-vec");
+    test_light_identity_mode1_keeps_vec();
+    test_report("gx_interp/light-identity-mode1-keeps-vec");
+    test_light_store_restore_mode2_slot3();
+    test_report("gx_interp/light-store-restore-mode2-slot3");
+    test_light_store_restore_mode2_slots_distinct();
+    test_report("gx_interp/light-store-restore-mode2-slots-distinct");
+    test_light_store_restore_mode1_store_saves_vec();
+    test_report("gx_interp/light-store-restore-mode1-store-saves-vec");
+    test_light_store_restore_mode1_restore_slot7();
+    test_report("gx_interp/light-store-restore-mode1-restore-slot7");
+    test_light_store_restore_mode0_leaves_vec();
+    test_report("gx_interp/light-store-restore-mode0-leaves-vec");
+    test_light_store_restore_mode3_leaves_vec();
+    test_report("gx_interp/light-store-restore-mode3-leaves-vec");
+    test_light_trans_mode2_reaches_vec_via_nonaffine_mult();
+    test_report("gx_interp/light-trans-mode2-reaches-vec-via-nonaffine-mult");
+    test_light_trans_mode1_skips_vec();
+    test_report("gx_interp/light-trans-mode1-skips-vec");
     return test_exit_code();
 }

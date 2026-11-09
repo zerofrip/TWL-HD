@@ -93,15 +93,32 @@ blend off; alpha forced to 1.0.
 
 ### Stage 5B-1 — lighting on the CPU in the interpreter (colour out, 32 B stride unchanged)
 
+**STATUS (2026-11-08): implemented BUILD/UNIT, HARDWARE UNVERIFIED.**
+Commands NORMAL, DIF_AMB, SPE_EMI, LIGHT_VECTOR, LIGHT_COLOR and SHININESS are
+latched in `common/twlhd_gx_interp.c`; NORMAL computes the lit colour with
+DeSmuME's integer equations (source-read, not hardware-measured). Executed
+this round: host unit tests and golden streams against an independent Python
+oracle. Not done: emulator visual check, hardware run.
+
+Still CHECK (do not claim DS accuracy):
+- GBATEK cross-check of the specular exponent/rounding (DeSmuME comments that
+  GBATEK is slightly off).
+- NORMAL sent outside BEGIN..END: this implementation applies lighting (the
+  colour latch is global in DeSmuME); real hardware behaviour is unverified.
+- Initial material colours, the half-vector zero-length branch and the
+  shininess word-counter reset are implemented from DeSmuME source only;
+  hardware was not checked.
+
 What changes:
 - Interpreter latches DIF_AMB, SPE_EMI, LIGHT_VECTOR, LIGHT_COLOR, SHININESS
-  (currently all `ignored_no_effect`) and NORMAL (currently ignored).
+  (previously all `ignored_no_effect`) and NORMAL (previously ignored).
 - Per-vertex lit colour is computed in the interpreter using the latched
   normal and lights; output replaces flat `rgba` with lit colour. Alpha from
   5B-0 is preserved. `TwlhdGxVertex` stays 32 B; shader unchanged (passes
   colour through).
-- Normal handling: DS latches NORMAL into vertices like COLOR; transform of the
-  normal by the current matrix is **TO BE VERIFIED** (see section 4).
+- Normal handling: NORMAL is transformed at command time by the vector matrix
+  3x3 (DeSmuME gfx3d.cpp:1233-1235) and runs the lighting equation; the result
+  replaces the flat latched colour. Alpha is untouched.
 
 Data/format changes: none. All inputs already captured (cmds 0x21, 0x30..0x34).
 
