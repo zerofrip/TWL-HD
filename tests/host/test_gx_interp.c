@@ -4422,6 +4422,165 @@ static void test_tex_mode1_s32_wrap_extreme(void) {
     check_tex(0u, -32768.5, 0.0, 0x40000000u, 0u);
 }
 
+/* Repair round 2: per-term 64-bit headroom. Each test makes exactly one of
+ * the four product terms overflow 32 bits, so truncating that term alone in
+ * compute_tex_vertex() changes the int32 result. A large matrix element and a
+ * large coordinate are both required: a naive 0x40000000 element would make
+ * the truncation a no-op. */
+static void test_tex_mode1_trunc_m0_s(void) {
+    static const uint32_t matrix_pos[16] = {
+        0x00100000u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        (uint32_t)-0x00100000, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, (int32_t)0x8000, 0); /* s = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* 2^20*0x7FFF >> 12 = 8388352 -> 524272.0 (the 32-bit-truncated product
+     * would give -16.0). */
+    check_tex(0u, 524272.0, 0.0, 0x40000000u, 0u);
+    /* 2^20*-32768 >> 12 = -8388608 -> -524288.0 (truncated: 0.0). */
+    check_tex(1u, -524288.0, 0.0, 0x40000000u, 0u);
+    /* -2^20*0x7FFF >> 12 = -8388352 -> -524272.0 (truncated: +16.0). */
+    check_tex(2u, -524272.0, 0.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_trunc_m4_t(void) {
+    static const uint32_t matrix_pos[16] = {
+        0u, 0u, 0u, 0u, 0x00100000u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        0u, 0u, 0u, 0u, (uint32_t)-0x00100000, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_tex_vertex(&n, 0, (int32_t)0x8000); /* t = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* s row t-term: 2^20*0x7FFF >> 12 -> 524272.0 (truncated product: -16.0). */
+    check_tex(0u, 524272.0, 0.0, 0x40000000u, 0u);
+    check_tex(1u, -524288.0, 0.0, 0x40000000u, 0u);
+    check_tex(2u, -524272.0, 0.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_trunc_m1_s(void) {
+    static const uint32_t matrix_pos[16] = {
+        0u, 0x00100000u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        0u, (uint32_t)-0x00100000, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, (int32_t)0x8000, 0); /* s = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* This is the term the 42-mutant run could truncate undetected:
+     * t_acc m[1]*s. s stays 0.0 in every vertex. */
+    check_tex(0u, 0.0, 524272.0, 0x40000000u, 0u);
+    check_tex(1u, 0.0, -524288.0, 0x40000000u, 0u);
+    check_tex(2u, 0.0, -524272.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_trunc_m5_t(void) {
+    static const uint32_t matrix_pos[16] = {
+        0u, 0u, 0u, 0u, 0u, 0x00100000u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        0u, 0u, 0u, 0u, 0u, (uint32_t)-0x00100000, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_tex_vertex(&n, 0, (int32_t)0x8000); /* t = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* t row t-term: 2^20*0x7FFF >> 12 -> 524272.0 (truncated product: -16.0). */
+    check_tex(0u, 0.0, 524272.0, 0x40000000u, 0u);
+    check_tex(1u, 0.0, -524288.0, 0x40000000u, 0u);
+    check_tex(2u, 0.0, -524272.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_sum_over_32bit(void) {
+    static const uint32_t matrix[16] = {
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 1, 1);
+    add_tex_vertex(&n, 1, 1);
+    add_tex_vertex(&n, 1, 1);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* Each product is 0x7FFFFFFF (fits int32) but the four-term sum
+     * 4*(2^31-1) = 2^33-4 > 2^32. >> 12 = 2^21-1 = 2097151 -> 131071.9375.
+     * A signed 32-bit accumulator gives -4 >> 12 = -1 -> -0.0625; a uint32
+     * accumulator shifted before narrowing gives 1048575 -> 65535.9375. */
+    check_tex(0u, 131071.9375, 0.0, 0x40000000u, 0u);
+    check_tex(1u, 131071.9375, 0.0, 0x40000000u, 0u);
+    check_tex(2u, 131071.9375, 0.0, 0x40000000u, 0u);
+}
+
 /* ------------------------------------------------------------------------- */
 /* Main                                                                      */
 /* ------------------------------------------------------------------------- */
@@ -4664,5 +4823,15 @@ int main(void) {
     test_report("gx_interp/tex-mode1-64bit-headroom");
     test_tex_mode1_s32_wrap_extreme();
     test_report("gx_interp/tex-mode1-s32-wrap-extreme");
+    test_tex_mode1_trunc_m0_s();
+    test_report("gx_interp/tex-mode1-trunc-m0-s");
+    test_tex_mode1_trunc_m4_t();
+    test_report("gx_interp/tex-mode1-trunc-m4-t");
+    test_tex_mode1_trunc_m1_s();
+    test_report("gx_interp/tex-mode1-trunc-m1-s");
+    test_tex_mode1_trunc_m5_t();
+    test_report("gx_interp/tex-mode1-trunc-m5-t");
+    test_tex_mode1_sum_over_32bit();
+    test_report("gx_interp/tex-mode1-sum-over-32bit");
     return test_exit_code();
 }
