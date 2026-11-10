@@ -71,12 +71,43 @@ contract's stated mutant honestly rather than claiming a kill it cannot have.
 All mutant builds were outside the worktree; `git status` at the end shows only
 the files listed below.
 
+## Repair round 2
+
+Five surviving mutants in `validate_tex()` (`common/twlhd_v2_parse.c`) were
+targeted with new unit tests. Each mutation was applied to a scratch copy of the
+parser under `/tmp/opencode/mutants2/` (outside the worktree), built against the
+unmodified test sources, and run; every one turns its new test RED on the
+mutated parser and GREEN on the pristine worktree.
+
+| # | Mutant | Result | Killing test |
+|---:|---|---|---|
+| 1 | reserved field at record offset 36 accepted (second disjunct removed, `parse.c:345`) | KILLED | `v2-parse/tex-reserved1` |
+| 2 | index `offset + size` bounds check removed (`parse.c:406-407`) | KILLED | `v2-parse/tex-index-bounds` (both the 24 > 20 range case and the 64-bit overflow case) |
+| 3 | `rec.index_size != index_bytes` disabled (`parse.c:380`) | KILLED | `v2-parse/tex-index-size` (format 2 with a 4-byte index; format 5 with index size 4) |
+| 4 | `palette_size == 0 && palette_offset != 0` check removed (`parse.c:386`) | KILLED | `v2-parse/tex-palette-offset` (format 7, offset 4, PLDT cushion) |
+| 5 | `txds_size % 40` gate removed (`parse.c:333`) | KILLED | `v2-parse/tex-record-size` (44- and 48-byte payloads: one valid record plus trailing bytes) |
+
+The record-size test also documents that a **39-byte** TXDS payload can never
+reach `validate_tex`: the chunk payload `% 4` gate runs first (docs section 8,
+step 8), so 39 bytes yields `ERR_CHUNK_ALIGN`. The `% 40` mutant is therefore
+killed by the 44/48-byte payloads, not by 39.
+
+The known-equivalent mutant at `parse.c:383` (`texel_size == 0 &&
+texel_offset != 0`) was left alone: `texel_size` is never 0 for formats 1..7,
+so no test-only input can distinguish it.
+
+A byte-exact format-5 golden (264 bytes, 0x108, chunk count 5) was added to both
+texture test files. It was derived by running the writer in a scratch build
+under `/tmp/opencode/fmt5/` and checked field by field against docs section
+7.1 / section 8; the two literals are byte-identical.
+
 ## Verification
 
 - `make test` (host suite plus Python suite): green.
 - `./tests/host/build/test_v2_parse`, `./tests/host/build/test_v2_write`:
   green after the test updates.
-- Mutation builds: `/tmp/opencode/mutants/run_mutants.py`, results above.
+- Mutation builds: `/tmp/opencode/mutants/run_mutants.py` (round 1) and
+  `/tmp/opencode/mutants2/run_mutants.py` (round 2), results above.
 
 ## Notes and residual risk
 
@@ -88,5 +119,4 @@ the files listed below.
   parser error.
 - `tools/twlhd_v2_dump.py` remains deliberately unaware of TXDS/TXDT/PLDT
   (section 9 divergence); not touched.
-- `report.md` is at the repository root as the contract specified; if the
-  pipeline expects another path, only the location changes.
+- This report lives at `docs/reports/5b2a-mutation-report.md`.
