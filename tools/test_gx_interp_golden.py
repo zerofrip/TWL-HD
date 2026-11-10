@@ -839,6 +839,30 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertAlmostEqual(tex[0]["s"], 2.125, places=6)
         self.assertAlmostEqual(tex[0]["t"], 2.0, places=6)
 
+    def test_tex_matrix_store_restore_mode3_roundtrip(self):
+        # Mode-3 STORE 5 / RESTORE 7 ignore the index (gfx3d.cpp:950-1000), so
+        # the reloaded identity is replaced by the stored matrix again:
+        # (8192*16 + 8192) >> 12 / 16 = 2.125, t = (4096*32) >> 12 / 16 = 2.0.
+        entries = [(CMD_MTX_MODE, 3)]
+        for value in (8192, 4096, 4096):
+            entries.append((CMD_MTX_SCALE, value))
+        for value in (4096, 0, 0):
+            entries.append((CMD_MTX_TRANS, value))
+        _add_store(entries, 5)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 7)
+        _add_tex_coord(entries, 16, 32)
+        _add_teximage(entries, 0x40000000)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(*xy))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual(len(tex), 3)
+        for index in range(3):
+            self.assertAlmostEqual(tex[index]["s"], 2.125, places=6)
+            self.assertAlmostEqual(tex[index]["t"], 2.0, places=6)
+
     def _tex_mode1_stream(self, matrix):
         entries = [(CMD_MTX_MODE, 3)]
         _add_load_4x4(entries, matrix)
@@ -1087,13 +1111,13 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertEqual(plain, tex_vertices)
 
     def test_light_store_restore_mode3_leaves_vec(self):
-        # Mode-3 STORE/RESTORE use the texture stack (slot 0 only): vec stays
-        # rot_y45 (21).
+        # Mode-3 STORE/RESTORE ignore the index and use the texture stack's
+        # single slot (gfx3d.cpp:950-1000): vec stays rot_y45 (21).
         entries = _vec_light_prefix(2)
         _add_load_4x4(entries, _rot_y(45))
         entries.append((CMD_MTX_MODE, 3))
-        _add_store(entries, 0)
-        _add_restore(entries, 0)
+        _add_store(entries, 2)
+        _add_restore(entries, 2)
         entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
         _, expected = self._assert_lighting(entries)
         self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))

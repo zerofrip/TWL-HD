@@ -3711,8 +3711,8 @@ static void test_light_store_restore_mode0_leaves_vec(void) {
     check_lit_rgb(21, 21, 21);
 }
 
-/* Mode-3 STORE/RESTORE touch the texture stack (slot 0 only): vec stays
- * rot_y45 (21). */
+/* Mode-3 STORE/RESTORE touch the texture stack: the index is ignored, slot 0
+ * is always used (gfx3d.cpp:950-1000), so vec stays rot_y45 (21). */
 static void test_light_store_restore_mode3_leaves_vec(void) {
     uint32_t n = 0u;
 
@@ -3724,8 +3724,8 @@ static void test_light_store_restore_mode3_leaves_vec(void) {
               light_vector_word(0, 0, -4096, 0));
     add_load_4x4(&n, g_rot_y45);
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
-    add_store(&n, 0u);
-    add_restore(&n, 0u);
+    add_store(&n, 2u);
+    add_restore(&n, 2u);
     add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
     run_view(n);
     check_lit_rgb(21, 21, 21);
@@ -4155,7 +4155,10 @@ static void test_tex_matrix_stack_ops(void) {
 static void test_tex_matrix_stack_errors(void) {
     uint32_t n;
 
-    /* PUSH twice: the texture stack holds one entry. */
+    /* PUSH twice: the texture stack holds one entry. DeSmuME sets
+     * gxstat.se on the second texture PUSH (gfx3d.cpp:861-871, the texture
+     * branch mirrors the projection one); this interpreter reports the same
+     * case as ERR_STACK and aborts the frame. */
     n = 0u;
     clear_state();
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
@@ -4164,7 +4167,8 @@ static void test_tex_matrix_stack_errors(void) {
     CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_ERR_STACK);
     CHECK_EQ_INT(g_st.stack_errors, 1u);
 
-    /* POP with an empty texture stack. */
+    /* POP with an empty texture stack: the toggle wraps and DeSmuME sets
+     * gxstat.se (gfx3d.cpp:918-929); ours is ERR_STACK. */
     n = 0u;
     clear_state();
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
@@ -4172,20 +4176,59 @@ static void test_tex_matrix_stack_errors(void) {
     CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_ERR_STACK);
     CHECK_EQ_INT(g_st.stack_errors, 1u);
 
-    /* STORE/RESTORE only accept slot 0 (capacity 1). */
+    /* STORE/RESTORE in texture mode ignore the index and always use slot 0
+     * with no error (gfx3d.cpp:950-1000). */
     n = 0u;
     clear_state();
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
     add_store(&n, 1u);
-    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_ERR_STACK);
-    CHECK_EQ_INT(g_st.stack_errors, 1u);
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
 
     n = 0u;
     clear_state();
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
     add_restore(&n, 1u);
-    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_ERR_STACK);
-    CHECK_EQ_INT(g_st.stack_errors, 1u);
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+}
+
+/* Mode-3 STORE 5 / matrix reload / RESTORE 7: the index is ignored, so the
+ * restore brings back the stored scale(8192,4096,4096)+TRANS(4096) matrix.
+ * Hand check: m0=8192, m12=8192; (8192*16 + 8192) >> 12 = 34 -> 2.125,
+ * t = (4096*32) >> 12 = 32 -> 2.0. Identity would give 1.0/2.0. */
+static void test_tex_matrix_store_restore_mode3_roundtrip(void) {
+    static const uint32_t identity[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_scale(&n, 8192u, 4096u, 4096u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_store(&n, 5u);
+    add_load_4x4(&n, identity);
+    add_restore(&n, 7u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 2.125, 2.0, 0x40000000u, 0u);
+    }
 }
 
 /* Mode 1 exact DeSmuME formula (gfx3d.cpp:1578-1593): raw s1.11.4 inputs,
@@ -4805,6 +4848,8 @@ int main(void) {
     test_report("gx_interp/tex-matrix-stack-ops");
     test_tex_matrix_stack_errors();
     test_report("gx_interp/tex-matrix-stack-errors");
+    test_tex_matrix_store_restore_mode3_roundtrip();
+    test_report("gx_interp/tex-matrix-store-restore-mode3-roundtrip");
     test_tex_mode1_identity();
     test_report("gx_interp/tex-mode1-identity");
     test_tex_mode1_translation();

@@ -232,3 +232,75 @@ test files carry no mutant-note section, so this note lives here only.
   worktree).
 - `git status` shows no change under `common/`; only the two test files and
   this report changed.
+
+## Repair round 3 (2026-11-11): mode-3 STORE/RESTORE index semantics
+
+The mode-3 (texture) matrix STACK commands treated the STORE/RESTORE index as
+a slot: `stack_store()`/`stack_restore()` only had the "index ignored, slot 0"
+shortcut for mode 0, so in mode 3 any index >= 1 counted a stack error and
+aborted the frame. DeSmuME ignores the parameter for both projection and
+texture modes and copies `_mtxStackTexture[0]` with no error
+(`desmume/src/gfx3d.cpp:950-1000`, verified in the checkout):
+
+- `MatrixStore` texture branch `:955-967` — `MatrixCopy(_mtxStackTexture[0],
+  _mtxCurrent[MATRIXMODE_TEXTURE])` at `:965`, no `gxstat.se`.
+- `MatrixRestore` texture branch `:986-999` — `MatrixCopy(_mtxCurrent[...],
+  _mtxStackTexture[0])` at `:996`, no `gxstat.se`.
+- The one-entry texture stack: `MatrixInit(_mtxStackTexture[0])` `:532`
+  (no other texture stack entry is initialised).
+- Texture PUSH `:860-871` and POP `:918-929` already had the "projection or
+  texture" shortcut; DeSmuME sets `gxstat.se` on the second PUSH and on a POP
+  of the empty one-entry stack but keeps running. This interpreter keeps its
+  pre-existing stricter behaviour (count a stack error, return `ERR_STACK`);
+  the retained `tex-matrix-stack-errors` PUSH/POP cases carry line-cited
+  comments for that.
+
+The guard in both functions now reads `g->mode == 0u || g->mode == 3u`. The
+round-2 defect-hiding change (STORE/RESTORE index 2 -> 0 in
+`light-store-restore-mode3-leaves-vec`, C and golden) was reverted to index 2;
+RGB 21 still holds. New cases: mode-3 STORE 1 / RESTORE 1 are now OK with
+`stack_errors == 0`, and `tex-matrix-store-restore-mode3-roundtrip` stores with
+index 5, reloads identity, restores with index 7 and asserts `s = 2.125`
+(identity would give 1.0).
+
+### Method
+
+Every mutant is a scratch copy of `common/twlhd_gx_interp.c` under
+`/tmp/opencode/mutants5b2b-r3/` (outside the worktree), compiled with the host
+flags (`-std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host
+-Itools/azahar_host -fsanitize=address,undefined`) against the **unmodified**
+`tests/host/test_gx_interp.c` and the unmodified parser/writer/record sources,
+then run. The unmutated baseline copy passes all **148** C tests (was 147).
+Each mutant CLI was also built from the same mutated source and the three
+relevant golden tests were run against it (`test_light_store_restore_mode3_
+leaves_vec`, `test_tex_matrix_store_restore_mode3_roundtrip`,
+`test_tex_matrix_stack_ops`); the unmutated baseline CLI passes all three.
+
+### Results
+
+| # | Mutant | C suite | Golden | Result | Killing test(s) |
+|---:|---|---|---|---|---|
+| a | `stack_store` guard back to `g->mode == 0u` (original defect) | 3 tests fail | 2 fail | KILLED | `light-store-restore-mode3-leaves-vec`, `tex-matrix-stack-errors`, `tex-matrix-store-restore-mode3-roundtrip` |
+| b | `stack_restore` guard back to `g->mode == 0u` | 3 tests fail | 2 fail | KILLED | same three |
+| c | mode 3 uses the index as slot (`s->stack[index]`) in both | 1 test fails | 1 fails | KILLED | `tex-matrix-store-restore-mode3-roundtrip` (RESTORE 7 reads the zero-initialised slot 7, so `s = 0.0`) |
+| d | mode-3 RESTORE is a no-op | 2 tests fail | 2 fail | KILLED | `tex-matrix-stack-ops`, `tex-matrix-store-restore-mode3-roundtrip` |
+| e | mode-3 STORE is a no-op | 2 tests fail | 2 fail | KILLED | `tex-matrix-stack-ops`, `tex-matrix-store-restore-mode3-roundtrip` (slot 0 stays zero, `s = 0.0`) |
+| f | mode-3 STORE/RESTORE set `ERR_STACK` for `index >= 1` | 3 tests fail | 2 fail | KILLED | `light-store-restore-mode3-leaves-vec`, `tex-matrix-stack-errors`, `tex-matrix-store-restore-mode3-roundtrip` |
+
+No NO-OP or EQUIVALENT verdict was needed: every mutant changes an observable
+result (`ERR_STACK`/`stack_errors`, or the restored matrix seen through the
+mode-1 `tex_out` value).
+
+### Supersession of the round-1 sanctioned update
+
+Round-1 "Sanctioned existing-test updates" items 4 and 5 (the
+`light-store-restore-mode3-leaves-vec` STORE/RESTORE index 2 -> 0 change in the
+C test and the golden stream) documented a change that was itself the defect:
+index 2 is valid DeSmuME behaviour because the index is ignored in mode 3. Both
+items are superseded by this round (the fixtures are back at index 2); the
+round-1 text is kept above for history.
+
+### Artifacts
+
+- Scratch sources, binaries and logs: `/tmp/opencode/mutants5b2b-r3/` (outside
+  the worktree).
