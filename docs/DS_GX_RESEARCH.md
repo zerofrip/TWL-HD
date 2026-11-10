@@ -330,7 +330,15 @@ s1.11.4. The setter latches `_texCoord16` and raises
 mode even when the flag is clear (`gfx3d.cpp:1579-1580`). Modes come from
 `TexCoordTransformMode` (`gfx3d.h:124-129`):
 - 0 none: `s = texCoord.s`, `t = texCoord.t` (raw latch passed on).
-- 1 texcoord source: texture-matrix rows 0/1 x (s,t) + translation, `>> 12`.
+- 1 texcoord source (`gfx3d.cpp:1578-1593`):
+  `s' = (s32)(((s64)Mul32x16(mtx[0], s) + (s64)Mul32x16(mtx[4], t) +
+  (s64)mtx[8] + (s64)mtx[12]) >> 12)`, and the same with rows
+  `mtx[1]/[5]/[9]/[13]` for `t'`; `s/t` are the raw sign-extended s1.11.4
+  values (no promotion), the m8/m9 and m12/m13 terms are raw 20.12 addends,
+  the sum is 64-bit, the shift is arithmetic `>>12`, the result is cast to
+  s32 and converted to floats by `/16.0f` (same units as mode 0). A 20.12
+  translation of 4096 therefore moves **+1 raw s1.11.4 unit = 1/16 texel**,
+  not 1 texture unit.
 - 2 normal source: rows 0/1 x (nx,ny,nz) + (s<<24, t<<24), `>> 24`.
 - 3 vertex source: rows 0/1 x (vx,vy,vz) + (s<<24, t<<24), `>> 24`.
 
@@ -354,14 +362,17 @@ EMULATOR or HARDWARE verification:
 - **READ:** TEX_COORD is two packed s16 (S low, T high), s1.11.4 -> float
   value/16.0. Format 0 (no texture / TEXIMAGE_PARAM 0) still receives an
   entry, with `teximage_param == 0`; the consumer decides.
-- **READ (per `gfx3d.cpp:1579-1611` as recorded above; the external checkout
-  was not available in the implementation sandbox, so the exact integer steps
-  are UNVERIFIED against source):** mode 1 applies texture-matrix rows 0/1 to
-  the latched coordinate promoted to 20.12 (`s20 = s16 << 8`):
-  `s' = (m[0]*s20 + m[4]*t20 + m[12]*4096) >> 12`,
-  `t' = (m[1]*s20 + m[5]*t20 + m[13]*4096) >> 12`, output floats `s'/4096`
-  and `t'/4096`. Column-major `m[col*4+row]`; a 20.12 translation of 4096 is
-  1.0 texture unit.
+- **VERIFIED (formula against DeSmuME `desmume/src/gfx3d.cpp:1578-1593`;
+  host tests only, not hardware):** mode 1 applies texture-matrix rows 0/1 to
+  the **raw** latched s1.11.4 coordinate (no `<<8` promotion):
+  `s' = (s32)(((s64)Mul32x16(m[0], s) + (s64)Mul32x16(m[4], t) +
+  (s64)m[8] + (s64)m[12]) >> 12)`, and the same with
+  `m[1]/m[5]/m[9]/m[13]` for `t'`. The m8/m9 and m12/m13 addends are raw
+  20.12 words (no FX_ONE multiply), the sum is 64-bit, the shift is
+  arithmetic, the result wraps to int32 and the output floats are
+  `value / 16.0f` (same units as mode 0). Column-major `m[col*4+row]`.
+  A 20.12 translation of 4096 is +1 raw s1.11.4 unit = 1/16 texel, **not**
+  1.0 texture unit (earlier text here was wrong; repair round 1).
 - **IMPLEMENTED (BUILD/UNIT):** MTX_MODE 3 now has its own 20.12 texture
   matrix and a **one-entry** stack (the task contract records DeSmuME's
   `MatrixStack(1,"texture")`; not re-checked in source here). LOAD_4x4/4x3,

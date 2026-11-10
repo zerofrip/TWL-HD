@@ -762,8 +762,10 @@ class GxInterpGoldenTest(unittest.TestCase):
                 self.assertEqual(item["param"], param)
                 self.assertEqual(item["pltt"], 0x5678)
         self.assertEqual(results[0x00001234], (1.0, 2.0))
-        self.assertAlmostEqual(results[0x40001234][0], 3.0, places=6)
-        self.assertAlmostEqual(results[0x40001234][1], 0.75, places=6)
+        # Adapted 34 -> 33 and 48 -> 15: mode 1 is now
+        # (m0*s + m4*t + m8 + m12) >> 12 / 16, with the raw m12 addend.
+        self.assertAlmostEqual(results[0x40001234][0], 2.0625, places=6)
+        self.assertAlmostEqual(results[0x40001234][1], 0.9375, places=6)
 
     def test_tex_modes_2_3_raw_and_counter(self):
         for mode in (2, 3):
@@ -832,8 +834,110 @@ class GxInterpGoldenTest(unittest.TestCase):
             entries.extend(_vtx16(*xy))
         entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
         tex, _, _ = self._assert_texture(entries)
-        self.assertAlmostEqual(tex[0]["s"], 4.0, places=6)
+        # Adapted 4.0 -> 2.125: the raw m12 addend is 8192, so
+        # (8192*16 + 8192) >> 12 / 16 = 34/16.
+        self.assertAlmostEqual(tex[0]["s"], 2.125, places=6)
         self.assertAlmostEqual(tex[0]["t"], 2.0, places=6)
+
+    def _tex_mode1_stream(self, matrix):
+        entries = [(CMD_MTX_MODE, 3)]
+        _add_load_4x4(entries, matrix)
+        _add_teximage(entries, 0x40000000)
+        return entries
+
+    def test_tex_mode1_identity(self):
+        entries = self._tex_mode1_stream(_diag(4096, 4096, 4096))
+        _tex_triangle(entries, [(16, -32), (0x7FFF, -0x8000), (0, 0)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (1.0, -2.0))
+        # 0x7FFF / 16 and -0x8000 / 16 are exact s1.11.4 conversions.
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (2047.9375, -2048.0))
+
+    def test_tex_mode1_translation(self):
+        # m12=4096 is +1 raw s1.11.4 unit = 1/16 texel, not 1 texel.
+        matrix = _diag(4096, 4096, 4096)
+        matrix[12] = 4096
+        matrix[13] = -4096
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(0, 0), (16, 16), (16, 16)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (0.0625, -0.0625))
+        # Hand check: (4096*16 + 4096) >> 12 = 17 -> 17/16 = 1.0625;
+        # (4096*16 - 4096) >> 12 = 15 -> 0.9375.
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (1.0625, 0.9375))
+
+    def test_tex_mode1_m8_m9(self):
+        matrix = [0] * 16
+        matrix[8] = 8192
+        matrix[9] = -6144
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(16, 32), (16, 32), (16, 32)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # Hand check: 8192 >> 12 = 2 -> 0.125; -6144 >> 12 = -2 -> -0.125.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (0.125, -0.125))
+
+    def test_tex_mode1_scale(self):
+        matrix = _diag(8192, 2048, 4096)
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(16, 32), (16, 32), (16, 32)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (2.0, 1.0))
+
+    def test_tex_mode1_shear(self):
+        matrix = _diag(4096, 4096, 4096)
+        matrix[4] = 2048
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(32, 16), (32, 16), (32, 16)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # Hand check: s = (4096*32 + 2048*16) >> 12 = 163840 >> 12 = 40.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (2.5, 1.0))
+
+    def test_tex_mode1_negative_rotation(self):
+        matrix = [0] * 16
+        matrix[1] = 4096
+        matrix[4] = -4096
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(-16, -32), (-16, -32), (-16, -32)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # Hand check: s = (-4096*-32) >> 12 = 32 -> 2.0;
+        # t = (4096*-16) >> 12 = -16 -> -1.0.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (2.0, -1.0))
+
+    def test_tex_mode1_negative_sum_floor_shift(self):
+        matrix = _diag(4096, 4096, 4096)
+        matrix[12] = 2048
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(-16, 0), (-16, 0), (-16, 0)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # Hand check: (-65536 + 2048) = -63488; arithmetic >> 12 floors to
+        # -16 -> -1.0 (truncation would give -15 -> -0.9375).
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (-1.0, 0.0))
+
+    def test_tex_mode1_64bit_headroom(self):
+        matrix = _diag(0x00100000, 4096, 4096)
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(0x7FFF, 0), (0x7FFF, 0), (0x7FFF, 0)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # 2^20 * 0x7FFF = 34358689792 > 2^32; >> 12 = 8388352 -> 524272.0.
+        self.assertEqual(tex[0]["s"], 524272.0)
+
+    def test_tex_mode1_s32_wrap_extreme(self):
+        matrix = _diag(0x7FFFFFFF, 4096, 4096)
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(0x7FFF, 0), (0x7FFF, 0), (0x7FFF, 0)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # (0x7FFFFFFF * 0x7FFF) >> 12 = 17179344888; the (s32) cast wraps to
+        # -524296 -> -32768.5 (exact in float32).
+        self.assertEqual(tex[0]["s"], -32768.5)
 
     def test_tex_matrix_load_4x3_and_mult_3x3(self):
         load_4x3 = [8192, 0, 0,

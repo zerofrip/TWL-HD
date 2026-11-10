@@ -77,3 +77,77 @@ integer steps and the one-entry texture stack follow the task contract and the
 research document and are marked READ/UNVERIFIED against the checkout in
 `docs/DS_GX_RESEARCH.md`; the oracle, C literals and golden streams share that
 stated formula.
+
+## Repair round 1 (2026-11-10): exact mode-1 formula
+
+The 5B-2b mode-1 transform was wrong: it promoted s/t with `<<8`, scaled the
+translation by `FX_ONE`, omitted the `m8`/`m9` addends and divided by 4096.
+Repair round 1 rewrites it to the formula quoted for DeSmuME
+`desmume/src/gfx3d.cpp:1578-1593`:
+`s' = (s32)(((s64)m[0]*s + (s64)m[4]*t + (s64)m[8] + (s64)m[12]) >> 12)`
+(and the same with `m[1]/m[5]/m[9]/m[13]` for `t'`), with the raw
+sign-extended s1.11.4 latches, raw 20.12 addends, 64-bit sums, arithmetic
+`>>12`, an `(int32_t)` cast and `/16.0f` floats. The independent Python oracle
+was rewritten to match (Python integers plus an explicit `s32()` wrap).
+
+### Method
+
+As before: every mutant is a scratch copy of `common/twlhd_gx_interp.c` under
+`/tmp/opencode/mutants5b2b-r1/` (outside the worktree), compiled with the same
+`HOST_CFLAGS` (`-std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host
+-Itools/azahar_host -fsanitize=address,undefined`) against the unmodified
+`tests/host/test_gx_interp.c` and unmodified parser/writer/record sources.
+The unmutated baseline passes all 142 tests; a mutant is **KILLED** when the
+binary exits non-zero and the failing `gx_interp/...` labels are recorded.
+The golden CLI was not rebuilt per mutant; the C suite asserts the same
+fields with the same oracle-derived literals, and the unmutated oracle/CLI
+cross-check passes in `make test`.
+
+### Results
+
+| # | Mutant | Result | Killing test(s) |
+|---:|---|---|---|
+| 1 | drop the `m[8]`/`m[9]` addends | KILLED | `tex-mode1-m8-m9` |
+| 2 | drop the `m[12]`/`m[13]` addends | KILLED | `tex-mode1-translation`, `tex-mode0-vs-mode1`, `tex-matrix-stack-ops` |
+| 3 | translation `* 16` | KILLED | `tex-mode1-translation`, `tex-mode0-vs-mode1`, `tex-matrix-stack-ops`, `tex-mode1-negative-sum-floor-shift` |
+| 4 | translation `* 4096` | KILLED | same as #3 |
+| 5 | promote `s,t` with `<< 8` again | KILLED | `tex-mode1-identity`, `tex-mode1-scale`, `tex-mode1-shear`, `texture-mode-loads-matrix`, ... |
+| 6 | `>> 11` instead of `>> 12` | KILLED | `tex-mode1-identity`, `tex-mode1-translation`, `texture-mode-loads-matrix`, ... |
+| 7 | `>> 13` instead of `>> 12` | KILLED | same as #6 |
+| 8 | logical shift on negative sums (`(uint64_t)` cast) | EQUIVALENT | no test fails; see below |
+| 9 | 32-bit accumulation (`uint32_t` row sums) | KILLED | `tex-mode1-64bit-headroom`, `tex-mode1-s32-wrap-extreme`, `tex-mode1-identity`, ... |
+| 10 | swap `m[0]`/`m[1]` | KILLED | `tex-mode1-shear`, `tex-mode1-identity`, `texture-mode-loads-matrix`, ... |
+| 11 | swap `m[4]`/`m[5]` | KILLED | `tex-mode1-shear`, `tex-mode1-negative-rotation`, ... |
+| 12 | swap `m[8]`/`m[9]` | KILLED | `tex-mode1-m8-m9` |
+| 13 | swap `m[12]`/`m[13]` | KILLED | `tex-mode1-translation`, `tex-mode0-vs-mode1`, `tex-matrix-stack-ops` |
+| 14 | use `m[2]/m[6]/m[10]/m[14]` (and `m[3]/m[7]/m[11]/m[15]` for t) | KILLED | `tex-mode1-identity`, `tex-mode1-translation`, `texture-mode-loads-matrix`, ... |
+| 15 | `/4096.0f` instead of `/16.0f` in mode 1 | KILLED | `tex-mode1-identity`, `tex-mode0-vs-mode1`, `tex-matrix-stack-ops`, ... |
+| 16 | s/t swapped in mode 1 only | KILLED | `tex-mode1-shear`, `tex-mode1-negative-rotation`, `tex-mode1-identity`, ... |
+
+**Equivalence argument for #8:** for a negative `int64_t` sum `s`, a 64-bit
+logical shift gives `((uint64_t)s) >> 12 == (s >> 12) + 2^52`, because
+`2^64` is a multiple of `2^12`. The code then casts the shifted value to
+`int32_t`, and `2^52` is a multiple of `2^32`, so the low 32 bits and hence
+the final `int32_t` result are identical to the arithmetic shift. The mutant
+is therefore equivalent **only** because of the mandated `(int32_t)` cast; it
+would be killed without it.
+
+### Sanctioned existing-literal updates
+
+Only two existing tests encoded the old wrong formula. No test was deleted,
+skipped or weakened; mode 0 and all non-texture assertions are unchanged:
+
+1. `gx_interp/tex-mode0-vs-mode1` (mode-1 half only): `3.0/0.75` ->
+   `2.0625/0.9375`. Hand check: `(8192*16 + 4096) >> 12 = 33 -> 2.0625`;
+   `(2048*32 - 1024) >> 12 = 15 -> 0.9375`. The old values came from
+   `m12*4096` and `/4096`. The same literals are adapted in
+   `tools/test_gx_interp_golden.py`.
+2. `gx_interp/tex-matrix-stack-ops`: `4.0` -> `2.125` (t stays 2.0). The
+   scale(8192)+TRANS(4096) matrix folds to `m0=8192, m12=8192`, so
+   `(8192*16 + 8192) >> 12 = 34 -> 2.125`. Same change in the golden stream.
+
+All other pre-existing texture tests keep their literals: their s/t-row terms
+are numerically identical under both formulas (`m*(s<<8)>>12/4096 ==
+m*s>>12/16`), and they carry no `m8/m9` term; only translation (16x) and the
+missing addends changed. Verified by running the unchanged suite: 142/142
+pass on the baseline.
