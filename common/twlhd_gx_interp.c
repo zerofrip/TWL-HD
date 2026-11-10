@@ -693,12 +693,13 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
  * Texture state for the vertex about to be emitted.
  *
  * TEX_COORD is applied at VTX time (DeSmuME AddCurrentVertexToList,
- * gfx3d.cpp:1579-1611 as described in docs/DS_GX_RESEARCH.md). Mode 1 is the
- * texture-matrix rows 0/1: the s1.11.4 latches are promoted to 20.12
- * (<< 8), the 20.12 rows are applied with a 64-bit accumulator, the result is
- * shifted down by 12 and converted to texture units (/4096). Modes 2 and 3
- * are not implemented: raw latched coordinates are emitted and the vertex is
- * counted in tex_transform_unsupported (per VTX command).
+ * gfx3d.cpp:1578-1593 as described in docs/DS_GX_RESEARCH.md). Mode 1 is the
+ * texture-matrix rows 0/1 applied to the RAW sign-extended s1.11.4 latches:
+ * the m[8]/m[9] and m[12]/m[13] addends are used as-is (no FX_ONE scaling),
+ * the 64-bit sum is arithmetic-shifted down by 12, cast to int32 and converted
+ * to texture units (/16.0). Modes 2 and 3 are not implemented: raw latched
+ * coordinates are emitted and the vertex is counted in
+ * tex_transform_unsupported (per VTX command).
  */
 static TwlhdGxTexVertex compute_tex_vertex(GxInterp *g) {
     TwlhdGxTexVertex tv;
@@ -708,16 +709,20 @@ static TwlhdGxTexVertex compute_tex_vertex(GxInterp *g) {
     tv.pltt_base = g->pltt_base;
 
     if (tmode == 1u) {
-        int64_t s20 = (int64_t)g->tex_s << 8;
-        int64_t t20 = (int64_t)g->tex_t << 8;
-        int64_t s_out = ((int64_t)g->tex.m[0] * s20 +
-                         (int64_t)g->tex.m[4] * t20 +
-                         (int64_t)g->tex.m[12] * FX_ONE) >> FX_SHIFT;
-        int64_t t_out = ((int64_t)g->tex.m[1] * s20 +
-                         (int64_t)g->tex.m[5] * t20 +
-                         (int64_t)g->tex.m[13] * FX_ONE) >> FX_SHIFT;
-        tv.s = (float)s_out / 4096.0f;
-        tv.t = (float)t_out / 4096.0f;
+        /* DeSmuME gfx3d.cpp:1578-1593 (TexCoordTransformMode 1). Row 0/1 of
+         * the 20.12 texture matrix (column-major m[col*4+row], so row 0 =
+         * m[0,4,8,12]) times the RAW sign-extended s1.11.4 coords (no <<8
+         * promotion), plus the raw m[8]/m[9] and m[12]/m[13] terms (no
+         * FX_ONE multiplier), summed in 64 bits, arithmetic >>12, cast to
+         * int32, then /16.0f like mode 0. */
+        int64_t s_acc = (int64_t)g->tex.m[0] * g->tex_s +
+                        (int64_t)g->tex.m[4] * g->tex_t +
+                        (int64_t)g->tex.m[8] + (int64_t)g->tex.m[12];
+        int64_t t_acc = (int64_t)g->tex.m[1] * g->tex_s +
+                        (int64_t)g->tex.m[5] * g->tex_t +
+                        (int64_t)g->tex.m[9] + (int64_t)g->tex.m[13];
+        tv.s = (float)(int32_t)(s_acc >> FX_SHIFT) / 16.0f;
+        tv.t = (float)(int32_t)(t_acc >> FX_SHIFT) / 16.0f;
         return tv;
     }
 

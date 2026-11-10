@@ -584,9 +584,11 @@ class LightingOracle:
 # stack, and mirrors the C primitive assembly so tex_out[i] describes out[i].
 #
 # UNVERIFIED against the DeSmuME checkout: it is not present in this sandbox.
-# The transform steps follow the research doc and the task contract:
+# The transform steps follow the research doc and DeSmuME gfx3d.cpp:1578-1593:
 #   mode 0: raw s1.11.4 latch -> /16.0
-#   mode 1: rows 0/1 x (s<<8, t<<8) + m12*4096, >>12, /4096
+#   mode 1: (m0*s + m4*t + m8 + m12) >> 12, /16.0, with the RAW sign-extended
+#           s1.11.4 s/t and the raw m8/m9/m12/m13 addends (no promotion, no
+#           FX_ONE scaling); the >>12 result is wrapped to int32 like (s32).
 #   modes 2/3: raw s,t plus a per-VTX unsupported counter
 # ---------------------------------------------------------------------------
 
@@ -664,14 +666,14 @@ class TextureOracle:
         if tmode >= 2:
             self.unsupported += 1
         if tmode == 1:
-            matrix = self.tex
-            s20 = self.tex_s << 8
-            t20 = self.tex_t << 8
-            s_out = (matrix[0] * s20 + matrix[4] * t20 +
-                     matrix[12] * FX_ONE) >> 12
-            t_out = (matrix[1] * s20 + matrix[5] * t20 +
-                     matrix[13] * FX_ONE) >> 12
-            return (s_out / 4096.0, t_out / 4096.0,
+            m = self.tex
+            # Python >> on negative ints is already an arithmetic (floor)
+            # shift; s32() reproduces the C (int32_t) wrap of extreme sums.
+            s_out = s32((m[0] * self.tex_s + m[4] * self.tex_t +
+                         m[8] + m[12]) >> 12)
+            t_out = s32((m[1] * self.tex_s + m[5] * self.tex_t +
+                         m[9] + m[13]) >> 12)
+            return (s_out / 16.0, t_out / 16.0,
                     self.teximage_param, self.pltt_base)
         return (self.tex_s / 16.0, self.tex_t / 16.0,
                 self.teximage_param, self.pltt_base)

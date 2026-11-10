@@ -222,8 +222,10 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   (LOAD/MULT/IDENTITY/SCALE/TRANS/PUSH/POP/STORE/RESTORE). The lighting vector
   matrix is untouched by mode 3.
 - Transform: mode 0 = raw s1.11.4 (/16.0); mode 1 = texture-matrix rows 0/1
-  with translation and `>>12` (see `docs/DS_GX_RESEARCH.md`). Modes 2/3 are
-  **not implemented**: raw coordinates plus
+  applied to the raw s1.11.4 coordinate with raw m8/m9 and m12/m13 addends,
+  64-bit sum, arithmetic `>>12`, `(int32_t)` cast and `/16.0` floats, exactly
+  `desmume/src/gfx3d.cpp:1578-1593` (see `docs/DS_GX_RESEARCH.md`). Modes 2/3
+  are **not implemented**: raw coordinates plus
   `TwlhdGxStats.tex_transform_unsupported` (new, appended field), counted per
   VTX command.
 - Tests: C unit tests in `tests/host/test_gx_interp.c` (latch order, sign
@@ -241,6 +243,18 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   is applied to the matching golden stream.
 - Not done: recorder-side texture capture; sampling/TexEnv; PICA upload; the
   vertex stride change; modes 2/3.
+
+- Repair round 1 (2026-11-10): mode 1 was 16x wrong for translation and
+  missing the m8/m9 terms. Rewritten to the exact DeSmuME
+  `desmume/src/gfx3d.cpp:1578-1593` formula (raw s1.11.4 inputs, raw
+  m8/m9/m12/m13 addends, 64-bit sum, arithmetic `>>12`, `(int32_t)` cast,
+  `/16.0f`). Oracle and golden streams updated; new literal cases cover
+  identity, translation, m8/m9, scale, shear, negative-rotation, negative-sum
+  floor shift, 64-bit headroom and the s32 wrap. Only two existing literals
+  were adapted (`test_tex_mode0_vs_mode1` mode-1 half 3.0/0.75 ->
+  2.0625/0.9375; `test_tex_matrix_stack_ops` 4.0 -> 2.125), both because they
+  encoded the old `m12*4096`/`/4096` formula. Non-texture and mode-0
+  behaviour is unchanged.
 
 ## 4. Where the DS GX equations must come from
 
