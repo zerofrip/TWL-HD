@@ -1079,6 +1079,154 @@ static void test_tex_limits(void) {
     CHECK_EQ_INT(view.pldt_size, TWLHD_V2_PLDT_MAX_BYTES);
 }
 
+/* Mutant guard: the second reserved field (record offset 36) must be zero. */
+static void test_tex_reserved1(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    put_le32(g_txds + 36, 1u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+    put_le32(g_txds + 36, 0u);
+}
+
+/* Mutant guard: both index offset/size bounds are checked, in 64-bit. */
+static void test_tex_index_bounds(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Index end 24 exceeds TXDT 20; the texel range 0..16 still fits. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 20u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+
+    /* 64-bit sum overflow on the index pair. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 0xFFFFFFF8u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+}
+
+/* Mutant guard: index_size must equal the format's required size. */
+static void test_tex_index_size(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Format 2 has no index block; a 4-byte index must be rejected. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 4u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* Format 5's 8x8 index block is 8 bytes, so 4 must be rejected. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 4u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 20u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+}
+
+/* Mutant guard: palette_offset must be zero when palette_size is zero. */
+static void test_tex_palette_offset(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Format 7 has no palette, so offset 4 with size 0 is rejected. */
+    put_tex_record(0, 7u << 26, 0u, 0u, 128u, 4u, 0u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 128u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+}
+
+/* Mutant guard: TXDS payload must be a multiple of the 40-byte record. */
+static void test_tex_record_size(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+
+    /* One valid record plus 8 trailing bytes. */
+    size = build_tex_default(g_txds, 48u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /* One valid record plus 4 trailing bytes. */
+    size = build_tex_default(g_txds, 44u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /*
+     * 39 is rejected earlier by the chunk-alignment gate (docs section 8,
+     * step 8) and can never reach the TXDS record-size check.
+     */
+    size = build_tex_default(g_txds, 39u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_CHUNK_ALIGN);
+}
+
+/*
+ * Byte-exact format-5 file, mirrored byte for byte in
+ * tests/host/test_v2_write.c: one 8x8 4x4 record with a 16-byte texel
+ * block, an 8-byte index block and an 8-byte palette window, no RSTA.
+ */
+static const uint8_t g_fmt5_golden[264] = {
+    0x02, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+    0x08, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x47, 0x58, 0x43, 0x4D, 0x40, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x40, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x20, 0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00,
+    0x23, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+    0x23, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+    0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x4D, 0x45, 0x54, 0x41, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x54, 0x58, 0x44, 0x53, 0x28, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x10, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x54, 0x58, 0x44, 0x54, 0x18, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x40, 0x51, 0x62, 0x73, 0x84, 0x95, 0xA6, 0xB7,
+    0x50, 0x4C, 0x44, 0x54, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x1F, 0x10, 0x2E, 0x20, 0x3D, 0x30, 0x4C,
+};
+
+static void test_tex_format5_golden(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+
+    CHECK_EQ_INT(twlhd_v2_parse(g_fmt5_golden, sizeof g_fmt5_golden, &view),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(view.chunk_count, 5u);
+    CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.teximage_param, 5u << 26);
+    CHECK_EQ_INT(rec.pltt_base, 0u);
+    CHECK_EQ_INT(rec.texel_offset, 0u);
+    CHECK_EQ_INT(rec.texel_size, 16u);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK_EQ_INT(rec.index_offset, 16u);
+    CHECK_EQ_INT(rec.index_size, 8u);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 0) == view.txdt);
+    CHECK(twlhd_v2_tex_index_ptr(&view, 0) == view.txdt + 16u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK_EQ_INT(twlhd_v2_tex_texel_ptr(&view, 0)[0], 0x00u);
+    CHECK_EQ_INT(twlhd_v2_tex_texel_ptr(&view, 0)[15], 0x0Fu);
+    CHECK_EQ_INT(twlhd_v2_tex_index_ptr(&view, 0)[0], 0x40u);
+    CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[7], 0x4Cu);
+}
+
 int main(void) {
     test_null_version_truncated();
     test_report("v2-parse/null-version-truncated");
@@ -1106,6 +1254,18 @@ int main(void) {
     test_report("v2-parse/tex");
     test_tex_limits();
     test_report("v2-parse/tex-limits");
+    test_tex_reserved1();
+    test_report("v2-parse/tex-reserved1");
+    test_tex_index_bounds();
+    test_report("v2-parse/tex-index-bounds");
+    test_tex_index_size();
+    test_report("v2-parse/tex-index-size");
+    test_tex_palette_offset();
+    test_report("v2-parse/tex-palette-offset");
+    test_tex_record_size();
+    test_report("v2-parse/tex-record-size");
+    test_tex_format5_golden();
+    test_report("v2-parse/tex-format5-golden");
     test_view_zeroed_on_errors();
     test_report("v2-parse/view-zeroed-on-errors");
     test_view_fields();
