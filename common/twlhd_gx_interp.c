@@ -1089,6 +1089,11 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
     g.pos_stack.capacity = POS_STACK_CAP;
     g.vec_stack.capacity = POS_STACK_CAP;
     g.tex_stack.capacity = TEX_STACK_CAP;
+    /* DeSmuME MatrixInit(_mtxStackTexture[0]) = identity; only the texture
+     * stack is initialised here (gfx3d.cpp:531-532). The projection and
+     * position stacks deliberately stay zeroed (known divergence, see the GAP
+     * in docs/DS_GX_RESEARCH.md). */
+    matrix_identity(&g.tex_stack.stack[0]);
 
     /* DeSmuME starts with zero light directions but a valid (negated) half
      * vector for each of them (gfx3d.cpp:608-621). */

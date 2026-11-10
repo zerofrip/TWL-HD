@@ -4231,6 +4231,110 @@ static void test_tex_matrix_store_restore_mode3_roundtrip(void) {
     }
 }
 
+/* PUSH/POP and STORE/RESTORE share the ONE storage slot _mtxStackTexture[0]
+ * (DeSmuME gfx3d.cpp:861 PUSH, :928 POP, :965 STORE, :996 RESTORE), while the
+ * PUSH/POP depth counter is separate. Sequence 1: PUSH saves identity, LOAD A,
+ * STORE 0 overwrites the saved copy with A, LOAD identity, POP restores A, so
+ * s = (8192*16) >> 12 / 16 = 2.0 and t = (8192*32) >> 12 / 16 = 4.0.
+ * Sequence 2: STORE 3 saves A, LOAD identity, PUSH overwrites the slot with
+ * identity, RESTORE 0 therefore yields identity: s = 1.0, t = 2.0. A "separate
+ * slots" implementation gives 1.0/2.0 and 2.0/4.0 instead. */
+static void test_tex_matrix_push_store_share_slot(void) {
+    static const uint32_t A[16] = {
+        8192u, 0u,    0u,    0u,
+        0u,    8192u, 0u,    0u,
+        0u,    0u,    4096u, 0u,
+        0u,    0u,    0u,    4096u,
+    };
+    static const uint32_t identity[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t i;
+
+    /* Sequence 1: the POP reads what the later STORE wrote. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, A);
+    add_store(&n, 0u);
+    add_load_4x4(&n, identity);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 2.0, 4.0, 0x40000000u, 0u);
+    }
+
+    /* Sequence 2: the PUSH overwrites the slot the STORE filled, so the later
+     * RESTORE brings back identity. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, A);
+    add_store(&n, 3u);
+    add_load_4x4(&n, identity);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, identity);
+    add_restore(&n, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 1.0, 2.0, 0x40000000u, 0u);
+    }
+}
+
+/* The texture slot starts as identity, mirroring DeSmuME
+ * MatrixInit(_mtxStackTexture[0]) (gfx3d.cpp:531-532). A mode-3 RESTORE with no
+ * prior STORE/PUSH must therefore yield identity, not the zeroed stack of the
+ * other modes: s = (4096*16) >> 12 / 16 = 1.0, t = (4096*32) >> 12 / 16 = 2.0. */
+static void test_tex_restore_without_store(void) {
+    uint32_t n = 0u;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_restore(&n, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 1.0, 2.0, 0x40000000u, 0u);
+    }
+}
+
 /* Mode 1 exact DeSmuME formula (gfx3d.cpp:1578-1593): raw s1.11.4 inputs,
  * raw m8/m9 and m12/m13 addends, 64-bit sum, arithmetic >>12, (int32_t)
  * cast, floats /16.0. All literals below were derived from the independent
@@ -4850,6 +4954,10 @@ int main(void) {
     test_report("gx_interp/tex-matrix-stack-errors");
     test_tex_matrix_store_restore_mode3_roundtrip();
     test_report("gx_interp/tex-matrix-store-restore-mode3-roundtrip");
+    test_tex_matrix_push_store_share_slot();
+    test_report("gx_interp/tex-matrix-push-store-share-slot");
+    test_tex_restore_without_store();
+    test_report("gx_interp/tex-restore-without-store");
     test_tex_mode1_identity();
     test_report("gx_interp/tex-mode1-identity");
     test_tex_mode1_translation();

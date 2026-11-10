@@ -584,9 +584,12 @@ class LightingOracle:
 # stack, and mirrors the C primitive assembly so tex_out[i] describes out[i].
 #
 # Checked against the DeSmuME checkout (desmume/src/gfx3d.cpp): the one-entry
-# texture stack is MatrixInit(_mtxStackTexture[0]) (:532); PUSH/POP in texture
-# mode use that single slot with gxstat.se on the toggle wrap (:860-871,
-# :918-929); STORE/RESTORE ignore the index and always use slot 0 (:950-1000).
+# texture storage is MatrixInit(_mtxStackTexture[0]) (:532); PUSH copies into
+# it (:861), POP copies out of it (:928, the review's :927 is the blank line
+# before it), STORE copies into it (:965) and RESTORE copies out of it (:996).
+# All four commands share that ONE slot; only the PUSH/POP depth flag is kept
+# apart. PUSH/POP set gxstat.se on the toggle wrap (:860-871, :918-929);
+# STORE/RESTORE ignore the index and always use slot 0 (:950-1000).
 # The transform steps follow the research doc and DeSmuME gfx3d.cpp:1578-1593:
 #   mode 0: raw s1.11.4 latch -> /16.0
 #   mode 1: (m0*s + m4*t + m8 + m12) >> 12, /16.0, with the RAW sign-extended
@@ -607,8 +610,10 @@ class TextureOracle:
     def __init__(self):
         self.mode = 0
         self.tex = mat_identity_fixed()
-        self.stack = []
-        self.slots = [[0] * 16]
+        # One shared storage slot for PUSH/POP/STORE/RESTORE, initialised to
+        # identity like DeSmuME's MatrixInit(_mtxStackTexture[0]) (:532).
+        self.slot = [mat_identity_fixed()]
+        self.sp = 0
         self.tex_s = 0
         self.tex_t = 0
         self.teximage_param = 0
@@ -624,16 +629,21 @@ class TextureOracle:
     # -- texture matrix (one-entry stack) ---------------------------------
     def _matrix_command(self, command, params):
         if command == CMD_MTX_PUSH:
-            if len(self.stack) < TEX_STACK_CAP:
-                self.stack.append(list(self.tex))
+            # PUSH copies the current matrix into the shared slot (:861); the
+            # depth flag is separate from the storage.
+            if self.sp < TEX_STACK_CAP:
+                self.slot[0] = list(self.tex)
+                self.sp = 1
         elif command == CMD_MTX_POP:
-            if self.stack:
-                self.tex = list(self.stack[0])
-                self.stack = []
+            # POP copies the shared slot back (:928). An empty POP is silently
+            # ignored here; the C interpreter reports ERR_STACK instead.
+            if self.sp:
+                self.tex = list(self.slot[0])
+                self.sp = 0
         elif command == CMD_MTX_STORE:
-            self.slots[0] = list(self.tex)
+            self.slot[0] = list(self.tex)
         elif command == CMD_MTX_RESTORE:
-            self.tex = list(self.slots[0])
+            self.tex = list(self.slot[0])
         elif command == CMD_MTX_IDENTITY:
             self.tex = mat_identity_fixed()
         elif command == CMD_MTX_LOAD_4x4:

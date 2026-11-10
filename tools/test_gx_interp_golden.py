@@ -863,6 +863,63 @@ class GxInterpGoldenTest(unittest.TestCase):
             self.assertAlmostEqual(tex[index]["s"], 2.125, places=6)
             self.assertAlmostEqual(tex[index]["t"], 2.0, places=6)
 
+    def test_tex_matrix_push_store_share_slot(self):
+        # PUSH/POP and STORE/RESTORE share ONE slot _mtxStackTexture[0]
+        # (gfx3d.cpp:861 PUSH, :928 POP, :965 STORE, :996 RESTORE). Sequence 1:
+        # STORE 0 after PUSH replaces the saved identity with A, so POP brings
+        # A back: s = (8192*16) >> 12 / 16 = 2.0, t = 2*8192*... = 4.0.
+        entries = [(CMD_MTX_MODE, 3)]
+        entries.append((CMD_MTX_PUSH, 0))
+        _add_load_4x4(entries, _diag(8192, 8192, 4096))
+        _add_store(entries, 0)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        entries.append((CMD_MTX_POP, 0))
+        _add_tex_coord(entries, 16, 32)
+        _add_teximage(entries, 0x40000000)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(*xy))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, stats_line = self._assert_texture(entries)
+        self.assertIn("stack_errors=0", stats_line)
+        self.assertEqual([(t["s"], t["t"]) for t in tex], [(2.0, 4.0)] * 3)
+
+        # Sequence 2: STORE 3 saves A, then PUSH overwrites the shared slot
+        # with identity, so RESTORE 0 yields identity: 1.0 / 2.0.
+        entries = [(CMD_MTX_MODE, 3)]
+        _add_load_4x4(entries, _diag(8192, 8192, 4096))
+        _add_store(entries, 3)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        entries.append((CMD_MTX_PUSH, 0))
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 0)
+        _add_tex_coord(entries, 16, 32)
+        _add_teximage(entries, 0x40000000)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(*xy))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, stats_line = self._assert_texture(entries)
+        self.assertIn("stack_errors=0", stats_line)
+        self.assertEqual([(t["s"], t["t"]) for t in tex], [(1.0, 2.0)] * 3)
+
+    def test_tex_restore_without_store(self):
+        # The texture slot starts as identity, mirroring DeSmuME
+        # MatrixInit(_mtxStackTexture[0]) (gfx3d.cpp:531-532). A mode-3 RESTORE
+        # with no prior STORE/PUSH yields identity, not the zeroed stack:
+        # s = 1.0, t = 2.0.
+        entries = [(CMD_MTX_MODE, 3)]
+        _add_restore(entries, 0)
+        _add_tex_coord(entries, 16, 32)
+        _add_teximage(entries, 0x40000000)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(*xy))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, stats_line = self._assert_texture(entries)
+        self.assertIn("stack_errors=0", stats_line)
+        self.assertEqual([(t["s"], t["t"]) for t in tex], [(1.0, 2.0)] * 3)
+
     def _tex_mode1_stream(self, matrix):
         entries = [(CMD_MTX_MODE, 3)]
         _add_load_4x4(entries, matrix)
