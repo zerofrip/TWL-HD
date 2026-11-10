@@ -36,9 +36,15 @@ extern "C" {
 /*
  * Format 5 (4x4 compressed) reads palette RAM per block window, so its
  * PLDT block is a caller/capture-chosen even window, not a fixed table.
+ *
+ * DeSmuME texcache.cpp:1752/1791 computes pal1offset = (pal & 0x3FFF) << 1
+ * (a count of 16-bit entries) and PAL4X4(o) reads byte palAddress + o*2, so
+ * the byte offset actually read is (pal & 0x3FFF)*4 + k*2 with k <= 3: the
+ * last byte index is 0x3FFF*4 + 7 = 65,539 and the window needs 65,540 bytes.
+ * The window starts at byte PLTT_BASE<<4; records carry no start field.
  */
 #define TWLHD_V2_TEX_PALETTE_4X4_MIN_BYTES 2u
-#define TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES 65536u
+#define TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES 65540u
 
 /* FourCC packing: 'a' occupies the lowest byte, matching little-endian order. */
 #define TWLHD_FOURCC(a, b, c, d)                                             \

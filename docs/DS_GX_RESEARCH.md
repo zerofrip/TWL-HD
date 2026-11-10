@@ -356,9 +356,13 @@ palette RAM per block: `palAddress = PLTT_BASE<<4 + pal1offset`,
 `pal1offset = (blockword & 0x3FFF)<<1`, consumed by the unpacker at
 `texcache.cpp:1789-1843`. `paletteSizeList[5] = 0` (`texcache.cpp:418/441`)
 sizes only the texture-cache copy, not the palette read, so it is not evidence
-that 4x4 has no palette. A capture therefore records a caller-chosen even
-palette window in `[2, 65536]` bytes; colours beyond the captured window are a
-later decoder-stage error.
+that 4x4 has no palette. The offset counts 16-bit entries while the unpacker
+reads bytes, so the highest byte index is `0x3FFF*4 + 7 = 65,539` and a capture
+therefore records a caller-chosen even palette window in `[2, 65540]` bytes
+starting at byte `PLTT_BASE<<4` (the record has no start field). DeSmuME wraps
+palette reads across the six 16 KiB palette slots (`(addr >> 14) & 7`), so a
+decoder must treat the captured window as contiguous and error beyond it rather
+than wrap; colours beyond it are a later decoder-stage error.
 
 ### Texture application (TexEnv / polygon modes)
 **VERIFIED:** `PolygonMode` is `MODULATE=0, DECAL=1, TOONHIGHLIGHT=2, SHADOW=3`
