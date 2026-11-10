@@ -269,6 +269,9 @@ static GxMatrix *current_matrix(GxInterp *g) {
 static int stack_push(GxInterp *g) {
     GxStack *s = current_stack(g);
 
+    /* Texture mode uses the one-entry _mtxStackTexture[0]; DeSmuME sets
+     * gxstat.se on a second PUSH but keeps going (gfx3d.cpp:860-871). We keep
+     * the pre-existing stricter behaviour: count a stack error and abort. */
     if (s->sp >= s->capacity) {
         g->stats->stack_errors++;
         return 0;
@@ -290,7 +293,8 @@ static int stack_pop(GxInterp *g, int32_t n) {
 
     if (g->mode == 0u || g->mode == 3u) {
         /* Projection and texture stacks are one entry deep; the parameter is
-         * ignored and POP always restores slot 0. */
+         * ignored and POP always restores slot 0 (gfx3d.cpp:918-929). DeSmuME
+         * sets gxstat.se when the toggle wraps; we report a stack error. */
         if (s->sp == 0u) {
             g->stats->stack_errors++;
             return 0;
@@ -323,8 +327,10 @@ static int stack_pop(GxInterp *g, int32_t n) {
 static int stack_store(GxInterp *g, uint32_t index) {
     GxStack *s = current_stack(g);
 
-    if (g->mode == 0u) {
-        /* Projection stack only has slot 0; the index parameter is ignored. */
+    if (g->mode == 0u || g->mode == 3u) {
+        /* Projection and texture stacks have one slot; the index parameter is
+         * ignored (DeSmuME gfx3d.cpp:955-967 — MatrixStore copies
+         * _mtxStackTexture[0] with no error in texture mode). */
         matrix_copy(&s->stack[0], current_matrix(g));
         return 1;
     }
@@ -343,8 +349,10 @@ static int stack_store(GxInterp *g, uint32_t index) {
 static int stack_restore(GxInterp *g, uint32_t index) {
     GxStack *s = current_stack(g);
 
-    if (g->mode == 0u) {
-        /* Projection stack only has slot 0; the index parameter is ignored. */
+    if (g->mode == 0u || g->mode == 3u) {
+        /* Projection and texture stacks have one slot; the index parameter is
+         * ignored (DeSmuME gfx3d.cpp:986-999 — MatrixRestore copies
+         * _mtxStackTexture[0] with no error in texture mode). */
         matrix_copy(current_matrix(g), &s->stack[0]);
         return 1;
     }

@@ -583,7 +583,10 @@ class LightingOracle:
 # transform). It owns its texture matrix (20.12, column-major) and a one-entry
 # stack, and mirrors the C primitive assembly so tex_out[i] describes out[i].
 #
-# UNVERIFIED against the DeSmuME checkout: it is not present in this sandbox.
+# Checked against the DeSmuME checkout (desmume/src/gfx3d.cpp): the one-entry
+# texture stack is MatrixInit(_mtxStackTexture[0]) (:532); PUSH/POP in texture
+# mode use that single slot with gxstat.se on the toggle wrap (:860-871,
+# :918-929); STORE/RESTORE ignore the index and always use slot 0 (:950-1000).
 # The transform steps follow the research doc and DeSmuME gfx3d.cpp:1578-1593:
 #   mode 0: raw s1.11.4 latch -> /16.0
 #   mode 1: (m0*s + m4*t + m8 + m12) >> 12, /16.0, with the RAW sign-extended

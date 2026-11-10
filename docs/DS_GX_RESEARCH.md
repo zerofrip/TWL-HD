@@ -374,12 +374,15 @@ EMULATOR or HARDWARE verification:
   A 20.12 translation of 4096 is +1 raw s1.11.4 unit = 1/16 texel, **not**
   1.0 texture unit (earlier text here was wrong; repair round 1).
 - **IMPLEMENTED (BUILD/UNIT):** MTX_MODE 3 now has its own 20.12 texture
-  matrix and a **one-entry** stack (the task contract records DeSmuME's
-  `MatrixStack(1,"texture")`; not re-checked in source here). LOAD_4x4/4x3,
-  MULT_4x4/4x3/3x3, IDENTITY, SCALE, TRANS, PUSH, POP, STORE and RESTORE work
-  on it; the lighting vector matrix is untouched. PUSH overflows to
-  `stack_errors`/`ERR_STACK`; POP ignores its parameter and restores slot 0;
-  STORE/RESTORE accept index 0 only (index >= 1 is `ERR_STACK`).
+  matrix and a **one-entry** stack, verified in the DeSmuME checkout:
+  `MatrixInit(_mtxStackTexture[0])` (`gfx3d.cpp:532`) with no other texture
+  entries. LOAD_4x4/4x3, MULT_4x4/4x3/3x3, IDENTITY, SCALE, TRANS, PUSH, POP,
+  STORE and RESTORE work on it; the lighting vector matrix is untouched. PUSH
+  overflows to `stack_errors`/`ERR_STACK` (DeSmuME sets `gxstat.se` and keeps
+  going, `gfx3d.cpp:861-871`); POP ignores its parameter, restores slot 0 and
+  reports underflow as `stack_errors`/`ERR_STACK` (`gfx3d.cpp:918-929`);
+  STORE/RESTORE in mode 3: index ignored, always slot 0, no `ERR_STACK`
+  (`gfx3d.cpp:950-1000`).
 - **GAP:** modes 2 (normal source) and 3 (vertex source) are **not
   implemented**. Those vertices get the raw latched s,t and every VTX command
   in such a mode increments `TwlhdGxStats.tex_transform_unsupported`; the

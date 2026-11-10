@@ -220,7 +220,9 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   array: same ordering, quad splitting and capacity truncation as `out`.
 - Texture matrix: MTX_MODE 3 gets its own 20.12 matrix and one-entry stack
   (LOAD/MULT/IDENTITY/SCALE/TRANS/PUSH/POP/STORE/RESTORE). The lighting vector
-  matrix is untouched by mode 3.
+  matrix is untouched by mode 3. STORE/RESTORE ignore the index and always use
+  slot 0 (gfx3d.cpp:950-1000); PUSH/POP use the same single slot with
+  `gxstat.se` on wrap (gfx3d.cpp:860-871, :918-929).
 - Transform: mode 0 = raw s1.11.4 (/16.0); mode 1 = texture-matrix rows 0/1
   applied to the raw s1.11.4 coordinate with raw m8/m9 and m12/m13 addends,
   64-bit sum, arithmetic `>>12`, `(int32_t)` cast and `/16.0` floats, exactly
@@ -238,9 +240,11 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   (`ignored_no_effect` 1 -> 0, plus a mode-1 assertion);
   `light-commands-not-ignored` `ignored_no_effect` 6 -> 3;
   `light-mode3-stack-ignored` -> `light-mode3-stack-leaves-vec`
-  (`ignored_no_effect` 2 -> 0); `light-store-restore-mode3-leaves-vec`
-  STORE/RESTORE index 2 -> 0 (one-entry texture stack). The same index change
-  is applied to the matching golden stream.
+  (`ignored_no_effect` 2 -> 0); `light-store-restore-mode3-leaves-vec` keeps
+  STORE/RESTORE index 2: mode 3 ignores the index and always uses slot 0
+  (gfx3d.cpp:950-1000), so RGB 21 still holds. The same index is used in the
+  matching golden stream. (An earlier round changed this index to 0; reverted
+  in repair round 3, see `docs/reports/5b2b-mutation-report.md`.)
 - Not done: recorder-side texture capture; sampling/TexEnv; PICA upload; the
   vertex stride change; modes 2/3.
 
@@ -255,6 +259,13 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   2.0625/0.9375; `test_tex_matrix_stack_ops` 4.0 -> 2.125), both because they
   encoded the old `m12*4096`/`/4096` formula. Non-texture and mode-0
   behaviour is unchanged.
+
+- Repair round 3 (2026-11-11): mode-3 STORE/RESTORE treated the index as a slot
+  (index >= 1 -> `ERR_STACK`), but DeSmuME ignores it and always copies
+  `_mtxStackTexture[0]` with no error (`gfx3d.cpp:950-1000`). The guard now
+  matches modes 0 and 3, the reverted index-2 test is restored in both test
+  suites, and a STORE 5 / RESTORE 7 round-trip case was added. Details and
+  mutation proof: `docs/reports/5b2b-mutation-report.md`.
 
 ## 4. Where the DS GX equations must come from
 
