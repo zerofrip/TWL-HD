@@ -304,3 +304,70 @@ round-1 text is kept above for history.
 
 - Scratch sources, binaries and logs: `/tmp/opencode/mutants5b2b-r3/` (outside
   the worktree).
+
+## Repair round 4 (2026-11-11): shared slot + identity slot init
+
+Two defects and one owner decision, all host-side:
+
+1. **Shared slot.** The oracle kept PUSH/POP in `self.stack` and STORE/RESTORE
+   in a separate `self.slots[0]`, while DeSmuME uses ONE storage slot
+   `_mtxStackTexture[0]` for all four commands. Verified in the checkout
+   (`/home/one/3ds/desmume/desmume/src/gfx3d.cpp`): PUSH copies into it at
+   `:861`, POP copies out at `:928` (the review's `:927` is the blank line
+   before the copy), STORE copies into it at `:965`, RESTORE copies out at
+   `:996`. The C code already shared `tex_stack.stack[0]`; the oracle now does
+   too, with a separate 0/1 depth flag (`self.sp`, mirroring `GxStack.sp` with
+   `TEX_STACK_CAP 1`). Silent PUSH/POP overflow remains the oracle's behaviour;
+   the C keeps its documented stricter `ERR_STACK` (DeSmuME only sets
+   `gxstat.se`, `:860-871`, `:918-929`).
+2. **Identity initial slot.** The interpreter zeroes its stacks (`memset`), so
+   a mode-3 RESTORE/POP before any STORE/PUSH produced an all-zero texture
+   matrix, whereas DeSmuME runs `MatrixInit(_mtxStackTexture[0])` (gfx3d.cpp
+   `:531-533`, texture at `:532`). Only `tex_stack.stack[0]` is now
+   identity-initialised in `twlhd_gx_interpret_ex`; the oracle's shared slot
+   starts the same way. Projection/position/vector stacks deliberately stay
+   zeroed (GAP in `docs/DS_GX_RESEARCH.md`).
+3. New C and golden tests: `tex-matrix-push-store-share-slot` (both sequences)
+   and `tex-restore-without-store`, with literals derived from the fixed
+   oracle (2.0/4.0 and 1.0/2.0, `stack_errors == 0`).
+
+### Method
+
+Full scratch copies of the worktree under
+`/tmp/opencode/mutants5b2b-r4/` (outside the worktree). Each C mutant is
+compiled against the **unmodified** `tests/host/test_gx_interp.c` with the
+round-1 host flags (`-std=c11 -Wall -Wextra -Werror -O1 -g -Icommon
+-Itests/host -Itools/azahar_host -fsanitize=address,undefined`). The Python
+mutant uses a scratch copy with the restored separate-slot oracle and the same
+CLI built from the unmodified C. Filtered golden runs
+(`-k tex_matrix_push_store_share_slot -k tex_restore_without_store`) were also
+run on the unmutated baseline. The unmutated baseline passes **150** C tests
+(was 148) and **162** Python/golden tests.
+
+### Results
+
+| # | Mutant | C / golden | Observed | Result |
+|---:|---|---|---|---|
+| a | C: `GxMatrix tex_store[1]`, zeroed; mode-3 STORE/RESTORE use it instead of `tex_stack.stack[0]` | 2 C tests fail | share-slot seq 1 expected `s=2.0,t=4.0`, got `1.0,2.0`; seq 2 expected `1.0,2.0`, got `2.0,4.0`; restore-without-store expected `1.0,2.0`, got `0.0,0.0` | KILLED |
+| b | C: delete `matrix_identity(&g.tex_stack.stack[0])` | 1 C test fails | restore-without-store expected `s=1.0,t=2.0`, got `0.0,0.0`; the rest of the 150 pass | KILLED |
+| c | C: initialise slot 0 to `diag(8192,8192,4096)` instead of identity | 1 C test fails | restore-without-store expected `1.0,2.0`, got `2.0,4.0` | KILLED |
+| d | C: also identity-init `proj_stack.stack[0]`, `pos_stack.stack[0]`, `vec_stack.stack[0]` | 150/150 C tests pass | no observable change | HARMLESS (see below) |
+| e | Python oracle: PUSH/POP back on `self.stack`, STORE/RESTORE on a separate identity-initialised `self.slots[0]` | golden `tex-matrix-push-store-share-slot` fails | oracle expected `1.0` vs CLI `2.0` at `tex[0].s` (`_assert_texture` mismatch) | KILLED |
+
+Mutant (e) leaves `tex-restore-without-store` green because the mutant's
+separate slot is still identity-initialised; that init is a separate decision
+and is covered by C mutant (b)/(c). The mutant isolates the sharing defect,
+which it does: the C and oracle disagree exactly on the shared-slot streams.
+
+**Verdict on mutant (d):** harmless in the current suite. A survey of every
+`add_store`/`add_restore` call site shows each non-texture RESTORE is preceded
+by a STORE at the same index, and every successful non-texture POP requires a
+prior PUSH (`sp > 0`), so it reads a slot that was written; an underflow
+POP/RESTORE in modes 0/1 either errors before reading or is value-unobserved.
+The full 150-test run confirms this empirically. The projection/position/vector
+initial state is therefore deliberately unchanged.
+
+### Artifacts
+
+- Scratch copies, binaries and logs: `/tmp/opencode/mutants5b2b-r4/` (outside
+  the worktree).

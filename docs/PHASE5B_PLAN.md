@@ -267,6 +267,18 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   suites, and a STORE 5 / RESTORE 7 round-trip case was added. Details and
   mutation proof: `docs/reports/5b2b-mutation-report.md`.
 
+- Repair round 4 (2026-11-11): PUSH/POP and STORE/RESTORE now share ONE
+  storage slot, as DeSmuME does with `_mtxStackTexture[0]` (PUSH :861, POP :928,
+  STORE :965, RESTORE :996); the PUSH/POP depth counter is kept apart, in both
+  the C interpreter and `tools/gx_interp_oracle.py`. Only `tex_stack.stack[0]`
+  is now initialised to identity in `twlhd_gx_interpret_ex`, matching
+  `MatrixInit(_mtxStackTexture[0])` (`gfx3d.cpp:531-532`), so a mode-3
+  RESTORE/POP before any write returns identity instead of zeros. The
+  projection/position/vector stacks deliberately stay zeroed (documented GAP in
+  `docs/DS_GX_RESEARCH.md`). New C and golden tests
+  `tex-matrix-push-store-share-slot` and `tex-restore-without-store` kill the
+  separate-slots and init mutants; see `docs/reports/5b2b-mutation-report.md`.
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in
