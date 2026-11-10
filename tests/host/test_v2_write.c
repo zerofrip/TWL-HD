@@ -495,8 +495,10 @@ static void test_tex_4x4_palette(void) {
     CHECK_EQ_INT(view.pldt_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
     CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
     CHECK_EQ_INT(rec.palette_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
-    CHECK(twlhd_v2_tex_palette_ptr(&view, 0)[sizeof palette - 1u] ==
-          palette[sizeof palette - 1u]);
+    if (twlhd_v2_tex_palette_ptr(&view, 0) != NULL) {
+        CHECK(twlhd_v2_tex_palette_ptr(&view, 0)[sizeof palette - 1u] ==
+              palette[sizeof palette - 1u]);
+    }
 }
 
 /*
@@ -597,6 +599,7 @@ static void test_tex_format5_golden(void) {
 static void test_tex_errors(void) {
     TwlhdV2WriteParams params = golden_params();
     TwlhdV2TexEntry bad[2];
+    static uint8_t over[TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES + 4u];
     size_t size = 0;
 
     memcpy(bad, g_tex_entries, sizeof bad);
@@ -618,7 +621,11 @@ static void test_tex_errors(void) {
     bad[0].palette_bytes = 3u;
     CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
                  TWLHD_V2_ERR_TXDS_SIZE);
-    bad[0].palette_bytes = 65537u;
+    bad[0].palette = over;
+    bad[0].palette_bytes = 65541u;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_ERR_TXDS_SIZE);
+    bad[0].palette_bytes = 65542u;
     CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
                  TWLHD_V2_ERR_TXDS_SIZE);
     memcpy(bad, g_tex_entries, sizeof bad);
@@ -679,6 +686,51 @@ static void test_tex_only_adds_chunks(void) {
     CHECK_EQ_INT(g_out[20], 6u);
 }
 
+/*
+ * One full 65,540-byte format-5 window plus a second palette-bearing record:
+ * accepted while the concatenated PLDT stays under the 98,304-byte cap, and
+ * ERR_PLDT once two full windows (2 x 65,540 = 131,080) exceed it.
+ */
+static void test_tex_4x4_pldt_limit(void) {
+    TwlhdV2WriteParams params = golden_params();
+    TwlhdV2TexEntry tex[2];
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    static uint8_t big[TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES];
+    size_t size = 0;
+    uint32_t i;
+
+    for (i = 0; i < sizeof big; i++) big[i] = (uint8_t)(i & 0xFFu);
+
+    params.rsta = NULL;
+    params.rsta_count = 0u;
+    params.tex = tex;
+    params.tex_count = 2u;
+
+    /* Two full windows: the writer cannot share one, so PLDT overflows. */
+    tex[0] = (TwlhdV2TexEntry){5u << 26, 0u, g_fmt5_texel, big, g_fmt5_index,
+                               16u, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES, 8u};
+    tex[1] = (TwlhdV2TexEntry){5u << 26, 1u, g_fmt5_texel, big, g_fmt5_index,
+                               16u, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES, 8u};
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_ERR_PLDT);
+
+    /* One full window plus an 8-byte I2 palette fits under the cap. */
+    tex[1] = (TwlhdV2TexEntry){0x08000000u, 1u, g_tex0_texel,
+                               g_tex0_palette, NULL, 16u, 8u, 0u};
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES + 8u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 1, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0)[0] == big[0]);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 1)[7] == g_tex0_palette[7]);
+}
+
 int main(void) {
     test_golden();
     test_report("v2-write/golden");
@@ -700,6 +752,8 @@ int main(void) {
     test_report("v2-write/tex-format5-golden");
     test_tex_errors();
     test_report("v2-write/tex-errors");
+    test_tex_4x4_pldt_limit();
+    test_report("v2-write/tex-4x4-pldt-limit");
     test_tex_only_adds_chunks();
     test_report("v2-write/tex-only-adds-chunks");
     return test_exit_code();

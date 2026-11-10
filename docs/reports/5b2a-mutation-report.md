@@ -101,20 +101,94 @@ texture test files. It was derived by running the writer in a scratch build
 under `/tmp/opencode/fmt5/` and checked field by field against docs section
 7.1 / section 8; the two literals are byte-identical.
 
+## Repair round 3
+
+Findings of an independent review, host-side only. Two behaviour changes plus
+layout, documentation and boundary-test rules.
+
+**1. Format-5 window cap 65,536 -> 65,540 bytes.** DeSmuME
+`texcache.cpp:1752/1791` computes `pal1offset = (pal & 0x3FFF) << 1` as a count
+of 16-bit entries, and `PAL4X4(o)` reads byte `palAddress + o*2` for `o` in
+`0..3`; the highest byte index is `0x3FFF*4 + 7 = 65,539`, so one window needs
+up to 65,540 bytes. `TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES` is now 65,540 (still
+even-only, minimum 2). The window starts at byte `PLTT_BASE<<4` (records carry
+no start field), and DeSmuME wraps palette reads across 16 KiB slots
+(`(addr>>14)&7`), so a decoder treats the PLDT bytes as one contiguous window
+and errors beyond it instead of wrapping.
+
+**2. Orphan chunks.** `TXDT` or `PLDT` without `TXDS` is now
+`ERR_MISSING_CHUNK`, enforced in `twlhd_v2_parse()` after the GXCM/META gate
+and before the payload-size caps, so an oversized orphan TXDT still reports
+`ERR_MISSING_CHUNK`. The view stays zeroed (`txds_count == 0`, `txdt == NULL`,
+`pldt == NULL`).
+
+**Existing tests adapted (only these):**
+
+- `tests/host/test_v2_parse.c` `test_tex()`: the 65,536 accept case became
+  65,540; the 65,537 and 65,538 negatives became 65,541 (odd) and 65,542
+  (even, one past max).
+- `tests/host/test_v2_write.c` `test_tex_errors()`: 65,537 became 65,541 and
+  65,542 (the oversized cases now point at a 65,544-byte buffer so a mutant
+  that accepts them reads defined memory).
+- No existing test built TXDT/PLDT without TXDS and expected another result.
+  The one empty-TXDS case (`test_v2_parse.c` "explicitly empty TXDS chunk")
+  still has a TXDS chunk present (`seen_txds=1`), so it keeps `ERR_TXDS`.
+- `test_tex_4x4_palette()`'s maximum-window round trip now guards its pointer
+  dereference with a NULL check. Under a mutant that rejects the window, the
+  earlier `CHECK_EQ_INT` fails instead of the test crashing mid-run; the
+  assertion is unchanged for the real constant.
+
+New tests: `v2-parse/tex-orphans` (TXDT-only, PLDT-only, both, oversized orphan
+precedence, TXDS+TXDT valid, zeroed view), `v2-parse/tex-lax-layout`
+(overlapping texel ranges, shared format-5 palette window, odd
+`palette_offset`), `v2-parse/tex-pldt-cross-check` (one full window + an 8-byte
+palette OK; two full windows = 131,080 -> `ERR_PLDT`), and
+`v2-write/tex-4x4-pldt-limit` (two full windows -> `ERR_PLDT`; one full window
++ 8-byte palette round trips).
+
+`TWLHD_V2_PLDT_MAX_BYTES` stays 98,304: one 65,540-byte window plus every fixed
+palette (632 bytes) is 66,172, which fits. Two full windows (131,080) exceed it;
+the writer concatenates and cannot share a window between records, while the
+parser can read shared windows. Documented in section 12 as an owner-review
+known limit.
+
+### Mutation proof (round 3)
+
+Scratch copies under `/tmp/opencode/mutants3/`, built against the unmodified
+test sources with `cc -std=c11 -Wall -Wextra -Werror -Icommon -I.`, and run
+against both `test_v2_parse` and `test_v2_write`. Nothing was added to the
+worktree.
+
+| # | Mutant | Result | Killing test / reason |
+| ---: |---|---|---|
+| 1 | format-5 max 65,540 -> 65,536 | KILLED | `v2-parse/tex` (65,540 record now rejected) and `v2-parse/tex-pldt-cross-check`. The writer max-window round trip uses the shared constant, so it follows the mutation and passes; the parser literals kill it. |
+| 2 | format-5 max 65,540 -> 65,542 | KILLED | `v2-parse/tex` (65,542 accepted) and `v2-write/tex-errors` / `v2-write/tex-4x4-palette` (65,542 accepted, then the unaligned PLDT payload is rejected by the chunk gate, so the expected `ERR_TXDS_SIZE` is wrong) |
+| 3 | orphan gate removed (`TXDT`-only accepted) | KILLED | `v2-parse/tex-orphans` (10 failed checks: TXDT-only, PLDT-only, both now `OK`; view not zeroed) |
+| 4 | orphan gate only for TXDT, not PLDT | KILLED | `v2-parse/tex-orphans` (3 failed checks: PLDT-only now `OK`) |
+| 5 | view exposes `txdt` when `txds_count == 0` (data-flow: unconditional `local_view.txdt = data + txdt_offset`) | KILLED | `v2-parse/tex` (texture-free file now has non-NULL `view.txdt`). The behavioural form of this mutant is gate removal, i.e. mutant 3, killed by `v2-parse/tex-orphans`'s zeroed-view assertions. |
+| 6 | shared-window parse rejected | KILLED | `v2-parse/tex-lax-layout` (shared-window parse returned `ERR_TXDS`) |
+| 7 | canonical offsets enforced (reject overlapping texel ranges) | KILLED | `v2-parse/tex-lax-layout` (overlap parse returned `ERR_TXDS`) |
+| 0 | pristine control | SURVIVED (expected) | Both suites green |
+
+All seven mutants are killed; the control survives, so the harness itself is
+sound.
+
 ## Verification
 
 - `make test` (host suite plus Python suite): green.
 - `./tests/host/build/test_v2_parse`, `./tests/host/build/test_v2_write`:
   green after the test updates.
-- Mutation builds: `/tmp/opencode/mutants/run_mutants.py` (round 1) and
-  `/tmp/opencode/mutants2/run_mutants.py` (round 2), results above.
+- Mutation builds: `/tmp/opencode/mutants/run_mutants.py` (round 1),
+  `/tmp/opencode/mutants2/run_mutants.py` (round 2) and
+  `/tmp/opencode/mutants3/run_mutants.py` (round 3), results above.
 
 ## Notes and residual risk
 
 - `TWLHD_V2_PLDT_MAX_BYTES` stays 98,304 (6 x 16 KiB DS palette slots). One
-  maximum 65,536-byte format-5 window fits; 16 such windows (1,048,576 bytes)
-  exceed both this cap and the 1 MiB file limit. Raising the cap was rejected
-  because the DS palette model and the file limit both rule the case out.
+  maximum 65,540-byte format-5 window plus every fixed palette (632 bytes) is
+  66,172 bytes and fits; two full windows (131,080 bytes) exceed it. The writer
+  cannot share one window between records, the parser can. This is recorded in
+  section 12 as a known limit for owner review; raising it was not done here.
   Colours beyond the captured window are a later decoder-stage error, not a
   parser error.
 - `tools/twlhd_v2_dump.py` remains deliberately unaware of TXDS/TXDT/PLDT

@@ -319,7 +319,9 @@ static void read_tex_record(const uint8_t *p, TwlhdV2TexRecord *rec) {
 /*
  * TXDS/TXDT/PLDT validation. Normative order (docs/TWLHD_V2_FORMAT.md s.8):
  * structural record checks, duplicate keys, size formula, TXDT/PLDT presence,
- * bounds, then chunk payload limits.
+ * bounds, then chunk payload limits. TXDT/PLDT without TXDS never reaches this
+ * function: twlhd_v2_parse() rejects that orphan case with ERR_MISSING_CHUNK
+ * before the payload-size caps.
  */
 static TwlhdV2Result validate_tex(const uint8_t *txds, uint32_t txds_size,
                                   int have_txdt, uint32_t txdt_size,
@@ -589,6 +591,15 @@ TwlhdV2Result twlhd_v2_parse(const uint8_t *data, size_t size,
 
     if (offset != (uint64_t)total_size) return TWLHD_V2_ERR_CHUNK_BOUNDS;
     if (!seen_gxcm || !seen_meta) return TWLHD_V2_ERR_MISSING_CHUNK;
+
+    /*
+     * Orphan texture payloads: TXDT/PLDT only make sense with TXDS. This keys
+     * on chunk presence, not record count, and runs before the payload-size
+     * caps so an oversized orphan reports ERR_MISSING_CHUNK.
+     */
+    if ((seen_txdt || seen_pldt) && !seen_txds) {
+        return TWLHD_V2_ERR_MISSING_CHUNK;
+    }
 
     /* Known chunks have fixed REQUIRED-bit expectations. */
     if ((gxcm_flags & TWLHD_V2_CHUNK_FLAG_REQUIRED) == 0u) {
