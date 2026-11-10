@@ -87,15 +87,24 @@ bytes. Duplicate known chunks are rejected.
 | `GXCM` | mandatory, `REQUIRED` set | raw GX entries |
 | `META` | mandatory, `REQUIRED` clear | backend and coverage |
 | `RSTA` | optional, at most once, `REQUIRED` clear | rendering-register writes |
+| `TXDS` | optional, at most once, `REQUIRED` clear | texture descriptors |
+| `TXDT` | mandatory when `TXDS` is present, `REQUIRED` clear; illegal without `TXDS` | texel/index data |
+| `PLDT` | optional, at most once, `REQUIRED` clear; illegal without `TXDS` | palette data |
 | `CLPM` | **reserved, not implemented** | — |
-| `TXDS` | **reserved, not implemented** | — |
-| `TXDT` | **reserved, not implemented** | — |
-| `PLDT` | **reserved, not implemented** | — |
 
-`CLPM` (clip matrix), `TXDS` (texture descriptor), `TXDT` (texture data) and
-`PLDT` (palette data) are placeholders for backends C/D/E. No code produces or
-consumes them. A parser treats them like any unknown chunk: skipped and counted
-when optional, `ERR_UNSUPPORTED_REQUIRED` when the `REQUIRED` bit is set.
+`CLPM` (clip matrix) is still a placeholder for backend C. No code produces or
+consumes it: a parser treats it like any unknown chunk (skipped and counted when
+optional, `ERR_UNSUPPORTED_REQUIRED` when the `REQUIRED` bit is set).
+
+`TXDS`/`TXDT`/`PLDT` are implemented for **host tooling only** (parser, writer,
+read-only view accessors) at Phase 5B-2a. A `TXDT` or `PLDT` chunk without a
+`TXDS` chunk is an orphan and is rejected with `ERR_MISSING_CHUNK`. The payload
+layout in section 7.1 is
+an **owner-reviewable proposal**; it is BUILD/UNIT tested and nothing in it is
+EMULATOR or HARDWARE verified. The DS recorder does not capture textures yet, so
+every file the recorder produces is still GXCM+META(+RSTA). The Python mirror
+(`tools/twlhd_v2_dump.py`) still classifies the three FourCCs as unknown; that
+divergence is deliberate and recorded in section 9.
 
 ## 5. `GXCM` — raw GX command stream
 
@@ -251,10 +260,124 @@ The clear-poly-id field is the top byte of the clear-colour word at
 "clear-poly-id byte" parenthetical next to the edge-colour range is therefore
 resolved this way; no extra address is whitelisted inside `0x330..0x33F`.
 
+## 7.1 `TXDS` / `TXDT` / `PLDT` — texture data (owner-reviewable proposal)
+
+Status: host tooling only — BUILD/UNIT implemented and tested, no EMULATOR or
+HARDWARE verification. The recorder does not emit these chunks yet. The layout
+below is a proposal pending owner review; it extends, and does not replace, any
+earlier sketch.
+
+Three chunks carry one frame's textures:
+
+- `TXDS`: an array of fixed 40-byte descriptors, one per distinct
+  (`TEXIMAGE_PARAM`, `PLTT_BASE`) pair.
+- `TXDT`: raw concatenated texel blocks (and, for 4x4, index blocks).
+- `PLDT`: raw concatenated RGB555 little-endian palette blocks.
+
+### `TXDS` records
+
+Payload `N * 40` bytes, `N` in `1..256`. Record fields, all `u32`:
+
+| Offset | Field | Meaning |
+|---:|---|---|
+| 0 | `teximage_param` | the `2Ah` command word; bits 20..28 define size/format |
+| 4 | `pltt_base` | the `2Bh` value this descriptor was captured with |
+| 8 | `texel_offset` | byte offset of the texel block inside `TXDT` |
+| 12 | `texel_size` | texel block size, must equal the format formula |
+| 16 | `palette_offset` | byte offset of the palette block inside `PLDT` |
+| 20 | `palette_size` | palette block size; fixed formula for formats 1/2/3/4/6, 0 for format 7, an even window in `[2, 65540]` for format 5 |
+| 24 | `index_offset` | byte offset of the 4x4 index block inside `TXDT` |
+| 28 | `index_size` | index block size, must equal the format formula |
+| 32 | `reserved0` | `0` |
+| 36 | `reserved1` | `0` |
+
+Rules:
+
+- (`teximage_param`, `pltt_base`) is unique across the chunk.
+- Every size equals the shared `twlhd_v2_tex_sizes()` result for
+  `teximage_param`, except `palette_size` for format 5, which is a
+  caller-chosen window validated by the shared
+  `twlhd_v2_tex_palette_size_ok()` helper. The parser and the writer call the
+  same two helpers.
+- An offset is `0` when its size is `0` (a record without a palette has
+  `palette_offset == 0`).
+- `TXDT` is mandatory when `TXDS` is present; `PLDT` is mandatory iff some
+  record has `palette_size > 0`. Either one without a `TXDS` chunk is an
+  orphan and rejected with `ERR_MISSING_CHUNK` (section 8, step 10).
+
+### Size formula
+
+`TEXIMAGE_PARAM` bits 20..22 are the width shift and bits 23..25 the height
+shift: `width = 8 << SizeShiftS`, `height = 8 << SizeShiftT`. Bits 26..28 are
+the packed format. Format 0 (no texture) has no sizes and no record.
+
+| Format | Name | Bytes/texel | `palette_size` | `index_size` |
+|---:|---|---:|---:|---:|
+| 1 | A3I5 | 1 | 64 | 0 |
+| 2 | I2 | 1/4 | 8 | 0 |
+| 3 | I4 | 1/2 | 32 | 0 |
+| 4 | I8 | 1 | 512 | 0 |
+| 5 | 4x4 | 1/4 | even window in `[2, 65540]` | `width*height >> 3` |
+| 6 | A5I3 | 1 | 16 | 0 |
+| 7 | 16bpp | 2 | 0 | 0 |
+
+`texel_size = width * height * bytes_per_texel`. This is the DeSmuME
+`texSizes[] = {0,4,1,2,4,1,4,8}` table divided by 4
+(`docs/DS_GX_RESEARCH.md` "Texture memory addressing"), i.e. txSize/4 bytes per
+texel. Palette sizes are 2 bytes per entry (32/4/16/256/8 entries) for formats
+1/2/3/4/6.
+
+**4x4 palette window (explicit choice):** `docs/DS_GX_RESEARCH.md`'s format
+table lists "4 per block" palette entries for 4x4, and DeSmuME's PAL4X4 macro
+(`texcache.cpp` ~1752) shows why: the unpacker reads palette RAM per block with
+`palAddress = PLTT_BASE<<4 + pal1offset` and `pal1offset = (blockword & 0x3FFF)<<1`
+(`texcache.cpp` ~1789-1843), producing the 4 colours of each compressed block.
+The `paletteSizeList[5] = 0` at `texcache.cpp:418/441` only sizes the cache
+copy, not the palette read; it is not evidence that format 5 has no palette.
+A format-5 record therefore carries a `PLDT` window chosen by the capture
+tool: any even byte count in `[2, 65540]`. The window starts at byte
+`PLTT_BASE << 4`; the record has no start field, so the first PLDT byte is the
+palette-RAM byte at that address. The upper bound comes from DeSmuME
+`texcache.cpp:1752/1791`: `pal1offset = (pal & 0x3FFF) << 1` counts 16-bit
+entries and `PAL4X4(o)` reads byte `palAddress + o*2` for `o` in `0..3`, so the
+largest byte index read is `0x3FFF*4 + 7 = 65,539`, i.e. a window needs up to
+65,540 bytes. DeSmuME also wraps palette reads across the six 16 KiB palette
+slots (`(addr >> 14) & 7`), so a decoder must treat the captured PLDT bytes as
+one contiguous window and report an error beyond it, never wrap. Colours beyond
+the captured window are a later decoder error, not a parser error. The
+65,540-byte cap keeps one maximum window inside the 98,304-byte `PLDT` limit
+(section 12).
+
+### `TXDT` and `PLDT` layout
+
+For every record, in `TXDS` order, `TXDT` holds `texel_size` texel bytes
+followed by `index_size` index bytes, hence
+`index_offset = texel_offset + texel_size` for a 4x4 record. `PLDT` holds the
+palette blocks in the same record order. Texel and index blocks are multiples
+of 4 bytes for every format (`width,height >= 8`), so `TXDT` stays 4-byte
+aligned. Format-5 palette windows are only even, so they may be `2 mod 4`
+(2, 6, 10, ... bytes): the writer appends 1..3 zero pad bytes after the last
+palette block so the `PLDT` payload length is a multiple of 4. The padding
+belongs to the chunk, not to any record (`palette_offset` and `palette_size`
+never cover it), and the parser ignores any trailing `PLDT` bytes beyond the
+referenced ranges.
+
+**Parser lax, writer canonical.** The layout above is what the writer emits:
+records in order, each index block right after its texels, palettes
+concatenated in record order. Trailing `PLDT` padding is tolerated by the
+parser and emitted only by the writer. The parser only requires that every
+referenced range is in bounds; it accepts any in-bounds offsets, including
+overlapping texel ranges, overlapping records, shared palette windows and odd
+`palette_offset` values. Only the writer is canonical. A future Python mirror
+must follow the parser (in-bounds ranges), not the writer's layout.
+
+
+
 ## 8. Validation order (normative)
 
 C and Python implement this exact order. A file is accepted only if every step
-passes.
+passes. Python does not implement steps 10 and 15 for `TXDS`/`TXDT`/`PLDT`
+(section 9).
 
 1. NULL arguments → `ERR_NULL`.
 2. If `size >= 4`, read `version`; `version != 2` → `ERR_VERSION` (so a v1
@@ -274,15 +397,35 @@ passes.
      skip and count it.
 9. Chunk walk does not end exactly at `total_size` → `ERR_CHUNK_BOUNDS`
    (gaps/trailing bytes).
-10. Missing `GXCM` or `META` → `ERR_MISSING_CHUNK`.
-11. `GXCM` without `REQUIRED`; `META`/`RSTA` with `REQUIRED` →
-    `ERR_CHUNK_FLAGS`.
+10. Missing `GXCM` or `META` → `ERR_MISSING_CHUNK`. Then, independently of any
+    payload-size cap, `TXDT` or `PLDT` present without `TXDS` (orphan chunks)
+    → `ERR_MISSING_CHUNK`; this fires before the step-14 `ERR_TXDT`/`ERR_PLDT`
+    caps and before every `ERR_TXDS*` class, so an oversized orphan `TXDT`
+    still reports `ERR_MISSING_CHUNK`. Finally, with `TXDS` present, missing
+    `TXDT`, or missing `PLDT` while a record needs one → `ERR_MISSING_CHUNK`.
+11. `GXCM` without `REQUIRED`; `META`/`RSTA`/`TXDS`/`TXDT`/`PLDT` with
+    `REQUIRED` → `ERR_CHUNK_FLAGS`.
 12. `GXCM` payload/count errors → `ERR_GXCM`; then cmd-word/id errors →
     `ERR_GXCM_CMD`; then grouping → `ERR_GXCM_GROUP`; then the swap rule →
     `ERR_GXCM_FRAME`.
 13. `RSTA` errors → `ERR_RSTA` (whitelist, alignment, width/value consistency,
     `gx_index` bounds and monotonicity).
-14. `META` errors → `ERR_META`.
+14. `TXDS`/`TXDT`/`PLDT` errors, in this order (C only for now; orphan
+    `TXDT`/`PLDT` was already rejected at step 10):
+    - structural record checks: payload `% 40`, record count `0` or `> 256`,
+      nonzero `reserved0/1`, format-0 record → `ERR_TXDS`;
+    - duplicate (`teximage_param`, `pltt_base`) key, in record order →
+      `ERR_TXDS_KEY`;
+    - size formula mismatch (`twlhd_v2_tex_sizes()`; format-5 `palette_size`
+      must also pass `twlhd_v2_tex_palette_size_ok()` as an even window in
+      `[2, 65540]`), or nonzero offset with zero size → `ERR_TXDS_SIZE`;
+    - missing `TXDT` / required-but-missing `PLDT` → `ERR_MISSING_CHUNK`;
+    - `offset + size` past the chunk payload, computed in 64-bit so an
+      overflowing offset is caught (`TXDT` first, then `PLDT`) →
+      `ERR_TXDS_BOUNDS`;
+    - `TXDT` payload over 524,288 bytes → `ERR_TXDT`; padded `PLDT` payload
+      over 98,304 bytes → `ERR_PLDT`.
+15. `META` errors → `ERR_META`.
 
 Within step 12 the three passes are separate: all cmd-word checks run before
 any grouping check, and all grouping checks run before the swap check. This is
@@ -304,7 +447,15 @@ what keeps C and Python identical on malformed input.
   message is "has format version 2".
 - Unknown optional chunks are skipped and counted. Unknown `REQUIRED` chunks
   are rejected; no parser guesses their semantics.
-- `RESERVED` FourCCs are not implemented and carry no implicit behavior.
+- `CLPM` is still reserved and unimplemented: the C parser treats it as an
+  unknown chunk.
+- The C parser and writer implement `TXDS`/`TXDT`/`PLDT` (section 7.1). The
+  Python mirror `tools/twlhd_v2_dump.py` was **not** extended in this stage, so
+  it still treats those three FourCCs as unknown optional chunks: on a file
+  that contains them, Python skips and counts them while C validates them. No
+  current producer emits them, so the two implementations agree on every file
+  in the test corpus. Extending the mirror is a separate task; this divergence
+  is recorded rather than hidden.
 
 ## 10. Worked byte example (golden vector)
 
@@ -340,6 +491,50 @@ Decoded:
 The C writer reproduces these bytes exactly (`tests/host/test_v2_write.c`),
 and the parser test builds them by hand (`tests/host/test_v2_parse.c`).
 
+## 10.1 Worked byte example with textures
+
+A 352-byte file with the same `GXCM`/`META`/`RSTA` prefix as section 10 plus two
+8x8 I2 records (`TXDS` 80 B, `TXDT` 32 B, `PLDT` 16 B). Mirrored by the literal
+fixture in `tests/host/test_v2_write.c`.
+
+```
+0x00  02 00 00 00  20 00 00 00  60 01 00 00  01 00 00 00
+0x10  01 00 00 00  06 00 00 00  00 00 00 00  00 00 00 00
+0x20  47 58 43 4D  40 00 00 00  01 00 00 00  00 00 00 00
+0x30  10 00 00 00  02 00 00 00  15 00 00 00  00 00 00 00
+0x40  40 00 00 00  01 00 00 00  20 00 00 00  1F 00 00 00
+0x50  23 00 00 00  00 10 00 00  23 00 00 00  00 20 00 00
+0x60  41 00 00 00  00 00 00 00  50 00 00 00  00 00 00 00
+0x70  4D 45 54 41  10 00 00 00  00 00 00 00  00 00 00 00
+0x80  01 00 00 00  07 00 00 00  00 00 00 00  00 00 00 00
+0x90  52 53 54 41  10 00 00 00  00 00 00 00  00 00 00 00
+0xA0  50 03 00 04  FF 3F 1F 00  03 00 00 00  04 00 00 00
+0xB0  54 58 44 53  50 00 00 00  00 00 00 00  00 00 00 00
+0xC0  00 00 00 08  00 00 00 00  00 00 00 00  10 00 00 00
+0xD0  00 00 00 00  08 00 00 00  00 00 00 00  00 00 00 00
+0xE0  00 00 00 00  00 00 00 00  00 00 00 08  01 00 00 00
+0xF0  10 00 00 00  10 00 00 00  08 00 00 00  08 00 00 00
+0x100  00 00 00 00  00 00 00 00  00 00 00 00  00 00 00 00
+0x110  54 58 44 54  20 00 00 00  00 00 00 00  00 00 00 00
+0x120  00 01 02 03  04 05 06 07  08 09 0A 0B  0C 0D 0E 0F
+0x130  10 21 32 43  54 65 76 87  98 A9 BA CB  DC ED FE 0F
+0x140  50 4C 44 54  10 00 00 00  00 00 00 00  00 00 00 00
+0x150  00 1F 10 2E  20 3D 30 4C  40 5B 50 6A  60 79 70 88
+```
+
+Decoded (beyond the section 10 prefix):
+
+- Header: total `0x160` (352), chunk count 6.
+- `TXDS` at `0xB0`, payload 80, `REQUIRED` clear. Two 40-byte records:
+  - `0xC0`: `TEXIMAGE_PARAM 0x08000000` (I2, 8x8), `PLTT_BASE 0`, texel 0/16,
+    palette 0/8, index 0/0.
+  - `0xE8`: `TEXIMAGE_PARAM 0x08000000`, `PLTT_BASE 1`, texel 16/16,
+    palette 8/8, index 0/0.
+- `TXDT` at `0x110`, payload 32: both 16-byte texel blocks.
+- `PLDT` at `0x140`, payload 16: both 8-byte palette blocks.
+
+
+
 ## 11. GBATEK cross-check
 
 Sources checked while producing this document:
@@ -365,9 +560,37 @@ this is the same evidence basis the proposal records (GBATEK / LOCAL).
 | `chunk_count` | 1..16 |
 | `GXCM` entries | 1..65,536 |
 | `RSTA` entries | 0..4,096 |
+| `TXDS` records | 1..256 (40 bytes each) |
+| `TXDT` payload | 0..524,288 bytes |
+| `PLDT` payload | 0..98,304 bytes |
+| Format-5 palette window | 2..65,540 bytes, even |
 | Recorder `GXCM` capacity (demo) | 16,384 |
 | Recorder `RSTA` capacity (demo) | 256 |
 | Recorder serialize buffer | 135,264 bytes |
+
+The 524,288-byte `TXDT` limit is 4 x 128 KiB (the DS texture slots); the
+98,304-byte `PLDT` limit is 6 x 16 KiB (the DS palette slots). The demo recorder
+does not emit texture chunks, so the serialize-buffer figure is unchanged.
+
+The 65,540-byte format-5 window cap is deliberate: one maximum window plus the
+fixed palettes of every other format (64 + 8 + 32 + 512 + 16 = 632 bytes) is
+66,172 bytes, which fits the 98,304-byte `PLDT` limit. The capture tool chooses
+the window, so a file never needs to carry more palette than the colours it
+actually captures; reading colours beyond the captured window is a
+decoder-stage error, not a parser error.
+
+The 98,304-byte `PLDT` cap is applied to the padded payload length by both the
+parser and the writer. The canonical writer zero-pads (at most 3 bytes) before
+the chunk header is written, so writer and parser gate on the same length; the
+exact-cap boundary sum (65,540 + 32,762 + 2 pad = 98,304) is exercised by the
+host tests.
+
+**Known limit for owner review:** two full format-5 windows (2 x 65,540 =
+131,080 bytes) exceed the 98,304-byte `PLDT` cap. The writer concatenates
+palettes and cannot share one window between two records, so two such records
+cannot be written; the parser can read them if they share a window (section
+7.1's lax layout). Raising the cap to hold two windows would also need a review
+of the 1 MiB file and `TXDT` limits, so it is left unchanged here.
 
 The serialize-buffer figure is the true maximum for the demo capacities:
 32 (header) + 3 x 16 (chunk headers) + 16 (META payload) + 16,384 x 8 + 256 x 16

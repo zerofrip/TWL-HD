@@ -13,10 +13,17 @@
 static uint8_t g_buf[TWLHD_V2_FILE_MAX + 64u];
 static uint8_t g_gx[TWLHD_V2_GXCM_MAX_ENTRIES * TWLHD_V2_GXCM_ENTRY_SIZE + 32u];
 static uint8_t g_rs[TWLHD_V2_RSTA_MAX_ENTRIES * TWLHD_V2_RSTA_ENTRY_SIZE + 32u];
+static uint8_t g_txds[TWLHD_V2_TXDS_MAX_RECORDS * TWLHD_V2_TXDS_RECORD_SIZE + 64u];
+static uint8_t g_txdt[TWLHD_V2_TXDT_MAX_BYTES + 64u];
+static uint8_t g_pldt[TWLHD_V2_PLDT_MAX_BYTES +
+                      2u * TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES + 64u];
 
 static size_t g_gxcm_hdr;
 static size_t g_meta_hdr;
 static size_t g_rsta_hdr;
+static size_t g_txds_hdr;
+static size_t g_txdt_hdr;
+static size_t g_pldt_hdr;
 
 static void put_le32(uint8_t *p, uint32_t value) {
     p[0] = (uint8_t)(value & 0xFFu);
@@ -54,6 +61,86 @@ static void put_rsta_entry(uint32_t index, uint32_t addr, uint32_t value,
     put_le32(p + 4, value);
     put_le32(p + 8, gx_index);
     put_le32(p + 12, width);
+}
+
+static void put_tex_record(uint32_t index, uint32_t param, uint32_t pltt,
+                           uint32_t texel_off, uint32_t texel_size,
+                           uint32_t palette_off, uint32_t palette_size,
+                           uint32_t index_off, uint32_t index_size) {
+    uint8_t *p = g_txds + (size_t)index * TWLHD_V2_TXDS_RECORD_SIZE;
+
+    put_le32(p + 0, param);
+    put_le32(p + 4, pltt);
+    put_le32(p + 8, texel_off);
+    put_le32(p + 12, texel_size);
+    put_le32(p + 16, palette_off);
+    put_le32(p + 20, palette_size);
+    put_le32(p + 24, index_off);
+    put_le32(p + 28, index_size);
+    put_le32(p + 32, 0);
+    put_le32(p + 36, 0);
+}
+
+/*
+ * Build GXCM + META, then any of TXDS/TXDT/PLDT whose size is nonzero, in the
+ * canonical chunk order. g_gx must be filled by the caller.
+ */
+static size_t build_tex(uint32_t gx_size, const uint8_t *meta,
+                        uint32_t meta_size, const uint8_t *txds,
+                        uint32_t txds_size, const uint8_t *txdt,
+                        uint32_t txdt_size, const uint8_t *pldt,
+                        uint32_t pldt_size, uint32_t flags,
+                        uint32_t frame_index) {
+    size_t offset = TWLHD_V2_HEADER_SIZE;
+    uint32_t chunk_count = 2u;
+
+    g_gxcm_hdr = offset;
+    offset = emit_chunk_header(offset, TWLHD_V2_CHUNK_GXCM, gx_size,
+                               TWLHD_V2_CHUNK_FLAG_REQUIRED);
+    if (gx_size != 0u) memcpy(g_buf + offset, g_gx, gx_size);
+    offset += gx_size;
+
+    g_meta_hdr = offset;
+    offset = emit_chunk_header(offset, TWLHD_V2_CHUNK_META, meta_size, 0);
+    if (meta_size != 0u) memcpy(g_buf + offset, meta, meta_size);
+    offset += meta_size;
+
+    g_txds_hdr = 0;
+    if (txds_size != 0u) {
+        chunk_count++;
+        g_txds_hdr = offset;
+        offset = emit_chunk_header(offset, TWLHD_V2_CHUNK_TXDS, txds_size, 0);
+        memcpy(g_buf + offset, txds, txds_size);
+        offset += txds_size;
+    }
+
+    g_txdt_hdr = 0;
+    if (txdt_size != 0u) {
+        chunk_count++;
+        g_txdt_hdr = offset;
+        offset = emit_chunk_header(offset, TWLHD_V2_CHUNK_TXDT, txdt_size, 0);
+        memcpy(g_buf + offset, txdt, txdt_size);
+        offset += txdt_size;
+    }
+
+    g_pldt_hdr = 0;
+    if (pldt_size != 0u) {
+        chunk_count++;
+        g_pldt_hdr = offset;
+        offset = emit_chunk_header(offset, TWLHD_V2_CHUNK_PLDT, pldt_size, 0);
+        memcpy(g_buf + offset, pldt, pldt_size);
+        offset += pldt_size;
+    }
+
+    put_le32(g_buf + 0, TWLHD_V2_VERSION);
+    put_le32(g_buf + 4, TWLHD_V2_HEADER_SIZE);
+    put_le32(g_buf + 8, (uint32_t)offset);
+    put_le32(g_buf + 12, flags);
+    put_le32(g_buf + 16, frame_index);
+    put_le32(g_buf + 20, chunk_count);
+    put_le32(g_buf + 24, 0);
+    put_le32(g_buf + 28, 0);
+    return offset;
 }
 
 /*
@@ -239,11 +326,16 @@ static void test_chunks(void) {
                  TWLHD_V2_ERR_UNSUPPORTED_REQUIRED);
     put_le32(g_buf + g_rsta_hdr + 8, 0u);
 
-    /* Reserved, not implemented FourCCs are just unknown + optional. */
+    /* CLPM is still reserved: unknown + optional. */
     put_le32(g_buf + g_rsta_hdr + 0, TWLHD_V2_CHUNK_CLPM);
     CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+
+    /*
+     * TXDS is a known chunk now, so the 16-byte RSTA payload reused as its
+     * payload is rejected as a bad record size instead of being skipped.
+     */
     put_le32(g_buf + g_rsta_hdr + 0, TWLHD_V2_CHUNK_TXDS);
-    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
     put_le32(g_buf + g_rsta_hdr + 0, TWLHD_V2_CHUNK_RSTA);
 
     /* Missing known chunks. */
@@ -720,6 +812,583 @@ static void test_chunk_count_boundaries(void) {
     CHECK_EQ_INT(view.unknown_chunks_skipped, 13u);
 }
 
+static uint32_t read_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | ((uint32_t)p[1] << 8) | ((uint32_t)p[2] << 16) |
+           ((uint32_t)p[3] << 24);
+}
+
+static size_t append_chunk(size_t end, uint32_t type, const uint8_t *payload,
+                           uint32_t size, uint32_t chunk_flags) {
+    size_t offset = emit_chunk_header(end, type, size, chunk_flags);
+
+    if (size != 0u) memcpy(g_buf + offset, payload, size);
+    offset += size;
+    put_le32(g_buf + 8, (uint32_t)offset);
+    put_le32(g_buf + 20, read_le32(g_buf + 20) + 1u);
+    return offset;
+}
+
+/* GXCM(1 entry) + META + the given texture chunks. */
+static size_t build_tex_default(const uint8_t *txds, uint32_t txds_size,
+                                const uint8_t *txdt, uint32_t txdt_size,
+                                const uint8_t *pldt, uint32_t pldt_size) {
+    uint8_t meta[TWLHD_V2_META_PAYLOAD_SIZE];
+
+    put_meta(meta, TWLHD_V2_BACKEND_SYNTHETIC, 0u, 0u, 0u);
+    put_gxcm_entry(0, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    return build_tex(8u, meta, sizeof meta, txds, txds_size, txdt, txdt_size,
+                     pldt, pldt_size, 0u, 0u);
+}
+
+static void test_tex(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    size_t size;
+    uint32_t i;
+
+    for (i = 0; i < sizeof g_txdt; i++) g_txdt[i] = (uint8_t)(0x40u + (i & 0x3Fu));
+    for (i = 0; i < sizeof g_pldt; i++) g_pldt[i] = (uint8_t)(0x80u + (i & 0x3Fu));
+
+    /* Positive: two I2 8x8 records, 16 texel + 8 palette bytes each. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    put_tex_record(1, 0x08000000u, 1u, 16u, 16u, 8u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 80u, g_txdt, 32u, g_pldt, 16u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 2u);
+    CHECK_EQ_INT(view.txdt_size, 32u);
+    CHECK_EQ_INT(view.pldt_size, 16u);
+    CHECK_EQ_INT(view.unknown_chunks_skipped, 0u);
+    CHECK_EQ_INT(twlhd_v2_txds_count(&view), 2u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 1, &rec), 1);
+    CHECK_EQ_INT(rec.teximage_param, 0x08000000u);
+    CHECK_EQ_INT(rec.pltt_base, 1u);
+    CHECK_EQ_INT(rec.texel_offset, 16u);
+    CHECK_EQ_INT(rec.texel_size, 16u);
+    CHECK_EQ_INT(rec.palette_offset, 8u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK_EQ_INT(rec.index_offset, 0u);
+    CHECK_EQ_INT(rec.index_size, 0u);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 1) == view.txdt + 16);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 1)[0] == g_txdt[16]);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 1) == view.pldt + 8);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 1)[0] == g_pldt[8]);
+    CHECK(twlhd_v2_tex_index_ptr(&view, 0) == NULL);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 2) == NULL);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 2) == NULL);
+    CHECK(twlhd_v2_txds_record(&view, 2, &rec) == 0);
+    CHECK(twlhd_v2_txds_record(NULL, 0, &rec) == 0);
+    CHECK(twlhd_v2_txds_record(&view, 0, NULL) == 0);
+    CHECK_EQ_INT(twlhd_v2_txds_count(NULL), 0u);
+    CHECK(twlhd_v2_tex_texel_ptr(NULL, 0) == NULL);
+    CHECK(twlhd_v2_tex_palette_ptr(NULL, 0) == NULL);
+    CHECK(twlhd_v2_tex_index_ptr(NULL, 0) == NULL);
+
+    /* 4x4 record: a caller-chosen palette window plus the index block. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK_EQ_INT(view.pldt_size, 8u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK_EQ_INT(rec.index_offset, 16u);
+    CHECK_EQ_INT(rec.index_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK(twlhd_v2_tex_index_ptr(&view, 0) == view.txdt + 16);
+    CHECK(twlhd_v2_tex_index_ptr(&view, 0)[0] == g_txdt[16]);
+
+    /* 4x4 palette windows: even sizes in [2, 65540] are accepted. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 2u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 4u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65540u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 65540u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 65540u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_size, 65540u);
+
+    /* 4x4 negatives: zero, odd-small, odd past the bound, even past it. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 0u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 3u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65541u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 65544u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* 65,542 is even, so only the upper bound can reject it. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65542u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 65544u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* A texture-free file keeps the old view exactly. */
+    size = build_tex_default(NULL, 0u, NULL, 0u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 0u);
+    CHECK(view.txds == NULL);
+    CHECK(view.txdt == NULL);
+    CHECK(view.pldt == NULL);
+
+    /* Structural: payload not a multiple of 40. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 20u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /* Structural: an explicitly empty TXDS chunk has a zero record count. */
+    size = build_tex_default(NULL, 0u, g_txdt, 16u, g_pldt, 8u);
+    size = append_chunk(size, TWLHD_V2_CHUNK_TXDS, NULL, 0u, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /* Structural: too many records. */
+    for (i = 0; i < TWLHD_V2_TXDS_MAX_RECORDS + 1u; i++) {
+        put_tex_record(i, 0x08000000u, i, 0u, 16u, 0u, 8u, 0u, 0u);
+    }
+    size = build_tex_default(g_txds, (TWLHD_V2_TXDS_MAX_RECORDS + 1u) * 40u,
+                             g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /* Structural: nonzero reserved field. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    put_le32(g_txds + 32, 1u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+    put_le32(g_txds + 32, 0u);
+
+    /* Structural: format 0. */
+    put_tex_record(0, 0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /* Duplicate (teximage_param, pltt_base) key. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    put_tex_record(1, 0x08000000u, 0u, 16u, 16u, 8u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 80u, g_txdt, 32u, g_pldt, 16u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_KEY);
+
+    /* Size formula mismatch. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 32u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 32u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* Offset must be zero when the matching size is zero. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 4u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* TXDT is required whenever TXDS is present. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, NULL, 0u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_MISSING_CHUNK);
+
+    /* PLDT is required iff some record carries a palette. */
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_MISSING_CHUNK);
+
+    /* A 4x4 record with palette_size 0 is no longer valid. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 0u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* A 4x4 palette window requires PLDT like every other palette. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_MISSING_CHUNK);
+
+    /* Bounds: past the end of TXDT. */
+    put_tex_record(0, 0x08000000u, 0u, 24u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 32u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+
+    /* Bounds: 64-bit overflow of offset + size. */
+    put_tex_record(0, 0x08000000u, 0u, 0xFFFFFFF0u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 32u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+
+    /* Bounds: past the end of PLDT. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 12u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 16u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+
+    /* Duplicate TXDS / TXDT / PLDT chunks. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    {
+        size_t with_dup;
+
+        with_dup = append_chunk(size, TWLHD_V2_CHUNK_TXDS, g_txds, 40u, 0u);
+        CHECK_EQ_INT(twlhd_v2_parse(g_buf, with_dup, &view),
+                     TWLHD_V2_ERR_DUP_CHUNK);
+        with_dup = append_chunk(size, TWLHD_V2_CHUNK_TXDT, g_txdt, 16u, 0u);
+        CHECK_EQ_INT(twlhd_v2_parse(g_buf, with_dup, &view),
+                     TWLHD_V2_ERR_DUP_CHUNK);
+        with_dup = append_chunk(size, TWLHD_V2_CHUNK_PLDT, g_pldt, 8u, 0u);
+        CHECK_EQ_INT(twlhd_v2_parse(g_buf, with_dup, &view),
+                     TWLHD_V2_ERR_DUP_CHUNK);
+    }
+
+    /* REQUIRED must stay clear on the new optional chunks. */
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    put_le32(g_buf + g_txds_hdr + 8, TWLHD_V2_CHUNK_FLAG_REQUIRED);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_CHUNK_FLAGS);
+    put_le32(g_buf + g_txds_hdr + 8, 0u);
+    put_le32(g_buf + g_txdt_hdr + 8, TWLHD_V2_CHUNK_FLAG_REQUIRED);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_CHUNK_FLAGS);
+    put_le32(g_buf + g_txdt_hdr + 8, 0u);
+    put_le32(g_buf + g_pldt_hdr + 8, TWLHD_V2_CHUNK_FLAG_REQUIRED);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_CHUNK_FLAGS);
+    put_le32(g_buf + g_pldt_hdr + 8, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+
+    /* The view stays zeroed on a late texture error. */
+    put_tex_record(0, 0x08000000u, 0u, 24u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 32u, g_pldt, 8u);
+    poison_view(&view);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+    CHECK(view_is_zeroed(&view));
+}
+
+static void test_tex_limits(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Record references the first 16 bytes only, so bounds pass. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt,
+                             TWLHD_V2_TXDT_MAX_BYTES + 4u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDT);
+
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt,
+                             TWLHD_V2_PLDT_MAX_BYTES + 4u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_PLDT);
+
+    /* The exact limits are accepted. */
+    size = build_tex_default(g_txds, 40u, g_txdt, TWLHD_V2_TXDT_MAX_BYTES,
+                             g_pldt, TWLHD_V2_PLDT_MAX_BYTES);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txdt_size, TWLHD_V2_TXDT_MAX_BYTES);
+    CHECK_EQ_INT(view.pldt_size, TWLHD_V2_PLDT_MAX_BYTES);
+}
+
+/*
+ * The parser is intentionally lax about layout: it accepts any in-bounds
+ * offsets, including overlapping texel ranges, shared palette windows and
+ * unaligned palette offsets. Only the writer is canonical.
+ */
+static void test_tex_lax_layout(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    size_t size;
+
+    /* Two I2 records whose texel ranges overlap ([0,16) and [8,24)). */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    put_tex_record(1, 0x08000000u, 1u, 8u, 16u, 8u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 80u, g_txdt, 24u, g_pldt, 16u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 2u);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 0) == view.txdt);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 1) == view.txdt + 8u);
+
+    /* Two format-5 records sharing one palette window at PLDT offset 0. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    put_tex_record(1, 5u << 26, 1u, 24u, 16u, 0u, 8u, 40u, 8u);
+    size = build_tex_default(g_txds, 80u, g_txdt, 48u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 2u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 1, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 1) == view.pldt);
+
+    /* Odd palette_offset (1) inside a 12-byte PLDT is accepted. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 1u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 12u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 1u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt + 1u);
+}
+
+/*
+ * Cross-check: a full 65,540-byte format-5 window plus any second record that
+ * needs a palette. OK while the concatenated PLDT fits the 98,304-byte cap,
+ * ERR_PLDT for two full windows (131,080 bytes).
+ */
+static void test_tex_pldt_cross_check(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    size_t size;
+
+    /* One full window (bytes 0..65,540) plus an 8-byte I2 palette. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65540u, 16u, 8u);
+    put_tex_record(1, 0x08000000u, 0u, 24u, 16u, 65540u, 8u, 0u, 0u);
+    size = build_tex_default(g_txds, 80u, g_txdt, 40u, g_pldt, 65548u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 65548u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_size, 65540u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 1, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 65540u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 1) == view.pldt + 65540u);
+
+    /* Two full windows exceed the cap: 2 x 65,540 = 131,080. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 65540u, 16u, 8u);
+    put_tex_record(1, 5u << 26, 1u, 24u, 16u, 65540u, 65540u, 40u, 8u);
+    size = build_tex_default(g_txds, 80u, g_txdt, 48u, g_pldt, 131080u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_PLDT);
+}
+
+/*
+ * Orphan texture payloads: TXDT/PLDT are meaningless without TXDS and are
+ * rejected before any payload-size cap. The view never exposes them.
+ */
+static void test_tex_orphans(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* TXDT only. */
+    poison_view(&view);
+    size = build_tex_default(NULL, 0u, g_txdt, 16u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_MISSING_CHUNK);
+    CHECK(view_is_zeroed(&view));
+    CHECK_EQ_INT(view.txds_count, 0u);
+    CHECK(view.txdt == NULL);
+    CHECK(view.pldt == NULL);
+
+    /* PLDT only. */
+    poison_view(&view);
+    size = build_tex_default(NULL, 0u, NULL, 0u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_MISSING_CHUNK);
+    CHECK(view_is_zeroed(&view));
+    CHECK(view.txdt == NULL);
+    CHECK(view.pldt == NULL);
+
+    /* Both orphans, still no TXDS. */
+    poison_view(&view);
+    size = build_tex_default(NULL, 0u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_MISSING_CHUNK);
+    CHECK(view_is_zeroed(&view));
+
+    /*
+     * Precedence: the orphan rule runs before the payload caps, so an
+     * oversized orphan TXDT reports ERR_MISSING_CHUNK, not ERR_TXDT.
+     */
+    poison_view(&view);
+    size = build_tex_default(NULL, 0u, g_txdt, TWLHD_V2_TXDT_MAX_BYTES + 4u,
+                             NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_MISSING_CHUNK);
+    CHECK(view_is_zeroed(&view));
+
+    /* TXDS + TXDT with no palette is still valid. */
+    put_tex_record(0, 7u << 26, 0u, 0u, 128u, 0u, 0u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 128u, NULL, 0u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK(view.txdt != NULL);
+    CHECK(view.pldt == NULL);
+}
+
+/* Mutant guard: the second reserved field (record offset 36) must be zero. */
+static void test_tex_reserved1(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+    put_le32(g_txds + 36, 1u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+    put_le32(g_txds + 36, 0u);
+}
+
+/* Mutant guard: both index offset/size bounds are checked, in 64-bit. */
+static void test_tex_index_bounds(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Index end 24 exceeds TXDT 20; the texel range 0..16 still fits. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 20u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+
+    /* 64-bit sum overflow on the index pair. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 0xFFFFFFF8u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_TXDS_BOUNDS);
+}
+
+/* Mutant guard: index_size must equal the format's required size. */
+static void test_tex_index_size(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Format 2 has no index block; a 4-byte index must be rejected. */
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 4u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+
+    /* Format 5's 8x8 index block is 8 bytes, so 4 must be rejected. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 8u, 16u, 4u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 20u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+}
+
+/* Mutant guard: palette_offset must be zero when palette_size is zero. */
+static void test_tex_palette_offset(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    /* Format 7 has no palette, so offset 4 with size 0 is rejected. */
+    put_tex_record(0, 7u << 26, 0u, 0u, 128u, 4u, 0u, 0u, 0u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 128u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS_SIZE);
+}
+
+/* Mutant guard: TXDS payload must be a multiple of the 40-byte record. */
+static void test_tex_record_size(void) {
+    TwlhdV2View view;
+    size_t size;
+
+    put_tex_record(0, 0x08000000u, 0u, 0u, 16u, 0u, 8u, 0u, 0u);
+
+    /* One valid record plus 8 trailing bytes. */
+    size = build_tex_default(g_txds, 48u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /* One valid record plus 4 trailing bytes. */
+    size = build_tex_default(g_txds, 44u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_ERR_TXDS);
+
+    /*
+     * 39 is rejected earlier by the chunk-alignment gate (docs section 8,
+     * step 8) and can never reach the TXDS record-size check.
+     */
+    size = build_tex_default(g_txds, 39u, g_txdt, 16u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view),
+                 TWLHD_V2_ERR_CHUNK_ALIGN);
+}
+
+/*
+ * Byte-exact format-5 file, mirrored byte for byte in
+ * tests/host/test_v2_write.c: one 8x8 4x4 record with a 16-byte texel
+ * block, an 8-byte index block and an 8-byte palette window, no RSTA.
+ */
+static const uint8_t g_fmt5_golden[264] = {
+    0x02, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00, 0x00,
+    0x08, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x05, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x47, 0x58, 0x43, 0x4D, 0x40, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x10, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00,
+    0x15, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x40, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
+    0x20, 0x00, 0x00, 0x00, 0x1F, 0x00, 0x00, 0x00,
+    0x23, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00,
+    0x23, 0x00, 0x00, 0x00, 0x00, 0x20, 0x00, 0x00,
+    0x41, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x50, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x4D, 0x45, 0x54, 0x41, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x01, 0x00, 0x00, 0x00, 0x07, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x54, 0x58, 0x44, 0x53, 0x28, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x10, 0x00, 0x00, 0x00, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x54, 0x58, 0x44, 0x54, 0x18, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x40, 0x51, 0x62, 0x73, 0x84, 0x95, 0xA6, 0xB7,
+    0x50, 0x4C, 0x44, 0x54, 0x08, 0x00, 0x00, 0x00,
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x1F, 0x10, 0x2E, 0x20, 0x3D, 0x30, 0x4C,
+};
+
+static void test_tex_format5_golden(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+
+    CHECK_EQ_INT(twlhd_v2_parse(g_fmt5_golden, sizeof g_fmt5_golden, &view),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(view.chunk_count, 5u);
+    CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.teximage_param, 5u << 26);
+    CHECK_EQ_INT(rec.pltt_base, 0u);
+    CHECK_EQ_INT(rec.texel_offset, 0u);
+    CHECK_EQ_INT(rec.texel_size, 16u);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK_EQ_INT(rec.index_offset, 16u);
+    CHECK_EQ_INT(rec.index_size, 8u);
+    CHECK(twlhd_v2_tex_texel_ptr(&view, 0) == view.txdt);
+    CHECK(twlhd_v2_tex_index_ptr(&view, 0) == view.txdt + 16u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK_EQ_INT(twlhd_v2_tex_texel_ptr(&view, 0)[0], 0x00u);
+    CHECK_EQ_INT(twlhd_v2_tex_texel_ptr(&view, 0)[15], 0x0Fu);
+    CHECK_EQ_INT(twlhd_v2_tex_index_ptr(&view, 0)[0], 0x40u);
+    CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[7], 0x4Cu);
+}
+
+/*
+ * Repair round 4: a format-5 window may be 2 mod 4. The writer zero-pads the
+ * PLDT payload and the parser ignores the trailing pad bytes; they must not be
+ * part of the record's range.
+ */
+static void test_tex_format5_padded_pldt(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    size_t size;
+    uint32_t i;
+
+    for (i = 0; i < sizeof g_txdt; i++) {
+        g_txdt[i] = (uint8_t)(0x40u + (i & 0x3Fu));
+    }
+    for (i = 0; i < sizeof g_pldt; i++) {
+        g_pldt[i] = (uint8_t)(0x80u + (i & 0x3Fu));
+    }
+
+    /* 6-byte window inside an 8-byte PLDT payload: 2 trailing bytes ignored. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 6u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK_EQ_INT(view.pldt_size, 8u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 6u);
+    CHECK_EQ_INT(rec.index_offset, 16u);
+    CHECK_EQ_INT(rec.index_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[0], g_pldt[0]);
+    CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[5], g_pldt[5]);
+}
+
 int main(void) {
     test_null_version_truncated();
     test_report("v2-parse/null-version-truncated");
@@ -743,6 +1412,30 @@ int main(void) {
     test_report("v2-parse/rsta");
     test_meta();
     test_report("v2-parse/meta");
+    test_tex();
+    test_report("v2-parse/tex");
+    test_tex_limits();
+    test_report("v2-parse/tex-limits");
+    test_tex_lax_layout();
+    test_report("v2-parse/tex-lax-layout");
+    test_tex_pldt_cross_check();
+    test_report("v2-parse/tex-pldt-cross-check");
+    test_tex_orphans();
+    test_report("v2-parse/tex-orphans");
+    test_tex_reserved1();
+    test_report("v2-parse/tex-reserved1");
+    test_tex_index_bounds();
+    test_report("v2-parse/tex-index-bounds");
+    test_tex_index_size();
+    test_report("v2-parse/tex-index-size");
+    test_tex_palette_offset();
+    test_report("v2-parse/tex-palette-offset");
+    test_tex_record_size();
+    test_report("v2-parse/tex-record-size");
+    test_tex_format5_golden();
+    test_report("v2-parse/tex-format5-golden");
+    test_tex_format5_padded_pldt();
+    test_report("v2-parse/tex-format5-padded-pldt");
     test_view_zeroed_on_errors();
     test_report("v2-parse/view-zeroed-on-errors");
     test_view_fields();

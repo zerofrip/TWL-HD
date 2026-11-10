@@ -27,6 +27,24 @@ extern "C" {
 #define TWLHD_V2_META_PAYLOAD_SIZE       16u
 #define TWLHD_V2_GXCM_ENTRY_SIZE         8u
 #define TWLHD_V2_RSTA_ENTRY_SIZE         16u
+#define TWLHD_V2_TXDS_RECORD_SIZE        40u
+#define TWLHD_V2_TXDS_MAX_RECORDS        256u
+/* 4 x 128 KiB DS texture slots / 6 x 16 KiB DS palette slots. */
+#define TWLHD_V2_TXDT_MAX_BYTES          524288u
+#define TWLHD_V2_PLDT_MAX_BYTES          98304u
+
+/*
+ * Format 5 (4x4 compressed) reads palette RAM per block window, so its
+ * PLDT block is a caller/capture-chosen even window, not a fixed table.
+ *
+ * DeSmuME texcache.cpp:1752/1791 computes pal1offset = (pal & 0x3FFF) << 1
+ * (a count of 16-bit entries) and PAL4X4(o) reads byte palAddress + o*2, so
+ * the byte offset actually read is (pal & 0x3FFF)*4 + k*2 with k <= 3: the
+ * last byte index is 0x3FFF*4 + 7 = 65,539 and the window needs 65,540 bytes.
+ * The window starts at byte PLTT_BASE<<4; records carry no start field.
+ */
+#define TWLHD_V2_TEX_PALETTE_4X4_MIN_BYTES 2u
+#define TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES 65540u
 
 /* FourCC packing: 'a' occupies the lowest byte, matching little-endian order. */
 #define TWLHD_FOURCC(a, b, c, d)                                             \
@@ -36,8 +54,9 @@ extern "C" {
 #define TWLHD_V2_CHUNK_GXCM  TWLHD_FOURCC('G', 'X', 'C', 'M')
 #define TWLHD_V2_CHUNK_META  TWLHD_FOURCC('M', 'E', 'T', 'A')
 #define TWLHD_V2_CHUNK_RSTA  TWLHD_FOURCC('R', 'S', 'T', 'A')
-/* Reserved, NOT implemented. Parsers treat these as unknown chunks. */
+/* CLPM (clip matrix) is still reserved and NOT implemented. */
 #define TWLHD_V2_CHUNK_CLPM  TWLHD_FOURCC('C', 'L', 'P', 'M')
+/* Texture descriptor / texel data / palette data (section 7.1). */
 #define TWLHD_V2_CHUNK_TXDS  TWLHD_FOURCC('T', 'X', 'D', 'S')
 #define TWLHD_V2_CHUNK_TXDT  TWLHD_FOURCC('T', 'X', 'D', 'T')
 #define TWLHD_V2_CHUNK_PLDT  TWLHD_FOURCC('P', 'L', 'D', 'T')
@@ -131,6 +150,34 @@ int twlhd_v2_rsta_whitelisted(uint32_t addr, uint32_t width);
 
 /* True when addr lies inside any whitelisted range (width ignored). */
 int twlhd_v2_rsta_addr_in_range(uint32_t addr);
+
+/*
+ * Decode a TEXIMAGE_PARAM word into the exact byte counts one texture needs.
+ * Bits 20..22 are width shift, 23..25 height shift (width/height = 8 << N) and
+ * bits 26..28 the packed format. Returns 1 and writes all three outputs for a
+ * valid format 1..7; returns 0 (outputs untouched) for format 0.
+ *
+ * texel_bytes: width*height * bytes/texel (1, 1/4, 1/2, 1, 1/4, 1, 2).
+ * palette_bytes: 2 * palette entries for A3I5/I2/I4/I8/A5I3, 0 for format 7.
+ *   Format 5 writes 0 here: its palette is not a fixed table but a
+ *   caller-chosen window validated by twlhd_v2_tex_palette_size_ok().
+ * index_bytes: width*height >> 3 for 4x4 only, else 0.
+ *
+ * Shared by the parser and the writer so the formula exists once.
+ */
+int twlhd_v2_tex_sizes(uint32_t teximage_param, uint32_t *texel_bytes,
+                       uint32_t *palette_bytes, uint32_t *index_bytes);
+
+/*
+ * True when palette_bytes is a legal PLDT block size for teximage_param.
+ * Formats 1/2/3/4/6 must equal twlhd_v2_tex_sizes(); format 7 must be 0;
+ * format 5 is an even window in [TWLHD_V2_TEX_PALETTE_4X4_MIN_BYTES,
+ * TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES]. Returns 0 for format 0 (fail closed).
+ *
+ * The parser and the writer both call this one helper.
+ */
+int twlhd_v2_tex_palette_size_ok(uint32_t teximage_param,
+                                 uint32_t palette_bytes);
 
 /* Input entry layouts for the writer and recorder. Host structs only. */
 typedef struct {
