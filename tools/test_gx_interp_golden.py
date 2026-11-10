@@ -939,6 +939,120 @@ class GxInterpGoldenTest(unittest.TestCase):
         # -524296 -> -32768.5 (exact in float32).
         self.assertEqual(tex[0]["s"], -32768.5)
 
+    # Repair round 2: per-term 64-bit headroom. Each test makes exactly one of
+    # the four product terms overflow 32 bits, so truncating that term alone in
+    # compute_tex_vertex() changes the int32 result. A large matrix element and
+    # a large coordinate are both required: a naive 0x40000000 element would
+    # make the truncation a no-op.
+    def test_tex_mode1_trunc_m0_s(self):
+        matrix_pos = [0] * 16
+        matrix_pos[0] = 0x00100000
+        entries = self._tex_mode1_stream(matrix_pos)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        _add_tex_coord(entries, 0x7FFF, 0)
+        entries.extend(_vtx16(0, 0))
+        _add_tex_coord(entries, -0x8000, 0)
+        entries.extend(_vtx16(0, 0))
+        matrix_neg = [0] * 16
+        matrix_neg[0] = -0x00100000
+        _add_load_4x4(entries, matrix_neg)
+        _add_tex_coord(entries, 0x7FFF, 0)
+        entries.extend(_vtx16(0, 0))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # 2^20*0x7FFF >> 12 = 8388352 -> 524272.0 (truncated product: -16.0);
+        # 2^20*-32768 >> 12 = -8388608 -> -524288.0 (truncated: 0.0);
+        # -2^20*0x7FFF >> 12 = -8388352 -> -524272.0 (truncated: +16.0).
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (524272.0, 0.0))
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (-524288.0, 0.0))
+        self.assertEqual((tex[2]["s"], tex[2]["t"]), (-524272.0, 0.0))
+
+    def test_tex_mode1_trunc_m4_t(self):
+        matrix_pos = [0] * 16
+        matrix_pos[4] = 0x00100000
+        entries = self._tex_mode1_stream(matrix_pos)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        _add_tex_coord(entries, 0, 0x7FFF)
+        entries.extend(_vtx16(0, 0))
+        _add_tex_coord(entries, 0, -0x8000)
+        entries.extend(_vtx16(0, 0))
+        matrix_neg = [0] * 16
+        matrix_neg[4] = -0x00100000
+        _add_load_4x4(entries, matrix_neg)
+        _add_tex_coord(entries, 0, 0x7FFF)
+        entries.extend(_vtx16(0, 0))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # s row t-term; same literals as the m[0]*s case.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (524272.0, 0.0))
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (-524288.0, 0.0))
+        self.assertEqual((tex[2]["s"], tex[2]["t"]), (-524272.0, 0.0))
+
+    def test_tex_mode1_trunc_m1_s(self):
+        matrix_pos = [0] * 16
+        matrix_pos[1] = 0x00100000
+        entries = self._tex_mode1_stream(matrix_pos)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        _add_tex_coord(entries, 0x7FFF, 0)
+        entries.extend(_vtx16(0, 0))
+        _add_tex_coord(entries, -0x8000, 0)
+        entries.extend(_vtx16(0, 0))
+        matrix_neg = [0] * 16
+        matrix_neg[1] = -0x00100000
+        _add_load_4x4(entries, matrix_neg)
+        _add_tex_coord(entries, 0x7FFF, 0)
+        entries.extend(_vtx16(0, 0))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # The t row's s-term: the exact term the 42-mutant run could truncate
+        # undetected. s stays 0.0 in every vertex.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (0.0, 524272.0))
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (0.0, -524288.0))
+        self.assertEqual((tex[2]["s"], tex[2]["t"]), (0.0, -524272.0))
+
+    def test_tex_mode1_trunc_m5_t(self):
+        matrix_pos = [0] * 16
+        matrix_pos[5] = 0x00100000
+        entries = self._tex_mode1_stream(matrix_pos)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        _add_tex_coord(entries, 0, 0x7FFF)
+        entries.extend(_vtx16(0, 0))
+        _add_tex_coord(entries, 0, -0x8000)
+        entries.extend(_vtx16(0, 0))
+        matrix_neg = [0] * 16
+        matrix_neg[5] = -0x00100000
+        _add_load_4x4(entries, matrix_neg)
+        _add_tex_coord(entries, 0, 0x7FFF)
+        entries.extend(_vtx16(0, 0))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # t row t-term; same literals, s stays 0.0.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (0.0, 524272.0))
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (0.0, -524288.0))
+        self.assertEqual((tex[2]["s"], tex[2]["t"]), (0.0, -524272.0))
+
+    def test_tex_mode1_sum_over_32bit(self):
+        matrix = [0] * 16
+        matrix[0] = 0x7FFFFFFF
+        matrix[4] = 0x7FFFFFFF
+        matrix[8] = 0x7FFFFFFF
+        matrix[12] = 0x7FFFFFFF
+        entries = self._tex_mode1_stream(matrix)
+        _tex_triangle(entries, [(1, 1), (1, 1), (1, 1)])
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        # Each product is 0x7FFFFFFF (fits int32) but 4*(2^31-1) = 2^33-4
+        # exceeds 2^32; >> 12 = 2^21-1 = 2097151 -> 131071.9375. A signed
+        # 32-bit accumulator gives -4 >> 12 = -1 -> -0.0625; a uint32
+        # accumulator shifted before narrowing gives 1048575 -> 65535.9375.
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (131071.9375, 0.0))
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (131071.9375, 0.0))
+        self.assertEqual((tex[2]["s"], tex[2]["t"]), (131071.9375, 0.0))
+
     def test_tex_matrix_load_4x3_and_mult_3x3(self):
         load_4x3 = [8192, 0, 0,
                     0, 2048, 0,

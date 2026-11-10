@@ -151,3 +151,84 @@ are numerically identical under both formulas (`m*(s<<8)>>12/4096 ==
 m*s>>12/16`), and they carry no `m8/m9` term; only translation (16x) and the
 missing addends changed. Verified by running the unchanged suite: 142/142
 pass on the baseline.
+
+## Repair round 2 (2026-11-11): per-term 64-bit headroom
+
+Scope: **tests only**. The 42-mutant run on the merged branch left one real
+survivor in the mode-1 texture-coordinate transform
+(`common/twlhd_gx_interp.c:718-723`): truncating the `m[1]*s` product to 32
+bits (`int64_t t_acc = (int32_t)((int64_t)g->tex.m[1] * g->tex_s) + ...`)
+passed the whole suite, because the pre-existing `64bit_headroom` case only
+exercised the s row's `m[0]*s` term. This round adds one test per product
+term plus a whole-sum overflow case.
+
+Every mutant was applied to a scratch copy of the ONE file
+`common/twlhd_gx_interp.c` under `/tmp/opencode/mutants5b2b-r2/` (outside the
+worktree) and compiled with the round-1 host flags
+(`-std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host
+-Itools/azahar_host -fsanitize=address,undefined`) against the unmodified
+`tests/host/test_gx_interp.c` and the unmodified parser/writer/record sources.
+The unmutated scratch copy passes all **147** tests (was 142 before this
+round). A mutant is **KILLED** when the binary exits non-zero and the failing
+`gx_interp/...` label is recorded below.
+
+### New cases
+
+Each case sets exactly one matrix element large (`0x00100000`, plus a negative
+re-load) with a large coordinate (`0x7FFF` / `-0x8000`), other terms zero, so
+that term's product exceeds 32 bits and its truncation changes the `int32`
+result:
+
+| Test | Term isolated | Correct literals | Truncated-product literals |
+|---|---|---|---|
+| `tex-mode1-trunc-m0-s` | `m[0]*s` (s row) | `524272.0`, `-524288.0`, `-524272.0` | `-16.0`, `0.0`, `16.0` |
+| `tex-mode1-trunc-m4-t` | `m[4]*t` (s row) | `524272.0`, `-524288.0`, `-524272.0` | `-16.0`, `0.0`, `16.0` |
+| `tex-mode1-trunc-m1-s` | `m[1]*s` (t row) | t = `524272.0`, `-524288.0`, `-524272.0` | t = `-16.0`, `0.0`, `16.0` |
+| `tex-mode1-trunc-m5-t` | `m[5]*t` (t row) | t = `524272.0`, `-524288.0`, `-524272.0` | t = `-16.0`, `0.0`, `16.0` |
+| `tex-mode1-sum-over-32bit` | whole sum, products fit | `131071.9375` | `-0.0625` (signed 32-bit acc) / `65535.9375` (uint32 acc) |
+
+The `sum-over-32bit` matrix is `m[0]=m[4]=m[8]=m[12]=0x7FFFFFFF` with
+coordinates `(1,1)`: each product is `0x7FFFFFFF` (fits `int32`), but
+`4*(2^31-1) = 2^33-4 > 2^32`.
+
+### Results
+
+| # | Mutant (in `compute_tex_vertex`) | Result | Killing test(s) and observed wrong value |
+|---:|---|---|---|
+| 1 | `(int32_t)((int64_t)m[0] * tex_s)` | KILLED | `tex-mode1-trunc-m0-s`: got `-16.0 / 0.0 / 16.0` instead of `524272.0 / -524288.0 / -524272.0` (also `tex-mode1-64bit-headroom`, `tex-mode1-s32-wrap-extreme`) |
+| 2 | `(int32_t)((int64_t)m[4] * tex_t)` | KILLED | `tex-mode1-trunc-m4-t`: got `-16.0 / 0.0 / 16.0` instead of `524272.0 / -524288.0 / -524272.0` |
+| 3 | `(int32_t)((int64_t)m[1] * tex_s)` | KILLED | `tex-mode1-trunc-m1-s`: got `t = -16.0 / 0.0 / 16.0` instead of `524272.0 / -524288.0 / -524272.0` — this is the original 42-mutant survivor |
+| 4 | `(int32_t)((int64_t)m[5] * tex_t)` | KILLED | `tex-mode1-trunc-m5-t`: got `t = -16.0 / 0.0 / 16.0` instead of `524272.0 / -524288.0 / -524272.0` |
+| 5 | 32-bit accumulator for the whole row (`int32_t s_acc` / `int32_t t_acc`) | KILLED | `tex-mode1-sum-over-32bit`: got `-0.0625` instead of `131071.9375` (signed wraparound; no UBSan trap, the wrap is well-defined in practice but the assertion still fires). Also kills the four trunc tests. |
+
+Each of the five new C tests fails on its matching mutant. The golden side was
+verified the same way: the mutant source was also linked into the CLI
+(`tests/host/gx_interp_cli.c`) and `python3 -B -I -m unittest discover -s tools
+-k tex_mode1_` was run against it. Results: `trunc_m0_s` FAIL under mutant 1,
+`trunc_m4_t` under 2, `trunc_m1_s` under 3 (the original survivor),
+`trunc_m5_t` under 4, and `sum_over_32bit` (plus the four trunc tests) under 5.
+All 14 mode-1 golden tests pass on the restored unmutated CLI.
+
+### No-op mutants (not applicable)
+
+"Casting" the `m[8]`, `m[9]`, `m[12]` or `m[13]` addends to `int32_t` before
+promotion is exactly what the correct code already computes: those elements are
+already `int32_t` (`GxTexMatrix.m[16]`), so the cast is value-preserving. Four
+scratch mutants (`(int32_t)g->tex.m[8]`, `m[9]`, `m[12]`, `m[13]`) all build
+and pass 147/147. No test can or should distinguish them; reported as NO-OP,
+not as kills.
+
+### Equivalent mutant (do not chase)
+
+Replacing the arithmetic `s_acc >> 12` with `(uint64_t)s_acc >> 12` before the
+`(int32_t)` cast is **EQUIVALENT**: for a negative sum the logical shift adds
+`2^52` (`2^64` is a multiple of `2^12`), and `2^52` is a multiple of `2^32`, so
+the final `int32_t` result is identical. It cannot be killed by any input. The
+test files carry no mutant-note section, so this note lives here only.
+
+### Artifacts
+
+- Scratch sources and binaries: `/tmp/opencode/mutants5b2b-r2/` (outside the
+  worktree).
+- `git status` shows no change under `common/`; only the two test files and
+  this report changed.
