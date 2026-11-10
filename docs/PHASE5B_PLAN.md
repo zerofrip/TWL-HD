@@ -191,11 +191,21 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 - Not done: recorder-side texture capture, the Python mirror extension,
   interpreter texcoords, vertex-layout change and PICA upload.
 - Repair round 1: format 5 (4x4) `palette_size` is now a caller-chosen even
-  window in `[2, 65536]` bytes, not the fixed 0 this stage originally
-  specified. DeSmuME's PAL4X4 unpacker reads palette RAM per block
-  (`texcache.cpp` ~1752/1789-1843), so the old missing-palette rule was a
-  design defect; the parser and writer now share
-  `twlhd_v2_tex_palette_size_ok()`. Still BUILD/UNIT only.
+  window in `[2, 65540]` bytes (round 1 first shipped `[2, 65536]`; raised in
+  round 3), not the fixed 0 this stage originally specified. DeSmuME's PAL4X4
+  unpacker reads palette RAM per block (`texcache.cpp` ~1752/1789-1843), so
+  the old missing-palette rule was a design defect; the parser and writer now
+  share `twlhd_v2_tex_palette_size_ok()`. Still BUILD/UNIT only.
+- Repair round 3: format-5 window cap raised to 65,540 bytes (DeSmuME
+  `texcache.cpp:1752/1791` derivation: `0x3FFF*4 + 7` is the last byte index).
+  Orphan `TXDT`/`PLDT` chunks without `TXDS` now report `ERR_MISSING_CHUNK`
+  before the payload caps. Parser stays lax, writer canonical; two full
+  windows (131,080 bytes) remain a known `PLDT` cap limit (format doc section
+  12). Still BUILD/UNIT only.
+- Repair round 4: the writer zero-pads the `PLDT` payload to a multiple of 4
+  because format-5 windows are only even and may be 2 mod 4. The 98,304-byte
+  `PLDT` cap is applied to the padded length by both writer and parser; the
+  padding is never part of a record. Still BUILD/UNIT only.
 
 ## 4. Where the DS GX equations must come from
 

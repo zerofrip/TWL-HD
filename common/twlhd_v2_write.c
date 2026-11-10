@@ -32,6 +32,8 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
     uint32_t i;
     uint32_t txdt_bytes = 0;
     uint32_t pldt_bytes = 0;
+    uint32_t pldt_pad;
+    uint32_t pldt_total;
     TwlhdV2View view;
     TwlhdV2Result result;
 
@@ -95,6 +97,17 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
         pldt_bytes += e->palette_bytes;
     }
 
+    /*
+     * Format-5 windows are only even, so the concatenated PLDT payload may be
+     * 2 mod 4. Zero-pad the chunk (never a record) to keep it 4-byte aligned.
+     * The parser applies the PLDT cap to the padded payload length too.
+     */
+    pldt_pad = (4u - (pldt_bytes % 4u)) % 4u;
+    pldt_total = pldt_bytes + pldt_pad;
+    if (pldt_bytes != 0u && pldt_total > TWLHD_V2_PLDT_MAX_BYTES) {
+        return TWLHD_V2_ERR_PLDT;
+    }
+
     total = (uint64_t)TWLHD_V2_HEADER_SIZE +
             2u * (uint64_t)TWLHD_V2_CHUNK_HEADER_SIZE +
             (uint64_t)params->gxcm_count * TWLHD_V2_GXCM_ENTRY_SIZE +
@@ -108,7 +121,7 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
                  (uint64_t)params->tex_count * TWLHD_V2_TXDS_RECORD_SIZE +
                  (uint64_t)txdt_bytes;
         if (pldt_bytes != 0u) total += TWLHD_V2_CHUNK_HEADER_SIZE;
-        total += (uint64_t)pldt_bytes;
+        total += (uint64_t)pldt_total;
     }
 
     if (total > (uint64_t)capacity) return TWLHD_V2_ERR_SIZE;
@@ -212,7 +225,7 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
 
         if (pldt_bytes != 0u) {
             offset = write_chunk_header(out, offset, TWLHD_V2_CHUNK_PLDT,
-                                        pldt_bytes, 0);
+                                        pldt_total, 0);
             for (i = 0; i < params->tex_count; i++) {
                 const TwlhdV2TexEntry *e = &params->tex[i];
 
@@ -220,6 +233,11 @@ TwlhdV2Result twlhd_v2_write(const TwlhdV2WriteParams *params, uint8_t *out,
                     memcpy(out + offset, e->palette, e->palette_bytes);
                     offset += e->palette_bytes;
                 }
+            }
+            /* Explicit zero stores: the output buffer may hold stale bytes. */
+            if (pldt_pad != 0u) {
+                memset(out + offset, 0, pldt_pad);
+                offset += pldt_pad;
             }
         }
     }

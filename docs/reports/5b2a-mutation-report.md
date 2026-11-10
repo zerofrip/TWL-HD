@@ -12,7 +12,8 @@ pal1offset`, `pal1offset = (blockword & 0x3FFF)<<1`). `paletteSizeList[5] = 0`
 that the format has no palette.
 
 Format 5 `palette_size` is now a caller/capture-chosen even window in
-`[2, 65536]` bytes. One shared helper,
+`[2, 65540]` bytes (rounds 1-2 stated `[2, 65536]`; raised to 65,540 in repair
+round 3). One shared helper,
 `twlhd_v2_tex_palette_size_ok()`, is called by both the parser and the writer.
 All other formats keep their fixed sizes and format 7 keeps 0.
 
@@ -173,14 +174,82 @@ worktree.
 All seven mutants are killed; the control survives, so the harness itself is
 sound.
 
+## Repair round 4
+
+Host-side only; no parser, 3DS, interpreter or vertex/stride change. An
+independent review found that the writer could not emit a legal format-5 PLDT
+when a palette window (or a sum of palettes) was even but not a multiple of 4
+(2, 6, 10, ... bytes): the PLDT payload length was not a multiple of 4, so the
+writer's own final `twlhd_v2_parse()` returned `ERR_CHUNK_ALIGN` and no file
+was produced.
+
+**Fix.** `common/twlhd_v2_write.c` computes
+`pldt_pad = (4 - pldt_bytes % 4) % 4` and pads the PLDT payload with explicit
+zero bytes after the last palette block. The padded length is used for the
+PLDT chunk header `payload_size`, for `total`, and by a new explicit writer cap
+check (`pldt_total > TWLHD_V2_PLDT_MAX_BYTES` → `ERR_PLDT`). Record
+`palette_offset`/`palette_size` values are unchanged: padding is never part of
+a record. `TXDT` needs no padding: every format-1..7 texel/index block is a
+multiple of 4 (`test_tex_txdt_alignment`).
+
+The parser already ignored trailing PLDT bytes and already applied the 98,304-
+byte cap to the whole (padded) chunk payload, so no parser change was needed.
+Writer and parser now gate on the same padded length.
+
+**Pre-fix RED proof.** A copy of the worktree with only the new tests applied
+(scratch `/tmp/opencode/round4`, *outside* the worktree) was built against the
+unfixed writer and run:
+
+- `test_v2_write`: 28 failed checks. `v2-write/tex-format5-pldt-padding`
+  (19 checks): every `twlhd_v2_write()` returned `9`
+  (`TWLHD_V2_ERR_CHUNK_ALIGN`) instead of `OK`, so `pldt_size`,
+  `palette_offset` and `palette_size` were never observable.
+  `v2-write/tex-pldt-cap-boundary` (9 checks): the exact-cap case returned
+  `ERR_CHUNK_ALIGN` instead of `OK`; the 98,308 case returned
+  `ERR_CHUNK_ALIGN` instead of `ERR_PLDT`.
+- `test_v2_parse`: all 28 groups passed — the new padded-PLDT case is a
+  parser-only check and already worked.
+
+After applying the writer fix the same tests are green (`15` and `28` groups).
+
+New tests: `v2-write/tex-format5-pldt-padding` (2-byte and 6-byte windows
+alone, and an I2 8-byte palette plus a 2-byte window: 10 raw → 12 padded;
+offsets/sizes and pad bytes asserted), `v2-write/tex-pldt-cap-boundary`
+(65,540 + 32,762 + 2 pad = exactly 98,304 accepted; 32,766 → 98,308 →
+`ERR_PLDT`), `v2-write/tex-txdt-alignment` (formats 1..7, shifts 0..2),
+`v2-parse/tex-format5-padded-pldt` (6-byte window in an 8-byte payload; the
+trailing 2 bytes are ignored).
+
+### Mutation proof (round 4)
+
+Scratch copies under `/tmp/opencode/mutants4/`, each a fresh copy of the fixed
+worktree built with the Makefile's host command
+(`cc -std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host ...`), then
+run against both `test_v2_write` and `test_v2_parse`. Nothing was added to the
+worktree.
+
+| # | Mutant (scratch `twlhd_v2_write.c`) | Result | Killing test / reason |
+| ---: |---|---|---|
+| 1 | padding removed (`pldt_pad = 0`) | KILLED | `v2-write/tex-format5-pldt-padding` (19 checks) and `v2-write/tex-pldt-cap-boundary` (8 checks): writes return `9` (`ERR_CHUNK_ALIGN`) / the exact-cap case fails |
+| 2 | `pldt_pad = 4 - n%4` always (adds 4 when aligned) | KILLED | `v2-write/tex-golden` first: size 352 → 356, golden `memcmp` fails (then ASAN aborts on the over-read, so later groups do not run) |
+| 3 | padding not in the PLDT chunk-header size | KILLED | `v2-write/tex-format5-pldt-padding` (19) and `v2-write/tex-pldt-cap-boundary` (8): header shorter than payload, self-parse `ERR_CHUNK_ALIGN` |
+| 4 | padding not in `total` | KILLED | Same two groups (19 + 8): self-parse reads past `total_size` and returns `8` (`ERR_CHUNK_BOUNDS`) |
+| 5 | padding added to a record's `palette_size` (last record) | KILLED | `v2-write/tex-format5-pldt-padding` (3 checks: 2→4, 6→8) and `v2-write/tex-pldt-cap-boundary` (1 check: 32,762→32,764) |
+| 6 | PLDT cap evaluated on the unpadded length in the writer only | SURVIVED (equivalent) | All legal palette sums are even, so unpadded > 98,304 ⇔ padded > 98,304 (padding is 0 or 2 for an even sum). No input can distinguish it while both checks use the same constant. Recorded honestly, like round 1's mutant 11. |
+| 0 | pristine control | SURVIVED (expected) | Both suites green |
+
+Five mutants killed, one documented equivalent survivor, control survives.
+
 ## Verification
 
 - `make test` (host suite plus Python suite): green.
 - `./tests/host/build/test_v2_parse`, `./tests/host/build/test_v2_write`:
   green after the test updates.
 - Mutation builds: `/tmp/opencode/mutants/run_mutants.py` (round 1),
-  `/tmp/opencode/mutants2/run_mutants.py` (round 2) and
-  `/tmp/opencode/mutants3/run_mutants.py` (round 3), results above.
+  `/tmp/opencode/mutants2/run_mutants.py` (round 2),
+  `/tmp/opencode/mutants3/run_mutants.py` (round 3) and
+  `/tmp/opencode/mutants4/run.py` (round 4), results above. The pre-fix RED
+  proof is the round-4 scratch copy at `/tmp/opencode/round4`.
 
 ## Notes and residual risk
 

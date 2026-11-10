@@ -1355,6 +1355,40 @@ static void test_tex_format5_golden(void) {
     CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[7], 0x4Cu);
 }
 
+/*
+ * Repair round 4: a format-5 window may be 2 mod 4. The writer zero-pads the
+ * PLDT payload and the parser ignores the trailing pad bytes; they must not be
+ * part of the record's range.
+ */
+static void test_tex_format5_padded_pldt(void) {
+    TwlhdV2View view;
+    TwlhdV2TexRecord rec;
+    size_t size;
+    uint32_t i;
+
+    for (i = 0; i < sizeof g_txdt; i++) {
+        g_txdt[i] = (uint8_t)(0x40u + (i & 0x3Fu));
+    }
+    for (i = 0; i < sizeof g_pldt; i++) {
+        g_pldt[i] = (uint8_t)(0x80u + (i & 0x3Fu));
+    }
+
+    /* 6-byte window inside an 8-byte PLDT payload: 2 trailing bytes ignored. */
+    put_tex_record(0, 5u << 26, 0u, 0u, 16u, 0u, 6u, 16u, 8u);
+    size = build_tex_default(g_txds, 40u, g_txdt, 24u, g_pldt, 8u);
+    CHECK_EQ_INT(twlhd_v2_parse(g_buf, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 1u);
+    CHECK_EQ_INT(view.pldt_size, 8u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 6u);
+    CHECK_EQ_INT(rec.index_offset, 16u);
+    CHECK_EQ_INT(rec.index_size, 8u);
+    CHECK(twlhd_v2_tex_palette_ptr(&view, 0) == view.pldt);
+    CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[0], g_pldt[0]);
+    CHECK_EQ_INT(twlhd_v2_tex_palette_ptr(&view, 0)[5], g_pldt[5]);
+}
+
 int main(void) {
     test_null_version_truncated();
     test_report("v2-parse/null-version-truncated");
@@ -1400,6 +1434,8 @@ int main(void) {
     test_report("v2-parse/tex-record-size");
     test_tex_format5_golden();
     test_report("v2-parse/tex-format5-golden");
+    test_tex_format5_padded_pldt();
+    test_report("v2-parse/tex-format5-padded-pldt");
     test_view_zeroed_on_errors();
     test_report("v2-parse/view-zeroed-on-errors");
     test_view_fields();
