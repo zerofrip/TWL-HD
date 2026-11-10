@@ -731,6 +731,179 @@ static void test_tex_4x4_pldt_limit(void) {
     CHECK(twlhd_v2_tex_palette_ptr(&view, 1)[7] == g_tex0_palette[7]);
 }
 
+/*
+ * Repair round 4: a format-5 window is only even, so it may be 2 mod 4 (2, 6,
+ * 10, ... bytes). The writer zero-pads the PLDT payload to a multiple of 4.
+ * Padding belongs to the chunk and is never part of any record.
+ */
+static void test_tex_format5_pldt_padding(void) {
+    static const uint8_t pal2[2] = {0xA5, 0x5A};
+    static const uint8_t pal6[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
+    TwlhdV2WriteParams params = golden_params();
+    TwlhdV2TexEntry tex[2];
+    TwlhdV2View view = {0};
+    TwlhdV2TexRecord rec;
+    uint8_t first[512];
+    uint8_t second[512];
+    size_t size;
+    size_t size_b;
+
+    params.rsta = NULL;
+    params.rsta_count = 0u;
+    params.tex = tex;
+
+    /* A 2-byte window alone: 2 raw bytes + 2 pad = 4. */
+    tex[0] = (TwlhdV2TexEntry){5u << 26, 0u, g_fmt5_texel, pal2,
+                               g_fmt5_index, 16u, 2u, 8u};
+    params.tex_count = 1u;
+    size = 0;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 4u);
+    CHECK_EQ_INT(view.pldt_size % 4u, 0u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 2u);
+    if (view.pldt != NULL) {
+        CHECK(memcmp(view.pldt, pal2, sizeof pal2) == 0);
+        CHECK_EQ_INT(view.pldt[2], 0u);
+        CHECK_EQ_INT(view.pldt[3], 0u);
+    }
+
+    /* A 6-byte window alone: 6 raw bytes + 2 pad = 8. */
+    tex[0] = (TwlhdV2TexEntry){5u << 26, 0u, g_fmt5_texel, pal6,
+                               g_fmt5_index, 16u, 6u, 8u};
+    size = 0;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 8u);
+    CHECK_EQ_INT(view.pldt_size % 4u, 0u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 6u);
+    if (view.pldt != NULL) {
+        CHECK(memcmp(view.pldt, pal6, sizeof pal6) == 0);
+        CHECK_EQ_INT(view.pldt[6], 0u);
+        CHECK_EQ_INT(view.pldt[7], 0u);
+    }
+
+    /* I2 (8-byte palette) + a 2-byte format-5 window: 10 raw + 2 pad = 12. */
+    tex[0] = g_tex_entries[0];
+    tex[1] = (TwlhdV2TexEntry){5u << 26, 1u, g_fmt5_texel, pal2,
+                               g_fmt5_index, 16u, 2u, 8u};
+    params.tex_count = 2u;
+    size = 0;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, 12u);
+    CHECK_EQ_INT(view.pldt_size % 4u, 0u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, 8u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 1, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 8u);
+    CHECK_EQ_INT(rec.palette_size, 2u);
+    if (view.pldt != NULL && twlhd_v2_tex_palette_ptr(&view, 1) != NULL) {
+        CHECK(memcmp(twlhd_v2_tex_palette_ptr(&view, 0), g_tex0_palette,
+                     sizeof g_tex0_palette) == 0);
+        CHECK(memcmp(twlhd_v2_tex_palette_ptr(&view, 1), pal2,
+                     sizeof pal2) == 0);
+        CHECK_EQ_INT(view.pldt[10], 0u);
+        CHECK_EQ_INT(view.pldt[11], 0u);
+    }
+
+    /* The padded output is deterministic across two runs. */
+    CHECK(size <= sizeof first);
+    if (size <= sizeof first) {
+        memcpy(first, g_out, size);
+        size_b = 0;
+        CHECK_EQ_INT(twlhd_v2_write(&params, second, sizeof second, &size_b),
+                     TWLHD_V2_OK);
+        CHECK_EQ_INT(size_b, size);
+        CHECK(memcmp(first, second, size) == 0);
+    }
+}
+
+/*
+ * Boundary at the 98,304-byte PLDT cap with an unaligned window sum. 65,540
+ * plus 32,762 is 98,302 raw; the +2 pad reaches exactly the cap. 32,766 gives
+ * 98,308 after padding, one past it. Writer and parser both gate on the padded
+ * length (test_tex_limits() in test_v2_parse.c covers the standalone parser).
+ */
+static void test_tex_pldt_cap_boundary(void) {
+    TwlhdV2WriteParams params = golden_params();
+    TwlhdV2TexEntry tex[2];
+    TwlhdV2View view = {0};
+    TwlhdV2TexRecord rec;
+    static uint8_t big[TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES];
+    size_t size;
+    uint32_t i;
+
+    for (i = 0; i < sizeof big; i++) big[i] = (uint8_t)(i * 7u);
+
+    params.rsta = NULL;
+    params.rsta_count = 0u;
+    params.tex = tex;
+    params.tex_count = 2u;
+
+    tex[0] = (TwlhdV2TexEntry){5u << 26, 0u, g_fmt5_texel, big, g_fmt5_index,
+                               16u, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES, 8u};
+    tex[1] = (TwlhdV2TexEntry){5u << 26, 1u, g_fmt5_texel, big, g_fmt5_index,
+                               16u, 32762u, 8u};
+    size = 0;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.pldt_size, TWLHD_V2_PLDT_MAX_BYTES);
+    CHECK_EQ_INT(view.pldt_size % 4u, 0u);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 0, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, 0u);
+    CHECK_EQ_INT(rec.palette_size, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
+    CHECK_EQ_INT(twlhd_v2_txds_record(&view, 1, &rec), 1);
+    CHECK_EQ_INT(rec.palette_offset, TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES);
+    CHECK_EQ_INT(rec.palette_size, 32762u);
+    if (view.pldt != NULL && twlhd_v2_tex_palette_ptr(&view, 1) != NULL) {
+        CHECK(memcmp(twlhd_v2_tex_palette_ptr(&view, 0), big,
+                     TWLHD_V2_TEX_PALETTE_4X4_MAX_BYTES) == 0);
+        CHECK(memcmp(twlhd_v2_tex_palette_ptr(&view, 1), big, 32762u) == 0);
+        CHECK_EQ_INT(view.pldt[TWLHD_V2_PLDT_MAX_BYTES - 2u], 0u);
+        CHECK_EQ_INT(view.pldt[TWLHD_V2_PLDT_MAX_BYTES - 1u], 0u);
+    }
+
+    tex[1].palette_bytes = 32766u;
+    CHECK_EQ_INT(twlhd_v2_write(&params, g_out, sizeof g_out, &size),
+                 TWLHD_V2_ERR_PLDT);
+}
+
+/*
+ * Every format-1..7 texel/index block is a multiple of 4 bytes for every
+ * reachable width/height (>= 8), so the writer never needs TXDT padding.
+ */
+static void test_tex_txdt_alignment(void) {
+    uint32_t format;
+    uint32_t wshift;
+    uint32_t hshift;
+
+    for (format = 1u; format <= 7u; format++) {
+        for (wshift = 0u; wshift <= 2u; wshift++) {
+            for (hshift = 0u; hshift <= 2u; hshift++) {
+                uint32_t param = (format << 26) | (wshift << 20) |
+                                 (hshift << 23);
+                uint32_t texel_bytes = 0;
+                uint32_t index_bytes = 0;
+
+                CHECK_EQ_INT(twlhd_v2_tex_sizes(param, &texel_bytes, NULL,
+                                                &index_bytes), 1);
+                CHECK_EQ_INT(texel_bytes % 4u, 0u);
+                CHECK_EQ_INT(index_bytes % 4u, 0u);
+            }
+        }
+    }
+}
+
 int main(void) {
     test_golden();
     test_report("v2-write/golden");
@@ -756,5 +929,11 @@ int main(void) {
     test_report("v2-write/tex-4x4-pldt-limit");
     test_tex_only_adds_chunks();
     test_report("v2-write/tex-only-adds-chunks");
+    test_tex_format5_pldt_padding();
+    test_report("v2-write/tex-format5-pldt-padding");
+    test_tex_pldt_cap_boundary();
+    test_report("v2-write/tex-pldt-cap-boundary");
+    test_tex_txdt_alignment();
+    test_report("v2-write/tex-txdt-alignment");
     return test_exit_code();
 }

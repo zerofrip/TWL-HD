@@ -353,14 +353,21 @@ the captured window are a later decoder error, not a parser error. The
 For every record, in `TXDS` order, `TXDT` holds `texel_size` texel bytes
 followed by `index_size` index bytes, hence
 `index_offset = texel_offset + texel_size` for a 4x4 record. `PLDT` holds the
-palette blocks in the same record order. All block sizes are multiples of 4
-(`width,height >= 8`), so both chunks stay 4-byte aligned.
+palette blocks in the same record order. Texel and index blocks are multiples
+of 4 bytes for every format (`width,height >= 8`), so `TXDT` stays 4-byte
+aligned. Format-5 palette windows are only even, so they may be `2 mod 4`
+(2, 6, 10, ... bytes): the writer appends 1..3 zero pad bytes after the last
+palette block so the `PLDT` payload length is a multiple of 4. The padding
+belongs to the chunk, not to any record (`palette_offset` and `palette_size`
+never cover it), and the parser ignores any trailing `PLDT` bytes beyond the
+referenced ranges.
 
 **Parser lax, writer canonical.** The layout above is what the writer emits:
 records in order, each index block right after its texels, palettes
-concatenated in record order. The parser only requires that every referenced
-range is in bounds; it accepts any in-bounds offsets, including overlapping
-texel ranges, overlapping records, shared palette windows and odd
+concatenated in record order. Trailing `PLDT` padding is tolerated by the
+parser and emitted only by the writer. The parser only requires that every
+referenced range is in bounds; it accepts any in-bounds offsets, including
+overlapping texel ranges, overlapping records, shared palette windows and odd
 `palette_offset` values. Only the writer is canonical. A future Python mirror
 must follow the parser (in-bounds ranges), not the writer's layout.
 
@@ -416,8 +423,8 @@ passes. Python does not implement steps 10 and 15 for `TXDS`/`TXDT`/`PLDT`
     - `offset + size` past the chunk payload, computed in 64-bit so an
       overflowing offset is caught (`TXDT` first, then `PLDT`) →
       `ERR_TXDS_BOUNDS`;
-    - `TXDT` payload over 524,288 bytes → `ERR_TXDT`; `PLDT` payload over
-      98,304 bytes → `ERR_PLDT`.
+    - `TXDT` payload over 524,288 bytes → `ERR_TXDT`; padded `PLDT` payload
+      over 98,304 bytes → `ERR_PLDT`.
 15. `META` errors → `ERR_META`.
 
 Within step 12 the three passes are separate: all cmd-word checks run before
@@ -571,6 +578,12 @@ fixed palettes of every other format (64 + 8 + 32 + 512 + 16 = 632 bytes) is
 the window, so a file never needs to carry more palette than the colours it
 actually captures; reading colours beyond the captured window is a
 decoder-stage error, not a parser error.
+
+The 98,304-byte `PLDT` cap is applied to the padded payload length by both the
+parser and the writer. The canonical writer zero-pads (at most 3 bytes) before
+the chunk header is written, so writer and parser gate on the same length; the
+exact-cap boundary sum (65,540 + 32,762 + 2 pad = 98,304) is exercised by the
+host tests.
 
 **Known limit for owner review:** two full format-5 windows (2 x 65,540 =
 131,080 bytes) exceed the 98,304-byte `PLDT` cap. The writer concatenates
