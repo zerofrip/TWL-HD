@@ -25,6 +25,13 @@ typedef struct {
     float rgba[4]; /* r, g, b, a in 0..1 (alpha from POLYGON_ATTR, see stats). */
 } TwlhdGxVertex;
 
+/* 16 bytes: texture state at the VTX command that produced the vertex. */
+typedef struct {
+    float s, t;              /* s1.11.4 latched (and transformed per mode). */
+    uint32_t teximage_param; /* TEXIMAGE_PARAM current at VTX (0 = untextured). */
+    uint32_t pltt_base;      /* PLTT_BASE current at VTX. */
+} TwlhdGxTexVertex;
+
 typedef struct {
     uint8_t x1, y1, x2, y2;
     int present; /* non-zero after a VIEWPORT command is seen. */
@@ -48,6 +55,8 @@ typedef struct {
                                          1..30 (one per group, not per poly). */
     uint32_t alpha_wireframe_polys;   /* BEGIN groups with applied raw alpha 0
                                          (outline-only drawing NOT implemented). */
+    uint32_t tex_transform_unsupported; /* VTX commands with texture transform
+                                           mode 2/3: raw coords emitted. */
 } TwlhdGxStats;
 
 typedef enum {
@@ -78,6 +87,22 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view,
                                  uint32_t *out_vertex_count,
                                  TwlhdGxViewport *viewport,
                                  TwlhdGxStats *stats);
+
+/*
+ * Same as twlhd_gx_interpret(), plus an optional parallel texture array.
+ *
+ * tex_out: NULL behaves exactly like twlhd_gx_interpret(). Otherwise it must
+ *   have at least out_capacity_vertices entries; tex_out[i] describes out[i]
+ *   (same ordering, quad splitting and capacity truncation). Texture data is
+ *   latched at each VTX command; TEXIMAGE_PARAM/PLTT_BASE latch immediately.
+ */
+TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
+                                    TwlhdGxVertex *out,
+                                    uint32_t out_capacity_vertices,
+                                    uint32_t *out_vertex_count,
+                                    TwlhdGxViewport *viewport,
+                                    TwlhdGxStats *stats,
+                                    TwlhdGxTexVertex *tex_out);
 
 const char *twlhd_gx_result_string(TwlhdGxResult result);
 

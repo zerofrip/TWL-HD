@@ -258,7 +258,11 @@ The vertex colour starts as the emission colour and is clamped with `min(31, x)`
 - Test plan hint (UNIT): an independent Python oracle that re-implements the integer equations above, golden streams for one light diffuse-only, ambient-only, emission-only, specular with and without the shininess table, light mask bits, clamping at 31; mutation tests for each shift constant.
 
 ## Textures (5B-2 research)
-Status: research only; no source, test or Makefile change. Sources are the DeSmuME checkout cited at the top (commit `fc504ee0`); GBATEK was not consulted. Labels: **VERIFIED** = read at the cited line, **READ** = derived from the cited source, **UNVERIFIED** = not checked against hardware or register docs.
+Status: research plus the host-side 5B-2b interpreter (BUILD/UNIT only; no
+EMULATOR or HARDWARE run). Sources are the DeSmuME checkout cited at the top
+(commit `fc504ee0`); GBATEK was not consulted. Labels: **VERIFIED** = read at
+the cited line, **READ** = derived from the cited source, **UNVERIFIED** = not
+checked against hardware or register docs.
 
 ### TEXIMAGE_PARAM (0x2A) and PLTT_BASE (0x2B)
 **VERIFIED:** command ids `GFX3D_TEXIMAGE_PARAM = 0x2A`, `GFX3D_PLTT_BASE = 0x2B`
@@ -333,6 +337,47 @@ mode even when the flag is clear (`gfx3d.cpp:1579-1580`). Modes come from
 **READ:** all modes are integer fixed point with no normalisation; the texture
 matrix is `MATRIXMODE_TEXTURE` as latched at VTX time, so matrix changes between
 TEX_COORD and VTX are observed.
+
+### Implementation status 5B-2b (host interpreter)
+
+Implemented in `common/twlhd_gx_interp.c` / `.h`; **BUILD/UNIT only**, no
+EMULATOR or HARDWARE verification:
+
+- **VERIFIED (host tests only, not hardware):** TEX_COORD (0x22),
+  TEXIMAGE_PARAM (0x2A) and PLTT_BASE (0x2B) are latched, each with no
+  `ignored_no_effect` increment. TEXIMAGE_PARAM/PLTT_BASE are latched
+  immediately; TEX_COORD and the transform mode are sampled at each VTX
+  command. `twlhd_gx_interpret_ex()` reports them per output vertex in a
+  parallel `TwlhdGxTexVertex` (`float s,t; uint32_t teximage_param;
+  uint32_t pltt_base;`, 16 B). `TwlhdGxVertex` stays 32 B (static asserts) and
+  `twlhd_gx_interpret()` is a `tex_out == NULL` wrapper.
+- **READ:** TEX_COORD is two packed s16 (S low, T high), s1.11.4 -> float
+  value/16.0. Format 0 (no texture / TEXIMAGE_PARAM 0) still receives an
+  entry, with `teximage_param == 0`; the consumer decides.
+- **READ (per `gfx3d.cpp:1579-1611` as recorded above; the external checkout
+  was not available in the implementation sandbox, so the exact integer steps
+  are UNVERIFIED against source):** mode 1 applies texture-matrix rows 0/1 to
+  the latched coordinate promoted to 20.12 (`s20 = s16 << 8`):
+  `s' = (m[0]*s20 + m[4]*t20 + m[12]*4096) >> 12`,
+  `t' = (m[1]*s20 + m[5]*t20 + m[13]*4096) >> 12`, output floats `s'/4096`
+  and `t'/4096`. Column-major `m[col*4+row]`; a 20.12 translation of 4096 is
+  1.0 texture unit.
+- **IMPLEMENTED (BUILD/UNIT):** MTX_MODE 3 now has its own 20.12 texture
+  matrix and a **one-entry** stack (the task contract records DeSmuME's
+  `MatrixStack(1,"texture")`; not re-checked in source here). LOAD_4x4/4x3,
+  MULT_4x4/4x3/3x3, IDENTITY, SCALE, TRANS, PUSH, POP, STORE and RESTORE work
+  on it; the lighting vector matrix is untouched. PUSH overflows to
+  `stack_errors`/`ERR_STACK`; POP ignores its parameter and restores slot 0;
+  STORE/RESTORE accept index 0 only (index >= 1 is `ERR_STACK`).
+- **GAP:** modes 2 (normal source) and 3 (vertex source) are **not
+  implemented**. Those vertices get the raw latched s,t and every VTX command
+  in such a mode increments `TwlhdGxStats.tex_transform_unsupported`; the
+  counter is per VTX command and is also incremented outside BEGIN..END, so it
+  is a stream property.
+- `tex_out[i]` describes `out[i]`: same ordering (including quad splitting and
+  strip winding swaps) and the capacity check drops the triangle from both
+  arrays, so no texture entry is written past `out_count`.
+- Colour/lighting/alpha behaviour is unchanged.
 
 ### Texture formats 1-7
 **VERIFIED:** `NDSTextureFormat` (`gfx3d.h:111-120`) and per-format unpacking

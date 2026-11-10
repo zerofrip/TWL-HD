@@ -207,6 +207,41 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   `PLDT` cap is applied to the padded length by both writer and parser; the
   padding is never part of a record. Still BUILD/UNIT only.
 
+#### Status 5B-2b — interpreter texture latch and texture matrix
+
+Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+
+- `common/twlhd_gx_interp.[ch]`: new `TwlhdGxTexVertex` (16 B) and
+  `twlhd_gx_interpret_ex(view, out, cap, out_count, viewport, stats,
+  tex_out)`; `twlhd_gx_interpret()` keeps its signature and is a
+  `tex_out == NULL` wrapper. `TwlhdGxVertex` stays 32 B (static asserts).
+- Latches: TEX_COORD (0x22, applied at VTX time), TEXIMAGE_PARAM (0x2A) and
+  PLTT_BASE (0x2B) (latched immediately). Per-vertex `tex_out` is a parallel
+  array: same ordering, quad splitting and capacity truncation as `out`.
+- Texture matrix: MTX_MODE 3 gets its own 20.12 matrix and one-entry stack
+  (LOAD/MULT/IDENTITY/SCALE/TRANS/PUSH/POP/STORE/RESTORE). The lighting vector
+  matrix is untouched by mode 3.
+- Transform: mode 0 = raw s1.11.4 (/16.0); mode 1 = texture-matrix rows 0/1
+  with translation and `>>12` (see `docs/DS_GX_RESEARCH.md`). Modes 2/3 are
+  **not implemented**: raw coordinates plus
+  `TwlhdGxStats.tex_transform_unsupported` (new, appended field), counted per
+  VTX command.
+- Tests: C unit tests in `tests/host/test_gx_interp.c` (latch order, sign
+  edges, mode 0 vs 1, modes 2/3 counter, quad/strip/capacity alignment,
+  `tex_out == NULL` equivalence, stack ops and stack errors); golden streams
+  in `tools/test_gx_interp_golden.py` compared to the independent
+  `TextureOracle` in `tools/gx_interp_oracle.py`.
+- Sanctioned existing-test updates (stats/stack semantics only, no assertion
+  deleted): `texture-mode-ignored` -> `texture-mode-loads-matrix`
+  (`ignored_no_effect` 1 -> 0, plus a mode-1 assertion);
+  `light-commands-not-ignored` `ignored_no_effect` 6 -> 3;
+  `light-mode3-stack-ignored` -> `light-mode3-stack-leaves-vec`
+  (`ignored_no_effect` 2 -> 0); `light-store-restore-mode3-leaves-vec`
+  STORE/RESTORE index 2 -> 0 (one-entry texture stack). The same index change
+  is applied to the matching golden stream.
+- Not done: recorder-side texture capture; sampling/TexEnv; PICA upload; the
+  vertex stride change; modes 2/3.
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in

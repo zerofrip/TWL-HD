@@ -10,6 +10,19 @@
 
 #include <string.h>
 
+/* Host tests include the header from C++, and the libnds shim test compiles
+ * this file as C++11; keep the size asserts spellable in both languages. */
+#if defined(__cplusplus)
+#define TWLHD_STATIC_ASSERT(cond, msg) static_assert(cond, msg)
+#else
+#define TWLHD_STATIC_ASSERT(cond, msg) _Static_assert(cond, msg)
+#endif
+
+TWLHD_STATIC_ASSERT(sizeof(TwlhdGxVertex) == 32,
+                    "TwlhdGxVertex must stay 32 bytes");
+TWLHD_STATIC_ASSERT(sizeof(TwlhdGxTexVertex) == 16,
+                    "TwlhdGxTexVertex must stay 16 bytes");
+
 /* Fixed-point scale: matrices are 20.12 (raw word = value * 4096). */
 #define FX_SHIFT 12
 #define FX_ONE   (1 << FX_SHIFT)
@@ -17,6 +30,7 @@
 /* Per-mode stack capacities (entries). */
 #define PROJ_STACK_CAP 1u
 #define POS_STACK_CAP  31u
+#define TEX_STACK_CAP  1u
 
 /* Parameter buffer. The largest GX command is SHININESS with 32 words. */
 #define PARAM_BUF_SIZE 32u
@@ -42,6 +56,7 @@ typedef struct {
 typedef struct {
     const TwlhdV2View *view;
     TwlhdGxVertex *out;
+    TwlhdGxTexVertex *tex_out; /* optional parallel texture array. */
     uint32_t out_capacity;
     uint32_t out_count;
     TwlhdGxViewport *viewport;
@@ -50,17 +65,25 @@ typedef struct {
     GxMatrix proj;
     GxMatrix pos;
     GxMatrix vec;           /* directional (lighting) matrix, modes 1/2. */
+    GxMatrix tex;           /* texture matrix, mode 3. */
     GxStack proj_stack;
     GxStack pos_stack;
     GxStack vec_stack;      /* parallel to pos_stack, modes 1/2. */
+    GxStack tex_stack;      /* one entry, mode 3. */
     GxMatrix clip;          /* proj * pos, recomputed after matrix changes. */
     int clip_dirty;
 
-    uint32_t mode;          /* 0=projection, 1/2=position, 3=texture (ignored). */
+    uint32_t mode;          /* 0=projection, 1/2=position, 3=texture. */
     GxVertexPos cur;        /* last emitted/updated vertex position. */
     float rgba[4];          /* latched colour; rgba[3] comes from the alpha. */
     uint32_t pending_alpha; /* raw 5-bit POLYGON_ATTR alpha, default 31. */
     uint32_t applied_alpha; /* raw alpha copied from pending at BEGIN_VTXS. */
+
+    /* Texture latch (DeSmuME gfx3d.cpp:1375-1414). */
+    int32_t tex_s;          /* raw TEX_COORD low half, s1.11.4. */
+    int32_t tex_t;          /* raw TEX_COORD high half, s1.11.4. */
+    uint32_t teximage_param; /* raw TEXIMAGE_PARAM, 0 = untextured. */
+    uint32_t pltt_base;      /* raw PLTT_BASE. */
 
     /* Lighting latch (DeSmuME gfx3d.cpp:1158-1331). */
     uint32_t diffuse;       /* RGB555, low 15 bits (DIF_AMB low16). */
@@ -80,6 +103,7 @@ typedef struct {
     int in_begin;
     uint32_t begin_mode;
     TwlhdGxVertex prim_buf[4]; /* max vertices needed for a quad. */
+    TwlhdGxTexVertex prim_tex_buf[4]; /* parallel to prim_buf. */
     uint32_t prim_count;
     uint32_t prim_tri_index;   /* triangle index inside a strip (for winding). */
     int prim_emitted;          /* non-zero once a primitive has been emitted. */
@@ -232,11 +256,13 @@ static void mark_matrix_dirty(GxInterp *g) {
 
 static GxStack *current_stack(GxInterp *g) {
     if (g->mode == 0u) return &g->proj_stack;
+    if (g->mode == 3u) return &g->tex_stack;
     return &g->pos_stack;
 }
 
 static GxMatrix *current_matrix(GxInterp *g) {
     if (g->mode == 0u) return &g->proj;
+    if (g->mode == 3u) return &g->tex;
     return &g->pos;
 }
 
@@ -262,9 +288,9 @@ static int stack_pop(GxInterp *g, int32_t n) {
     GxStack *s = current_stack(g);
     uint32_t new_sp;
 
-    if (g->mode == 0u) {
-        /* Projection stack is one entry deep; the parameter is ignored and
-         * POP always restores slot 0. */
+    if (g->mode == 0u || g->mode == 3u) {
+        /* Projection and texture stacks are one entry deep; the parameter is
+         * ignored and POP always restores slot 0. */
         if (s->sp == 0u) {
             g->stats->stack_errors++;
             return 0;
@@ -519,14 +545,23 @@ static void transform_vertex(GxInterp *g, float x, float y, float z,
 }
 
 static int emit_triangle(GxInterp *g, const TwlhdGxVertex *a,
-                         const TwlhdGxVertex *b, const TwlhdGxVertex *c) {
+                         const TwlhdGxVertex *b, const TwlhdGxVertex *c,
+                         const TwlhdGxTexVertex *ta,
+                         const TwlhdGxTexVertex *tb,
+                         const TwlhdGxTexVertex *tc) {
     if (g->out_capacity - g->out_count < 3u) {
         g->stats->capacity_dropped += 3u;
         return 0;
     }
-    g->out[g->out_count++] = *a;
-    g->out[g->out_count++] = *b;
-    g->out[g->out_count++] = *c;
+    g->out[g->out_count] = *a;
+    if (g->tex_out) g->tex_out[g->out_count] = *ta;
+    g->out_count++;
+    g->out[g->out_count] = *b;
+    if (g->tex_out) g->tex_out[g->out_count] = *tb;
+    g->out_count++;
+    g->out[g->out_count] = *c;
+    if (g->tex_out) g->tex_out[g->out_count] = *tc;
+    g->out_count++;
     g->stats->triangles_out++;
     return 1;
 }
@@ -559,14 +594,18 @@ static void flush_primitive(GxInterp *g) {
     g->prim_emitted = 0;
 }
 
-static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
+static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
+                                const TwlhdGxTexVertex *tv) {
     uint32_t mode = g->begin_mode;
 
     if (mode == 0u) { /* triangle list */
-        g->prim_buf[g->prim_count++] = *v;
+        g->prim_buf[g->prim_count] = *v;
+        g->prim_tex_buf[g->prim_count] = *tv;
+        g->prim_count++;
         if (g->prim_count == 3u) {
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
-                               &g->prim_buf[2]))
+                               &g->prim_buf[2], &g->prim_tex_buf[0],
+                               &g->prim_tex_buf[1], &g->prim_tex_buf[2]))
                 return 0;
             g->prim_emitted = 1;
             g->prim_count = 0u;
@@ -575,13 +614,17 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
     }
 
     if (mode == 1u) { /* quad list */
-        g->prim_buf[g->prim_count++] = *v;
+        g->prim_buf[g->prim_count] = *v;
+        g->prim_tex_buf[g->prim_count] = *tv;
+        g->prim_count++;
         if (g->prim_count == 4u) {
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
-                               &g->prim_buf[2]))
+                               &g->prim_buf[2], &g->prim_tex_buf[0],
+                               &g->prim_tex_buf[1], &g->prim_tex_buf[2]))
                 return 0;
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[2],
-                               &g->prim_buf[3]))
+                               &g->prim_buf[3], &g->prim_tex_buf[0],
+                               &g->prim_tex_buf[2], &g->prim_tex_buf[3]))
                 return 0;
             g->stats->quads_split++;
             g->prim_emitted = 1;
@@ -591,15 +634,19 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
     }
 
     if (mode == 2u) { /* triangle strip */
-        g->prim_buf[g->prim_count++] = *v;
+        g->prim_buf[g->prim_count] = *v;
+        g->prim_tex_buf[g->prim_count] = *tv;
+        g->prim_count++;
         if (g->prim_count == 3u) {
             if ((g->prim_tri_index & 1u) == 0u) {
                 if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
-                                   &g->prim_buf[2]))
+                                   &g->prim_buf[2], &g->prim_tex_buf[0],
+                                   &g->prim_tex_buf[1], &g->prim_tex_buf[2]))
                     return 0;
             } else {
                 if (!emit_triangle(g, &g->prim_buf[1], &g->prim_buf[0],
-                                   &g->prim_buf[2]))
+                                   &g->prim_buf[2], &g->prim_tex_buf[1],
+                                   &g->prim_tex_buf[0], &g->prim_tex_buf[2]))
                     return 0;
             }
             g->prim_emitted = 1;
@@ -607,25 +654,33 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
             /* Roll the buffer: keep the last two vertices. */
             g->prim_buf[0] = g->prim_buf[1];
             g->prim_buf[1] = g->prim_buf[2];
+            g->prim_tex_buf[0] = g->prim_tex_buf[1];
+            g->prim_tex_buf[1] = g->prim_tex_buf[2];
             g->prim_count = 2u;
         }
         return 1;
     }
 
     if (mode == 3u) { /* quad strip */
-        g->prim_buf[g->prim_count++] = *v;
+        g->prim_buf[g->prim_count] = *v;
+        g->prim_tex_buf[g->prim_count] = *tv;
+        g->prim_count++;
         if (g->prim_count == 4u) {
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
-                               &g->prim_buf[3]))
+                               &g->prim_buf[3], &g->prim_tex_buf[0],
+                               &g->prim_tex_buf[1], &g->prim_tex_buf[3]))
                 return 0;
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[3],
-                               &g->prim_buf[2]))
+                               &g->prim_buf[2], &g->prim_tex_buf[0],
+                               &g->prim_tex_buf[3], &g->prim_tex_buf[2]))
                 return 0;
             g->stats->quads_split++;
             g->prim_emitted = 1;
             /* Roll the buffer: keep the last two vertices. */
             g->prim_buf[0] = g->prim_buf[2];
             g->prim_buf[1] = g->prim_buf[3];
+            g->prim_tex_buf[0] = g->prim_tex_buf[2];
+            g->prim_tex_buf[1] = g->prim_tex_buf[3];
             g->prim_count = 2u;
         }
         return 1;
@@ -634,10 +689,52 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v) {
     return 1;
 }
 
+/*
+ * Texture state for the vertex about to be emitted.
+ *
+ * TEX_COORD is applied at VTX time (DeSmuME AddCurrentVertexToList,
+ * gfx3d.cpp:1579-1611 as described in docs/DS_GX_RESEARCH.md). Mode 1 is the
+ * texture-matrix rows 0/1: the s1.11.4 latches are promoted to 20.12
+ * (<< 8), the 20.12 rows are applied with a 64-bit accumulator, the result is
+ * shifted down by 12 and converted to texture units (/4096). Modes 2 and 3
+ * are not implemented: raw latched coordinates are emitted and the vertex is
+ * counted in tex_transform_unsupported (per VTX command).
+ */
+static TwlhdGxTexVertex compute_tex_vertex(GxInterp *g) {
+    TwlhdGxTexVertex tv;
+    uint32_t tmode = (g->teximage_param >> 30) & 0x3u;
+
+    tv.teximage_param = g->teximage_param;
+    tv.pltt_base = g->pltt_base;
+
+    if (tmode == 1u) {
+        int64_t s20 = (int64_t)g->tex_s << 8;
+        int64_t t20 = (int64_t)g->tex_t << 8;
+        int64_t s_out = ((int64_t)g->tex.m[0] * s20 +
+                         (int64_t)g->tex.m[4] * t20 +
+                         (int64_t)g->tex.m[12] * FX_ONE) >> FX_SHIFT;
+        int64_t t_out = ((int64_t)g->tex.m[1] * s20 +
+                         (int64_t)g->tex.m[5] * t20 +
+                         (int64_t)g->tex.m[13] * FX_ONE) >> FX_SHIFT;
+        tv.s = (float)s_out / 4096.0f;
+        tv.t = (float)t_out / 4096.0f;
+        return tv;
+    }
+
+    if (tmode >= 2u) {
+        g->stats->tex_transform_unsupported++;
+    }
+    tv.s = (float)g->tex_s / 16.0f;
+    tv.t = (float)g->tex_t / 16.0f;
+    return tv;
+}
+
 static TwlhdGxResult emit_vertex(GxInterp *g, float x, float y, float z) {
     TwlhdGxVertex v;
+    TwlhdGxTexVertex tv;
 
     g->stats->vertices_in++;
+    tv = compute_tex_vertex(g);
     g->cur.x = x;
     g->cur.y = y;
     g->cur.z = z;
@@ -648,7 +745,7 @@ static TwlhdGxResult emit_vertex(GxInterp *g, float x, float y, float z) {
     }
 
     transform_vertex(g, x, y, z, &v);
-    if (!add_primitive_vertex(g, &v)) return TWLHD_GX_ERR_CAPACITY;
+    if (!add_primitive_vertex(g, &v, &tv)) return TWLHD_GX_ERR_CAPACITY;
     return TWLHD_GX_OK;
 }
 
@@ -662,134 +759,90 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         break;
 
     case TWLHD_V2_CMD_MTX_PUSH:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            if (!stack_push(g)) return TWLHD_GX_ERR_STACK;
-        }
+        if (!stack_push(g)) return TWLHD_GX_ERR_STACK;
         break;
 
     case TWLHD_V2_CMD_MTX_POP: {
         int32_t n = (int32_t)(params[0] & 0x3Fu);
         if ((params[0] & 0x20u) != 0u) n |= ~0x3F; /* sign-extend 6-bit. */
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            if (!stack_pop(g, n)) return TWLHD_GX_ERR_STACK;
-            mark_matrix_dirty(g);
-        }
+        if (!stack_pop(g, n)) return TWLHD_GX_ERR_STACK;
+        mark_matrix_dirty(g);
         break;
     }
 
     case TWLHD_V2_CMD_MTX_STORE:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            if (!stack_store(g, params[0] & 0x1Fu)) return TWLHD_GX_ERR_STACK;
-        }
+        if (!stack_store(g, params[0] & 0x1Fu)) return TWLHD_GX_ERR_STACK;
         break;
 
     case TWLHD_V2_CMD_MTX_RESTORE:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            if (!stack_restore(g, params[0] & 0x1Fu))
-                return TWLHD_GX_ERR_STACK;
-            mark_matrix_dirty(g);
-        }
+        if (!stack_restore(g, params[0] & 0x1Fu))
+            return TWLHD_GX_ERR_STACK;
+        mark_matrix_dirty(g);
         break;
 
     case TWLHD_V2_CMD_MTX_IDENTITY:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            matrix_identity(current_matrix(g));
-            if (g->mode == 2u) matrix_identity(&g->vec);
-            mark_matrix_dirty(g);
-        }
+        matrix_identity(current_matrix(g));
+        if (g->mode == 2u) matrix_identity(&g->vec);
+        mark_matrix_dirty(g);
         break;
 
     case TWLHD_V2_CMD_MTX_LOAD_4x4:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            matrix_load_4x4(current_matrix(g), params);
-            if (g->mode == 2u) matrix_load_4x4(&g->vec, params);
-            mark_matrix_dirty(g);
-        }
+        matrix_load_4x4(current_matrix(g), params);
+        if (g->mode == 2u) matrix_load_4x4(&g->vec, params);
+        mark_matrix_dirty(g);
         break;
 
     case TWLHD_V2_CMD_MTX_LOAD_4x3:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            matrix_load_4x3(current_matrix(g), params);
-            if (g->mode == 2u) matrix_load_4x3(&g->vec, params);
-            mark_matrix_dirty(g);
-        }
+        matrix_load_4x3(current_matrix(g), params);
+        if (g->mode == 2u) matrix_load_4x3(&g->vec, params);
+        mark_matrix_dirty(g);
         break;
 
-    case TWLHD_V2_CMD_MTX_MULT_4x4:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            GxMatrix op;
-            matrix_load_4x4(&op, params);
-            matrix_multiply(current_matrix(g), &op);
-            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
-            mark_matrix_dirty(g);
-        }
+    case TWLHD_V2_CMD_MTX_MULT_4x4: {
+        GxMatrix op;
+        matrix_load_4x4(&op, params);
+        matrix_multiply(current_matrix(g), &op);
+        if (g->mode == 2u) matrix_multiply(&g->vec, &op);
+        mark_matrix_dirty(g);
         break;
+    }
 
-    case TWLHD_V2_CMD_MTX_MULT_4x3:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            GxMatrix op;
-            matrix_load_4x3(&op, params);
-            matrix_multiply(current_matrix(g), &op);
-            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
-            mark_matrix_dirty(g);
-        }
+    case TWLHD_V2_CMD_MTX_MULT_4x3: {
+        GxMatrix op;
+        matrix_load_4x3(&op, params);
+        matrix_multiply(current_matrix(g), &op);
+        if (g->mode == 2u) matrix_multiply(&g->vec, &op);
+        mark_matrix_dirty(g);
         break;
+    }
 
-    case TWLHD_V2_CMD_MTX_MULT_3x3:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            GxMatrix op;
-            matrix_load_3x3(&op, params);
-            matrix_multiply(current_matrix(g), &op);
-            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
-            mark_matrix_dirty(g);
-        }
+    case TWLHD_V2_CMD_MTX_MULT_3x3: {
+        GxMatrix op;
+        matrix_load_3x3(&op, params);
+        matrix_multiply(current_matrix(g), &op);
+        if (g->mode == 2u) matrix_multiply(&g->vec, &op);
+        mark_matrix_dirty(g);
         break;
+    }
 
     case TWLHD_V2_CMD_MTX_SCALE:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            /* Vector matrix is deliberately left unscaled (DeSmuME
-             * gfx3d.cpp:1118-1133: it keeps the vector matrix orthogonal). */
-            matrix_scale(current_matrix(g), params);
-            mark_matrix_dirty(g);
-        }
+        /* Vector matrix is deliberately left unscaled (DeSmuME
+         * gfx3d.cpp:1118-1133: it keeps the vector matrix orthogonal). */
+        matrix_scale(current_matrix(g), params);
+        mark_matrix_dirty(g);
         break;
 
-    case TWLHD_V2_CMD_MTX_TRANS:
-        if (g->mode == 3u) {
-            g->stats->ignored_no_effect++;
-        } else {
-            GxMatrix op;
-            matrix_identity(&op);
-            op.m[12 + 0] = (int32_t)params[0];
-            op.m[12 + 1] = (int32_t)params[1];
-            op.m[12 + 2] = (int32_t)params[2];
-            matrix_multiply(current_matrix(g), &op);
-            if (g->mode == 2u) matrix_multiply(&g->vec, &op);
-            mark_matrix_dirty(g);
-        }
+    case TWLHD_V2_CMD_MTX_TRANS: {
+        GxMatrix op;
+        matrix_identity(&op);
+        op.m[12 + 0] = (int32_t)params[0];
+        op.m[12 + 1] = (int32_t)params[1];
+        op.m[12 + 2] = (int32_t)params[2];
+        matrix_multiply(current_matrix(g), &op);
+        if (g->mode == 2u) matrix_multiply(&g->vec, &op);
+        mark_matrix_dirty(g);
         break;
+    }
 
     case TWLHD_V2_CMD_COLOR:
         set_rgba_from_rgb555(g, params[0]);
@@ -860,8 +913,20 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
     }
 
     case TWLHD_V2_CMD_TEX_COORD:
+        /* Latch only; applied per vertex at VTX time (DeSmuME
+         * gfx3d.cpp:1397-1414, transform at 1579-1611). */
+        g->tex_s = sign_extend16(params[0]);
+        g->tex_t = sign_extend16(params[0] >> 16);
+        break;
+
     case TWLHD_V2_CMD_TEXIMAGE_PARAM:
+        g->teximage_param = params[0];
+        break;
+
     case TWLHD_V2_CMD_PLTT_BASE:
+        g->pltt_base = params[0];
+        break;
+
     case TWLHD_V2_CMD_BOX_TEST:
     case TWLHD_V2_CMD_POS_TEST:
     case TWLHD_V2_CMD_VEC_TEST:
@@ -964,6 +1029,17 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
                                  uint32_t *out_vertex_count,
                                  TwlhdGxViewport *viewport,
                                  TwlhdGxStats *stats) {
+    return twlhd_gx_interpret_ex(view, out, out_capacity_vertices,
+                                 out_vertex_count, viewport, stats, NULL);
+}
+
+TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
+                                    TwlhdGxVertex *out,
+                                    uint32_t out_capacity_vertices,
+                                    uint32_t *out_vertex_count,
+                                    TwlhdGxViewport *viewport,
+                                    TwlhdGxStats *stats,
+                                    TwlhdGxTexVertex *tex_out) {
     GxInterp g;
     uint32_t i = 0u;
     TwlhdGxResult result = TWLHD_GX_OK;
@@ -978,6 +1054,7 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
 
     g.view = view;
     g.out = out;
+    g.tex_out = tex_out;
     g.out_capacity = out_capacity_vertices;
     g.out_count = 0u;
     g.viewport = viewport;
@@ -986,6 +1063,7 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
     matrix_identity(&g.proj);
     matrix_identity(&g.pos);
     matrix_identity(&g.vec);
+    matrix_identity(&g.tex);
     matrix_identity(&g.clip);
     g.clip_dirty = 1;
     g.mode = 0u;
@@ -997,6 +1075,7 @@ TwlhdGxResult twlhd_gx_interpret(const TwlhdV2View *view, TwlhdGxVertex *out,
     g.proj_stack.capacity = PROJ_STACK_CAP;
     g.pos_stack.capacity = POS_STACK_CAP;
     g.vec_stack.capacity = POS_STACK_CAP;
+    g.tex_stack.capacity = TEX_STACK_CAP;
 
     /* DeSmuME starts with zero light directions but a valid (negated) half
      * vector for each of them (gfx3d.cpp:608-621). */

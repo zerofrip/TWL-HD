@@ -3,11 +3,14 @@
  * Host CLI for tools/test_gx_interp_golden.py.
  *
  * Reads a v2 file, parses it, runs the GX interpreter, and prints one line per
- * output vertex followed by the stats block.
+ * output vertex followed by the stats block. With --tex it also prints one
+ * "tex <i> <s> <t> <param> <pltt>" line per output vertex and appends
+ * tex_transform_unsupported to the stats line.
  */
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "twlhd_gx_interp.h"
 #include "twlhd_v2_parse.h"
@@ -21,18 +24,31 @@ int main(int argc, char **argv) {
     TwlhdV2Result pr;
     TwlhdGxResult gr;
     TwlhdGxVertex *out;
+    TwlhdGxTexVertex *tex_out = NULL;
     uint32_t out_count = 0u;
     TwlhdGxViewport viewport;
     TwlhdGxStats stats;
     uint32_t capacity;
     uint32_t i;
+    int want_tex = 0;
+    const char *path = NULL;
 
-    if (argc != 2) {
-        fprintf(stderr, "usage: %s <frame_v2.bin>\n", argv[0]);
+    for (i = 1u; i < (uint32_t)argc; i++) {
+        if (strcmp(argv[i], "--tex") == 0) {
+            want_tex = 1;
+        } else if (!path) {
+            path = argv[i];
+        } else {
+            path = NULL;
+            break;
+        }
+    }
+    if (!path) {
+        fprintf(stderr, "usage: %s [--tex] <frame_v2.bin>\n", argv[0]);
         return 2;
     }
 
-    file = fopen(argv[1], "rb");
+    file = fopen(path, "rb");
     if (!file) {
         perror("fopen");
         return 2;
@@ -83,9 +99,19 @@ int main(int argc, char **argv) {
         free(data);
         return 2;
     }
+    if (want_tex) {
+        tex_out = (TwlhdGxTexVertex *)malloc(
+            (size_t)capacity * sizeof(TwlhdGxTexVertex));
+        if (!tex_out) {
+            fprintf(stderr, "out of memory\n");
+            free(out);
+            free(data);
+            return 2;
+        }
+    }
 
-    gr = twlhd_gx_interpret(&view, out, capacity, &out_count, &viewport,
-                            &stats);
+    gr = twlhd_gx_interpret_ex(&view, out, capacity, &out_count, &viewport,
+                               &stats, tex_out);
     printf("result=%s\n", twlhd_gx_result_string(gr));
     printf("viewport %u %u %u %u %d\n",
            (unsigned)viewport.x1, (unsigned)viewport.y1,
@@ -99,12 +125,19 @@ int main(int argc, char **argv) {
                (double)out[i].clip[2], (double)out[i].clip[3],
                (double)out[i].rgba[0], (double)out[i].rgba[1],
                (double)out[i].rgba[2], (double)out[i].rgba[3]);
+        if (tex_out) {
+            printf("tex %u %.6f %.6f %lu %lu\n",
+                   (unsigned)i,
+                   (double)tex_out[i].s, (double)tex_out[i].t,
+                   (unsigned long)tex_out[i].teximage_param,
+                   (unsigned long)tex_out[i].pltt_base);
+        }
     }
 
     printf("stats commands=%lu vertices_in=%lu triangles_out=%lu "
            "quads_split=%lu dropped_incomplete=%lu ignored_outside_begin=%lu "
            "ignored_no_effect=%lu unsupported=%lu raw_fifo_skipped=%lu "
-           "stack_errors=%lu capacity_dropped=%lu geometry_incomplete=%lu\n",
+           "stack_errors=%lu capacity_dropped=%lu geometry_incomplete=%lu",
            (unsigned long)stats.commands, (unsigned long)stats.vertices_in,
            (unsigned long)stats.triangles_out, (unsigned long)stats.quads_split,
            (unsigned long)stats.dropped_incomplete,
@@ -115,7 +148,13 @@ int main(int argc, char **argv) {
            (unsigned long)stats.stack_errors,
            (unsigned long)stats.capacity_dropped,
            (unsigned long)stats.geometry_incomplete);
+    if (tex_out) {
+        printf(" tex_transform_unsupported=%lu",
+               (unsigned long)stats.tex_transform_unsupported);
+    }
+    printf("\n");
 
+    free(tex_out);
     free(out);
     free(data);
     return 0;

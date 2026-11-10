@@ -39,7 +39,10 @@ CMD_MTX_SCALE = 0x1B
 CMD_MTX_TRANS = 0x1C
 CMD_COLOR = 0x20
 CMD_NORMAL = 0x21
+CMD_TEX_COORD = 0x22
 CMD_VTX_16 = 0x23
+CMD_TEXIMAGE_PARAM = 0x2A
+CMD_PLTT_BASE = 0x2B
 CMD_POLYGON_ATTR = 0x29
 CMD_DIF_AMB = 0x30
 CMD_SPE_EMI = 0x31
@@ -212,6 +215,27 @@ def _add_restore(entries, index):
     entries.append((CMD_MTX_RESTORE, index))
 
 
+def _add_tex_coord(entries, s, t):
+    entries.append((CMD_TEX_COORD, ((t & 0xFFFF) << 16) | (s & 0xFFFF)))
+
+
+def _add_teximage(entries, word):
+    entries.append((CMD_TEXIMAGE_PARAM, _u32(word)))
+
+
+def _add_pltt(entries, word):
+    entries.append((CMD_PLTT_BASE, _u32(word)))
+
+
+def _tex_triangle(entries, coordinates):
+    """BEGIN triangle list with one TEX_COORD/VTX pair per (s, t)."""
+    entries.append((CMD_BEGIN_VTXS, 0))
+    for s, t in coordinates:
+        _add_tex_coord(entries, s, t)
+        entries.extend(_vtx16(0, 0))
+    entries.append((CMD_END_VTXS, 0))
+
+
 def _lit_entries(pre_entries, normal, mask=None, normal_inside=True):
     """pre_entries, then (mask), then BEGIN + NORMAL + 3 vertices + END."""
     entries = list(pre_entries)
@@ -311,6 +335,58 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertIn("dropped_incomplete=0", stats_line)
         self.assertIn("stack_errors=0", stats_line)
         self.assertIn("geometry_incomplete=0", stats_line)
+
+    def _run_cli_tex(self, data):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "tex_stream_v2.bin")
+            with open(path, "wb") as handle:
+                handle.write(data)
+            result = subprocess.run(
+                [CLI, "--tex", path], capture_output=True, text=True,
+                check=True,
+            )
+        lines = result.stdout.strip().splitlines()
+        self.assertEqual(lines[0], "result=OK")
+        vertices = []
+        tex = []
+        stats_line = None
+        for line in lines[2:]:
+            if line.startswith("stats "):
+                stats_line = line
+                break
+            parts = line.split()
+            if parts[0] == "tex":
+                self.assertEqual(len(parts), 6)
+                tex.append({
+                    "s": float(parts[2]),
+                    "t": float(parts[3]),
+                    "param": int(parts[4]),
+                    "pltt": int(parts[5]),
+                })
+            else:
+                self.assertEqual(len(parts), 9)
+                vertices.append([float(x) for x in parts[1:]])
+        self.assertIsNotNone(stats_line, "stats line missing")
+        return vertices, tex, stats_line
+
+    TEX_FIELD_TOL = 1e-6
+
+    def _assert_texture(self, entries):
+        vertices, tex, stats_line = self._run_cli_tex(build_v2(entries))
+        expected, unsupported = gx_interp_oracle.TextureOracle().process(entries)
+        self.assertEqual(len(tex), len(expected),
+                         f"tex count {len(tex)} != oracle {len(expected)}")
+        self.assertEqual(len(vertices), len(expected))
+        for index, (got, want) in enumerate(zip(tex, expected)):
+            self.assertAlmostEqual(got["s"], want[0], delta=self.TEX_FIELD_TOL,
+                                   msg=f"tex[{index}].s")
+            self.assertAlmostEqual(got["t"], want[1], delta=self.TEX_FIELD_TOL,
+                                   msg=f"tex[{index}].t")
+            self.assertEqual(got["param"], want[2],
+                             f"tex[{index}].teximage_param")
+            self.assertEqual(got["pltt"], want[3], f"tex[{index}].pltt_base")
+        self.assertIn(f"tex_transform_unsupported={unsupported}", stats_line)
+        return tex, vertices, stats_line
 
     def _run_cli(self, data):
         with tempfile.TemporaryDirectory() as tmp:
@@ -632,13 +708,174 @@ class GxInterpGoldenTest(unittest.TestCase):
         _, expected = self._assert_lighting(entries)
         self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))
 
+    # --- 5B-2b texture streams (BUILD/UNIT only) -------------------------
+
+    def test_tex_latch_order(self):
+        entries = []
+        _add_tex_coord(entries, 16, 32)  # before BEGIN: latched immediately
+        entries.append((CMD_BEGIN_VTXS, 0))
+        entries.extend(_vtx16(0, 0))
+        _add_tex_coord(entries, 48, 64)  # between vertices of one polygon
+        entries.extend(_vtx16(0x1000, 0))
+        _add_tex_coord(entries, -16, -32)  # after the previous VTX
+        entries.extend(_vtx16(0, 0x1000))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual([(t["s"], t["t"]) for t in tex],
+                         [(1.0, 2.0), (3.0, 4.0), (-1.0, -2.0)])
+        self.assertEqual([t["param"] for t in tex], [0, 0, 0])
+
+    def test_tex_s16_sign_edges(self):
+        entries = []
+        _add_tex_coord(entries, 0x8000, 0x7FFF)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        entries.extend(_vtx16(0, 0))
+        _add_tex_coord(entries, -1, -16)
+        entries.extend(_vtx16(0x1000, 0))
+        entries.extend(_vtx16(0, 0x1000))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual((tex[0]["s"], tex[0]["t"]), (-2048.0, 2047.9375))
+        self.assertEqual((tex[1]["s"], tex[1]["t"]), (-0.0625, -1.0))
+
+    def test_tex_mode0_vs_mode1(self):
+        matrix = _diag(8192, 2048, 4096)
+        matrix[12] = 4096
+        matrix[13] = -1024
+        results = {}
+        for param in (0x00001234, 0x40001234):
+            entries = [(CMD_MTX_MODE, 3)]
+            _add_load_4x4(entries, matrix)
+            _add_tex_coord(entries, 16, 32)
+            _add_teximage(entries, param)
+            _add_pltt(entries, 0x5678)
+            entries.append((CMD_BEGIN_VTXS, 0))
+            for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+                entries.extend(_vtx16(*xy))
+            entries.append((CMD_END_VTXS, 0))
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            tex, _, _ = self._assert_texture(entries)
+            results[param] = (tex[0]["s"], tex[0]["t"])
+            for item in tex:
+                self.assertEqual(item["param"], param)
+                self.assertEqual(item["pltt"], 0x5678)
+        self.assertEqual(results[0x00001234], (1.0, 2.0))
+        self.assertAlmostEqual(results[0x40001234][0], 3.0, places=6)
+        self.assertAlmostEqual(results[0x40001234][1], 0.75, places=6)
+
+    def test_tex_modes_2_3_raw_and_counter(self):
+        for mode in (2, 3):
+            entries = [(CMD_MTX_MODE, 3)]
+            _add_load_4x4(entries, _diag(8192, 8192, 4096))
+            _add_tex_coord(entries, 16, 32)
+            _add_teximage(entries, mode << 30)
+            entries.append((CMD_BEGIN_VTXS, 0))
+            for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+                entries.extend(_vtx16(*xy))
+            entries.append((CMD_END_VTXS, 0))
+            entries.extend(_vtx16(0, 0))  # outside BEGIN: still counted
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            tex, _, stats_line = self._assert_texture(entries)
+            self.assertEqual([(t["s"], t["t"]) for t in tex],
+                             [(1.0, 2.0)] * 3)
+            self.assertIn("tex_transform_unsupported=4", stats_line)
+
+    def test_tex_quad_list_alignment(self):
+        entries = [(CMD_BEGIN_VTXS, 1)]
+        for s in (16, 32, 48, 64):
+            _add_tex_coord(entries, s, 0)
+            entries.extend(_vtx16(0, 0))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual([t["s"] for t in tex],
+                         [1.0, 2.0, 3.0, 1.0, 3.0, 4.0])
+
+    def test_tex_quad_strip_alignment(self):
+        entries = [(CMD_BEGIN_VTXS, 3)]
+        for s in (16, 32, 48, 64):
+            _add_tex_coord(entries, s, 0)
+            entries.extend(_vtx16(0, 0))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual([t["s"] for t in tex],
+                         [1.0, 2.0, 4.0, 1.0, 4.0, 3.0])
+
+    def test_tex_param_pltt_mid_polygon(self):
+        entries = [(CMD_BEGIN_VTXS, 0)]
+        for param, pltt in ((1, 0x10), (2, 0x20), (3, 0x30)):
+            _add_teximage(entries, param)
+            _add_pltt(entries, pltt)
+            entries.extend(_vtx16(0, 0))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, _ = self._assert_texture(entries)
+        self.assertEqual([t["param"] for t in tex], [1, 2, 3])
+        self.assertEqual([t["pltt"] for t in tex], [0x10, 0x20, 0x30])
+
+    def test_tex_matrix_stack_ops(self):
+        entries = [(CMD_MTX_MODE, 3)]
+        for value in (8192, 4096, 4096):
+            entries.append((CMD_MTX_SCALE, value))
+        for value in (4096, 0, 0):
+            entries.append((CMD_MTX_TRANS, value))
+        _add_store(entries, 0)
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        _add_restore(entries, 0)
+        entries.append((CMD_MTX_PUSH, 0))
+        _add_load_4x4(entries, _diag(4096, 4096, 4096))
+        entries.append((CMD_MTX_POP, 1))
+        _add_tex_coord(entries, 16, 32)
+        _add_teximage(entries, 0x40000000)
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+            entries.extend(_vtx16(*xy))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        tex, _, _ = self._assert_texture(entries)
+        self.assertAlmostEqual(tex[0]["s"], 4.0, places=6)
+        self.assertAlmostEqual(tex[0]["t"], 2.0, places=6)
+
+    def test_tex_matrix_load_4x3_and_mult_3x3(self):
+        load_4x3 = [8192, 0, 0,
+                    0, 2048, 0,
+                    0, 0, 4096,
+                    0, 0, 0]
+        rot_z = [0, 4096, 0,
+                 -4096, 0, 0,
+                 0, 0, 4096]
+        for mult, expected in ((False, (2.0, 1.0)), (True, (-4.0, 0.5))):
+            entries = [(CMD_MTX_MODE, 3)]
+            _add_load_4x3(entries, load_4x3)
+            if mult:
+                _add_mult_3x3(entries, rot_z)
+            _add_tex_coord(entries, 16, 32)
+            _add_teximage(entries, 0x40000000)
+            entries.append((CMD_BEGIN_VTXS, 0))
+            for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
+                entries.extend(_vtx16(*xy))
+            entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+            tex, _, _ = self._assert_texture(entries)
+            self.assertAlmostEqual(tex[0]["s"], expected[0], places=6)
+            self.assertAlmostEqual(tex[0]["t"], expected[1], places=6)
+
+    def test_tex_flag_keeps_vertex_lines(self):
+        entries = [(CMD_BEGIN_VTXS, 1)]
+        for s in (16, 32, 48, 64):
+            _add_tex_coord(entries, s, 0)
+            entries.extend(_vtx16(0, 0))
+        entries.extend([(CMD_END_VTXS, 0), (CMD_SWAP_BUFFERS, 0)])
+        plain = self._run_cli(build_v2(entries))
+        tex_vertices, _, _ = self._run_cli_tex(build_v2(entries))
+        self.assertEqual(plain, tex_vertices)
+
     def test_light_store_restore_mode3_leaves_vec(self):
-        # Mode-3 STORE/RESTORE are ignored: vec stays rot_y45 (21).
+        # Mode-3 STORE/RESTORE use the texture stack (slot 0 only): vec stays
+        # rot_y45 (21).
         entries = _vec_light_prefix(2)
         _add_load_4x4(entries, _rot_y(45))
         entries.append((CMD_MTX_MODE, 3))
-        _add_store(entries, 2)
-        _add_restore(entries, 2)
+        _add_store(entries, 0)
+        _add_restore(entries, 0)
         entries = _lit_entries(entries, _normal_word(0, 0, 4088), mask=0x1)
         _, expected = self._assert_lighting(entries)
         self.assertEqual(expected, (21 / 31.0, 21 / 31.0, 21 / 31.0))

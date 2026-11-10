@@ -246,7 +246,15 @@ CMD_MTX_SCALE = 0x1B
 CMD_MTX_TRANS = 0x1C
 CMD_COLOR = 0x20
 CMD_NORMAL = 0x21
+CMD_TEX_COORD = 0x22
+CMD_VTX_16 = 0x23
+CMD_VTX_10 = 0x24
+CMD_VTX_XY = 0x25
+CMD_VTX_XZ = 0x26
+CMD_VTX_YZ = 0x27
 CMD_POLYGON_ATTR = 0x29
+CMD_TEXIMAGE_PARAM = 0x2A
+CMD_PLTT_BASE = 0x2B
 CMD_DIF_AMB = 0x30
 CMD_SPE_EMI = 0x31
 CMD_LIGHT_VECTOR = 0x32
@@ -261,7 +269,10 @@ PARAM_COUNT = {
     CMD_MTX_STORE: 1, CMD_MTX_RESTORE: 1, CMD_MTX_IDENTITY: 0,
     CMD_MTX_LOAD_4x4: 16, CMD_MTX_LOAD_4x3: 12, CMD_MTX_MULT_4x4: 16,
     CMD_MTX_MULT_4x3: 12, CMD_MTX_MULT_3x3: 9, CMD_MTX_SCALE: 3,
-    CMD_MTX_TRANS: 3, CMD_COLOR: 1, CMD_NORMAL: 1, CMD_POLYGON_ATTR: 1,
+    CMD_MTX_TRANS: 3, CMD_COLOR: 1, CMD_NORMAL: 1, CMD_TEX_COORD: 1,
+    CMD_VTX_16: 2, CMD_VTX_10: 1, CMD_VTX_XY: 1, CMD_VTX_XZ: 1,
+    CMD_VTX_YZ: 1,
+    CMD_POLYGON_ATTR: 1, CMD_TEXIMAGE_PARAM: 1, CMD_PLTT_BASE: 1,
     CMD_DIF_AMB: 1, CMD_SPE_EMI: 1, CMD_LIGHT_VECTOR: 1,
     CMD_LIGHT_COLOR: 1, CMD_SHININESS: 32, CMD_BEGIN_VTXS: 1,
     CMD_END_VTXS: 0, CMD_SWAP_BUFFERS: 1,
@@ -271,6 +282,11 @@ PARAM_COUNT = {
 def s32(value):
     value &= 0xFFFFFFFF
     return value - 0x100000000 if value & 0x80000000 else value
+
+
+def sign_extend16(word):
+    value = word & 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value
 
 
 def sign_extend10(word):
@@ -557,6 +573,181 @@ class LightingOracle:
                 self.colour = self.normal(params[0])
 
         return self.colour
+
+
+# ---------------------------------------------------------------------------
+# Phase 5B-2b texture oracle.
+#
+# Independently implements the texture latch and transform described in
+# docs/DS_GX_RESEARCH.md (DeSmuME gfx3d.cpp:1375-1414 latch, 1579-1611
+# transform). It owns its texture matrix (20.12, column-major) and a one-entry
+# stack, and mirrors the C primitive assembly so tex_out[i] describes out[i].
+#
+# UNVERIFIED against the DeSmuME checkout: it is not present in this sandbox.
+# The transform steps follow the research doc and the task contract:
+#   mode 0: raw s1.11.4 latch -> /16.0
+#   mode 1: rows 0/1 x (s<<8, t<<8) + m12*4096, >>12, /4096
+#   modes 2/3: raw s,t plus a per-VTX unsupported counter
+# ---------------------------------------------------------------------------
+
+TEX_STACK_CAP = 1
+_VERTEX_COMMANDS = (
+    CMD_VTX_16, CMD_VTX_10, CMD_VTX_XY, CMD_VTX_XZ, CMD_VTX_YZ,
+)
+
+
+class TextureOracle:
+    """Texture latch, mode-3 matrix and per-vertex tex-array model."""
+
+    def __init__(self):
+        self.mode = 0
+        self.tex = mat_identity_fixed()
+        self.stack = []
+        self.slots = [[0] * 16]
+        self.tex_s = 0
+        self.tex_t = 0
+        self.teximage_param = 0
+        self.pltt_base = 0
+        self.unsupported = 0
+        self.out = []
+        self.in_begin = False
+        self.begin_mode = 0
+        self.buf = []
+        self.tri_index = 0
+        self.emitted = False
+
+    # -- texture matrix (one-entry stack) ---------------------------------
+    def _matrix_command(self, command, params):
+        if command == CMD_MTX_PUSH:
+            if len(self.stack) < TEX_STACK_CAP:
+                self.stack.append(list(self.tex))
+        elif command == CMD_MTX_POP:
+            if self.stack:
+                self.tex = list(self.stack[0])
+                self.stack = []
+        elif command == CMD_MTX_STORE:
+            self.slots[0] = list(self.tex)
+        elif command == CMD_MTX_RESTORE:
+            self.tex = list(self.slots[0])
+        elif command == CMD_MTX_IDENTITY:
+            self.tex = mat_identity_fixed()
+        elif command == CMD_MTX_LOAD_4x4:
+            self.tex = [s32(w) for w in params]
+        elif command == CMD_MTX_LOAD_4x3:
+            self.tex = LightingOracle._load_4x3_matrix(params)
+        elif command == CMD_MTX_MULT_4x4:
+            self.tex = mat_mult_fixed(self.tex, [s32(w) for w in params])
+        elif command == CMD_MTX_MULT_4x3:
+            self.tex = mat_mult_fixed(
+                self.tex, LightingOracle._load_4x3_matrix(params)
+            )
+        elif command == CMD_MTX_MULT_3x3:
+            self.tex = mat_mult_fixed(
+                self.tex, LightingOracle._load_3x3_matrix(params)
+            )
+        elif command == CMD_MTX_SCALE:
+            op = mat_identity_fixed()
+            op[0] = s32(params[0])
+            op[5] = s32(params[1])
+            op[10] = s32(params[2])
+            self.tex = mat_mult_fixed(self.tex, op)
+        elif command == CMD_MTX_TRANS:
+            op = mat_identity_fixed()
+            op[12] = s32(params[0])
+            op[13] = s32(params[1])
+            op[14] = s32(params[2])
+            self.tex = mat_mult_fixed(self.tex, op)
+
+    # -- per-vertex texture data -----------------------------------------
+    def _tex_vertex(self):
+        tmode = (self.teximage_param >> 30) & 3
+        if tmode >= 2:
+            self.unsupported += 1
+        if tmode == 1:
+            matrix = self.tex
+            s20 = self.tex_s << 8
+            t20 = self.tex_t << 8
+            s_out = (matrix[0] * s20 + matrix[4] * t20 +
+                     matrix[12] * FX_ONE) >> 12
+            t_out = (matrix[1] * s20 + matrix[5] * t20 +
+                     matrix[13] * FX_ONE) >> 12
+            return (s_out / 4096.0, t_out / 4096.0,
+                    self.teximage_param, self.pltt_base)
+        return (self.tex_s / 16.0, self.tex_t / 16.0,
+                self.teximage_param, self.pltt_base)
+
+    # -- primitive assembly (mirrors the C interpreter) -------------------
+    def _emit_triangle(self, a, b, c):
+        self.out.append(self.buf[a])
+        self.out.append(self.buf[b])
+        self.out.append(self.buf[c])
+
+    def _add_vertex(self, tex_vertex):
+        if not self.in_begin:
+            return
+        self.buf.append(tex_vertex)
+        mode = self.begin_mode
+        if mode == 0 and len(self.buf) == 3:
+            self._emit_triangle(0, 1, 2)
+            self.emitted = True
+            self.buf = []
+        elif mode == 1 and len(self.buf) == 4:
+            self._emit_triangle(0, 1, 2)
+            self._emit_triangle(0, 2, 3)
+            self.emitted = True
+            self.buf = []
+        elif mode == 2 and len(self.buf) == 3:
+            if self.tri_index & 1:
+                self._emit_triangle(1, 0, 2)
+            else:
+                self._emit_triangle(0, 1, 2)
+            self.emitted = True
+            self.tri_index += 1
+            self.buf = self.buf[1:]
+        elif mode == 3 and len(self.buf) == 4:
+            self._emit_triangle(0, 1, 3)
+            self._emit_triangle(0, 3, 2)
+            self.emitted = True
+            self.buf = [self.buf[2], self.buf[3]]
+
+    # -- command stream driver --------------------------------------------
+    def process(self, entries):
+        """Run the texture-relevant commands of a v2 entry list.
+
+        Returns (per-output-vertex tex tuples, unsupported VTX count)."""
+        index = 0
+        while index < len(entries):
+            command, _ = entries[index]
+            count = PARAM_COUNT.get(command, 0)
+            params = [entries[index + i][1] for i in range(count)]
+            index += count if count else 1
+
+            if command == CMD_MTX_MODE:
+                self.mode = params[0] & 3
+            elif command == CMD_TEX_COORD:
+                self.tex_s = sign_extend16(params[0])
+                self.tex_t = sign_extend16(params[0] >> 16)
+            elif command == CMD_TEXIMAGE_PARAM:
+                self.teximage_param = params[0]
+            elif command == CMD_PLTT_BASE:
+                self.pltt_base = params[0]
+            elif command == CMD_BEGIN_VTXS:
+                self.in_begin = True
+                self.begin_mode = params[0] & 3
+                self.buf = []
+                self.tri_index = 0
+                self.emitted = False
+            elif command == CMD_END_VTXS:
+                self.in_begin = False
+                self.buf = []
+            elif command in _VERTEX_COMMANDS:
+                self._add_vertex(self._tex_vertex())
+            elif self.mode == 3:
+                self._matrix_command(command, params)
+
+        if self.in_begin:
+            self.buf = []
+        return self.out, self.unsupported
 
 
 def main():
