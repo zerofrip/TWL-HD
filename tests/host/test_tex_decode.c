@@ -77,6 +77,312 @@ static void expect_px(const char *what, uint32_t idx, unsigned r, unsigned g,
     }
 }
 
+/*
+ * Out-of-bounds guard harness (independent mutation run, 642 mutants).
+ *
+ * Each static array is [64-byte guard][exact region][64-byte guard]. A case
+ * fills only its exact region, decodes with out_size == width*height*4 exactly
+ * and the runner then checks:
+ *
+ *   (a) output guard: every byte outside [64, 64+out_size) still holds the
+ *       pass fill. Writes are sequential, so one element too far always
+ *       clobbers the adjacent guard bytes. This kills the surviving
+ *       one-element-too-far mutants: loop bounds `i < texel_bytes` -> `<=`
+ *       (A3I5 ~191, A5I3 ~287, I2/I4 outer ~208) and the inner
+ *       `j < per_byte` -> `<=` (~210), per_byte 4u -> 5u (~203), 16bpp
+ *       `texel_bytes/2u` -> `/1u` (~297), the 4x4 `block < blocks` -> `<=`
+ *       (~249) and `sy < 4u` -> `<=` / `4u -> 5u` (~260).
+ *   (b) input-guard comparison: the texel, palette and index regions are
+ *       refilled with 0x00 in pass A and 0xFF in pass B; any read one element
+ *       past a region observes a different byte, so the decoded output differs
+ *       (a read past the end cannot hide). Palette entry 0 and the highest
+ *       reachable index decode differently by construction, and for 4x4 every
+ *       block is mode 2 with a palette window of exactly 8 bytes, so an
+ *       over-read entry or index word also changes the pixel / fails the
+ *       window pre-scan.
+ *
+ * Both checks run for formats 1..7 at 8x8 and 16x8 (non-square), i.e. 14 cases
+ * x 2 passes. Guard checks are C-side only: the Python golden path cannot see
+ * these overruns because tex_decode_cli prints exactly width*height pixels and
+ * passes the exact out_size, so an extra read lands inside TXDT.
+ */
+#define OOB_GUARD 64u
+#define OOB_TEXEL_MAX 256u
+#define OOB_PALETTE_MAX 512u
+#define OOB_INDEX_MAX 64u
+#define OOB_OUT_MAX 512u
+
+static uint8_t g_oob_texel[OOB_GUARD + OOB_TEXEL_MAX + OOB_GUARD];
+static uint8_t g_oob_palette[OOB_GUARD + OOB_PALETTE_MAX + OOB_GUARD];
+static uint8_t g_oob_index[OOB_GUARD + OOB_INDEX_MAX + OOB_GUARD];
+static uint8_t g_oob_out[OOB_GUARD + OOB_OUT_MAX + OOB_GUARD];
+
+#define OOB_TEXEL (g_oob_texel + OOB_GUARD)
+#define OOB_PALETTE (g_oob_palette + OOB_GUARD)
+#define OOB_INDEX (g_oob_index + OOB_GUARD)
+#define OOB_OUT (g_oob_out + OOB_GUARD)
+
+typedef void (*OobFill)(uint32_t texel_size, uint32_t palette_size,
+                        uint32_t index_size);
+
+typedef struct {
+    uint32_t param;
+    uint32_t texel_size;
+    uint32_t palette_size;
+    uint32_t index_size;
+    uint32_t out_size;
+    const char *name;
+    OobFill fill;
+} OobCase;
+
+static uint16_t get16(const uint8_t *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
+
+/*
+ * Palette entry e: 5-bit components in 1..30 (never 0 or 31), pairwise
+ * distinct for every e because the three offsets differ by 10 and 20 mod 30.
+ * So every expanded channel is non-zero, non-255 and different from the
+ * others (and from an opaque alpha), which is what makes the channel-position
+ * and input-guard mutants observable.
+ */
+static void palette_comps(uint32_t entry, unsigned *r, unsigned *g,
+                          unsigned *b) {
+    *r = 1u + entry % 30u;
+    *g = 1u + (entry + 10u) % 30u;
+    *b = 1u + (entry + 20u) % 30u;
+}
+
+static void oob_fill_palette_scheme(uint32_t palette_size) {
+    uint32_t e;
+    for (e = 0; e * 2u + 1u < palette_size; e++) {
+        unsigned r, g, b;
+        palette_comps(e, &r, &g, &b);
+        put16(OOB_PALETTE + e * 2u, rgb555(r, g, b, 0u));
+    }
+}
+
+/* 5-bit alpha for A5I3: differs from that pixel's three palette components. */
+static unsigned pick_alpha5(uint32_t idx) {
+    unsigned r, g, b, a;
+    palette_comps(idx, &r, &g, &b);
+    for (a = 1u; a <= 31u; a++) {
+        if (a != r && a != g && a != b) return a;
+    }
+    return 31u;
+}
+
+/* A3I5: alpha 2 -> 73 and 5 -> 182 (neither is a 5-bit expansion value). */
+static void oob_fill_a3i5(uint32_t texel_size, uint32_t palette_size,
+                          uint32_t index_size) {
+    uint32_t i;
+    (void)index_size;
+    oob_fill_palette_scheme(palette_size);
+    for (i = 0; i < texel_size; i++) {
+        unsigned a = (i & 1u) ? 5u : 2u;
+        OOB_TEXEL[i] = (uint8_t)((a << 5) | (i % 32u));
+    }
+}
+
+static void oob_fill_a5i3(uint32_t texel_size, uint32_t palette_size,
+                          uint32_t index_size) {
+    uint32_t i;
+    (void)index_size;
+    oob_fill_palette_scheme(palette_size);
+    for (i = 0; i < texel_size; i++) {
+        uint32_t idx = i % 8u;
+        OOB_TEXEL[i] = (uint8_t)((pick_alpha5(idx) << 3) | idx);
+    }
+}
+
+static void oob_fill_i2(uint32_t texel_size, uint32_t palette_size,
+                        uint32_t index_size) {
+    (void)index_size;
+    oob_fill_palette_scheme(palette_size);
+    fill(OOB_TEXEL, texel_size, 0xE4u); /* indices 0,1,2,3, low bits first */
+}
+
+static void oob_fill_i4(uint32_t texel_size, uint32_t palette_size,
+                        uint32_t index_size) {
+    uint32_t i;
+    (void)index_size;
+    oob_fill_palette_scheme(palette_size);
+    for (i = 0; i < texel_size; i++) {
+        uint32_t lo = (2u * i) % 16u;
+        uint32_t hi = (2u * i + 1u) % 16u;
+        OOB_TEXEL[i] = (uint8_t)((hi << 4) | lo); /* low nibble first */
+    }
+}
+
+static void oob_fill_i8(uint32_t texel_size, uint32_t palette_size,
+                        uint32_t index_size) {
+    uint32_t i;
+    (void)index_size;
+    oob_fill_palette_scheme(palette_size);
+    for (i = 0; i < texel_size; i++) OOB_TEXEL[i] = (uint8_t)(i & 0xFFu);
+}
+
+static void oob_fill_16bpp(uint32_t texel_size, uint32_t palette_size,
+                           uint32_t index_size) {
+    uint32_t i;
+    (void)palette_size;
+    (void)index_size;
+    for (i = 0; i < texel_size / 2u; i++) {
+        uint16_t word;
+        if ((i & 3u) == 3u) {
+            word = rgb555(3u, 5u, 7u, 0u); /* bit 15 clear: transparent */
+        } else {
+            unsigned r, g, b;
+            palette_comps(i % 30u, &r, &g, &b);
+            word = rgb555(r, g, b, 1u);
+        }
+        put16(OOB_TEXEL + i * 2u, word);
+    }
+}
+
+/*
+ * 4x4: every block mode 2, offset 0, with a 4-entry / 8-byte palette window, so
+ * the window ends exactly at byte 8 and any entry-4 read hits the guard. Row
+ * bytes 0xE4/0x1B/0xB1/0x78 are 2-bit permutations (see the item-2 test).
+ */
+static void oob_fill_4x4(uint32_t texel_size, uint32_t palette_size,
+                         uint32_t index_size) {
+    static const uint8_t rows[4] = {0xE4u, 0x1Bu, 0xB1u, 0x78u};
+    uint32_t i;
+    oob_fill_palette_scheme(palette_size);
+    for (i = 0; i < texel_size / 4u; i++) {
+        memcpy(OOB_TEXEL + i * 4u, rows, 4u);
+    }
+    for (i = 0; i < index_size / 2u; i++) {
+        put16(OOB_INDEX + i * 2u, 0x8000u);
+    }
+}
+
+/* Check the guard bytes on both sides of one exact region. */
+static void oob_check_region(const char *case_name, const char *what,
+                             const uint8_t *base, uint32_t exact,
+                             uint8_t fillv) {
+    uint32_t i;
+    for (i = 0; i < OOB_GUARD; i++) {
+        if (base[i] != fillv) {
+            g_checks_failed++;
+            fprintf(stderr, "%s:%d: %s: %s guard before byte %u is 0x%02X\n",
+                    __FILE__, __LINE__, case_name, what, (unsigned)i,
+                    (unsigned)base[i]);
+            return;
+        }
+    }
+    for (i = 0; i < OOB_GUARD; i++) {
+        if (base[OOB_GUARD + exact + i] != fillv) {
+            g_checks_failed++;
+            fprintf(stderr, "%s:%d: %s: %s guard after byte %u is 0x%02X\n",
+                    __FILE__, __LINE__, case_name, what, (unsigned)i,
+                    (unsigned)base[OOB_GUARD + exact + i]);
+            return;
+        }
+    }
+}
+
+static void oob_run_case(const OobCase *tc) {
+    uint8_t out_a[OOB_OUT_MAX];
+    uint8_t out_b[OOB_OUT_MAX];
+    uint32_t pass;
+
+    for (pass = 0; pass < 2u; pass++) {
+        uint8_t fillv = pass != 0u ? 0xFFu : 0x00u;
+        TwlhdV2TexRecord rec;
+        TwlhdTexResult result;
+        uint8_t *snapshot = pass != 0u ? out_b : out_a;
+
+        memset(g_oob_texel, fillv, sizeof g_oob_texel);
+        memset(g_oob_palette, fillv, sizeof g_oob_palette);
+        memset(g_oob_index, fillv, sizeof g_oob_index);
+        memset(g_oob_out, fillv, sizeof g_oob_out);
+        tc->fill(tc->texel_size, tc->palette_size, tc->index_size);
+
+        rec = make_rec(tc->param, tc->texel_size, tc->palette_size,
+                       tc->index_size);
+        result = twlhd_tex_decode(
+            &rec, OOB_TEXEL,
+            tc->palette_size != 0u ? OOB_PALETTE : NULL,
+            tc->index_size != 0u ? OOB_INDEX : NULL, OOB_OUT, tc->out_size);
+        CHECK_EQ_INT(result, TWLHD_TEX_OK);
+
+        oob_check_region(tc->name, "out", g_oob_out, tc->out_size, fillv);
+        oob_check_region(tc->name, "texel", g_oob_texel, tc->texel_size,
+                         fillv);
+        oob_check_region(tc->name, "palette", g_oob_palette, tc->palette_size,
+                         fillv);
+        oob_check_region(tc->name, "index", g_oob_index, tc->index_size, fillv);
+        memcpy(snapshot, OOB_OUT, tc->out_size);
+    }
+
+    if (memcmp(out_a, out_b, tc->out_size) != 0) {
+        g_checks_failed++;
+        fprintf(stderr,
+                "%s:%d: %s: input guard comparison failed (an over-read "
+                "changed the output)\n",
+                __FILE__, __LINE__, tc->name);
+    }
+}
+
+/* Fill the guard arrays for one case and decode into OOB_OUT. */
+static void oob_prepare(uint32_t param, uint32_t texel_size,
+                        uint32_t palette_size, uint32_t index_size,
+                        uint32_t out_size, OobFill fill) {
+    TwlhdV2TexRecord rec;
+
+    memset(g_oob_texel, 0, sizeof g_oob_texel);
+    memset(g_oob_palette, 0, sizeof g_oob_palette);
+    memset(g_oob_index, 0, sizeof g_oob_index);
+    memset(g_oob_out, 0xA5u, sizeof g_oob_out); /* stale writes stay visible */
+    fill(texel_size, palette_size, index_size);
+    rec = make_rec(param, texel_size, palette_size, index_size);
+    CHECK_EQ_INT(twlhd_tex_decode(
+                     &rec, OOB_TEXEL,
+                     palette_size != 0u ? OOB_PALETTE : NULL,
+                     index_size != 0u ? OOB_INDEX : NULL, OOB_OUT, out_size),
+                 TWLHD_TEX_OK);
+}
+
+/*
+ * Check one pixel of OOB_OUT and, for an opaque pixel, that its four channels
+ * are pairwise different (a bad colour choice must fail loudly, not silently
+ * let a cross-channel mutant survive).
+ */
+static void expect_oob_px(const char *what, uint32_t idx, unsigned r,
+                          unsigned g, unsigned b, unsigned a) {
+    const uint8_t *p = OOB_OUT + (size_t)idx * 4u;
+
+    if (p[0] != r || p[1] != g || p[2] != b || p[3] != a) {
+        g_checks_failed++;
+        fprintf(stderr,
+                "%s:%d: %s pixel %u: expected (%u,%u,%u,%u) got "
+                "(%u,%u,%u,%u)\n",
+                __FILE__, __LINE__, what, (unsigned)idx, r, g, b, a,
+                (unsigned)p[0], (unsigned)p[1], (unsigned)p[2],
+                (unsigned)p[3]);
+        return;
+    }
+    if (a != 0u &&
+        (r == g || r == b || g == b || r == a || g == a || b == a)) {
+        g_checks_failed++;
+        fprintf(stderr,
+                "%s:%d: %s pixel %u channels not pairwise distinct: "
+                "(%u,%u,%u,%u)\n",
+                __FILE__, __LINE__, what, (unsigned)idx, r, g, b, a);
+    }
+}
+
+/* palette entry `e` expanded to RGBA8 through the pinned 5-bit table. */
+static void expect_palette_px(const char *what, uint32_t idx, uint32_t e,
+                              unsigned a) {
+    unsigned r, g, b;
+    palette_comps(e, &r, &g, &b);
+    expect_oob_px(what, idx, FIVE_TO_EIGHT[r], FIVE_TO_EIGHT[g],
+                  FIVE_TO_EIGHT[b], a);
+}
+
 static void test_dimensions(void) {
     uint32_t width = 999u;
     uint32_t height = 999u;
@@ -720,6 +1026,221 @@ static void test_4x4_high_palette_offsets(void) {
     test_report("tex-decode/4x4-high-palette-offsets");
 }
 
+/* 14 cases x 2 passes; see the guard-harness comment above for the mutants. */
+static void test_oob_guards(void) {
+    OobCase cases[] = {
+        {make_param(1, 0, 0, 0), 64u, 64u, 0u, 256u, "fmt1-8x8", oob_fill_a3i5},
+        {make_param(1, 1, 0, 0), 128u, 64u, 0u, 512u, "fmt1-16x8",
+         oob_fill_a3i5},
+        {make_param(2, 0, 0, 0), 16u, 8u, 0u, 256u, "fmt2-8x8", oob_fill_i2},
+        {make_param(2, 1, 0, 0), 32u, 8u, 0u, 512u, "fmt2-16x8", oob_fill_i2},
+        {make_param(3, 0, 0, 0), 32u, 32u, 0u, 256u, "fmt3-8x8", oob_fill_i4},
+        {make_param(3, 1, 0, 0), 64u, 32u, 0u, 512u, "fmt3-16x8", oob_fill_i4},
+        {make_param(4, 0, 0, 0), 64u, 512u, 0u, 256u, "fmt4-8x8", oob_fill_i8},
+        {make_param(4, 1, 0, 0), 128u, 512u, 0u, 512u, "fmt4-16x8",
+         oob_fill_i8},
+        {make_param(5, 0, 0, 0), 16u, 8u, 8u, 256u, "fmt5-8x8", oob_fill_4x4},
+        {make_param(5, 1, 0, 0), 32u, 8u, 16u, 512u, "fmt5-16x8",
+         oob_fill_4x4},
+        {make_param(6, 0, 0, 0), 64u, 16u, 0u, 256u, "fmt6-8x8", oob_fill_a5i3},
+        {make_param(6, 1, 0, 0), 128u, 16u, 0u, 512u, "fmt6-16x8",
+         oob_fill_a5i3},
+        {make_param(7, 0, 0, 0), 128u, 0u, 0u, 256u, "fmt7-8x8",
+         oob_fill_16bpp},
+        {make_param(7, 1, 0, 0), 256u, 0u, 0u, 512u, "fmt7-16x8",
+         oob_fill_16bpp},
+    };
+    uint32_t i;
+
+    for (i = 0; i < (uint32_t)(sizeof cases / sizeof cases[0]); i++) {
+        oob_run_case(&cases[i]);
+    }
+
+    test_report("tex-decode/oob-guards");
+}
+
+/*
+ * 4x4 channel/position coverage. Block 0 is mode 2 (four distinct opaque
+ * colours) and block 1 is mode 0 (three opaque colours plus transparent texel
+ * 3), both in one 8x8 texture. The palette colours have pairwise-distinct
+ * expanded channels, none 0 or 255. Every row byte is a 2-bit permutation
+ * (0xE4/0x1B/0xB1/0x78), so every one of the four positions holds a different
+ * index on every row.
+ *
+ * Full RGBA of all 16 pixels of both blocks is asserted against hand-computed
+ * literals below. This kills the alpha-index mutants (dst[3]/[7]/[11] alpha
+ * from col[?][2]) because alpha 255/0 differs from blue 165/66/222/16/198/206/
+ * 214; the (row >> 2)/(row >> 4)/(row >> 6) shift-count and >> -> << mutants
+ * because all four colours differ at every position; and the 7 -> 8 / 2 -> 1
+ * dst index constants because every pixel is checked. Mode 0's alpha
+ * alternates 255/0 across positions, which catches the stale-write class
+ * (dst[7] skipped and left at the 0xA5 canary).
+ *
+ * The col[?][3] -> col[?][4] variant reads 1-3 bytes past the stack array
+ * col[4][4]; it is deterministically killed only under ASan/UBSan (default-on
+ * via HOST_SAN in the Makefile), not by this comparison.
+ */
+static void test_4x4_full_pixel_blocks(void) {
+    static const uint8_t rows[4] = {0xE4u, 0x1Bu, 0xB1u, 0x78u};
+    static const uint8_t expected[2][16][4] = {
+        { /* block 0, mode 2: (41,82,165), (123,206,66), (181,24,222),
+             (99,156,16) */
+         {41, 82, 165, 255},  {123, 206, 66, 255},  {181, 24, 222, 255},
+         {99, 156, 16, 255},  {99, 156, 16, 255},   {181, 24, 222, 255},
+         {123, 206, 66, 255}, {41, 82, 165, 255},   {123, 206, 66, 255},
+         {41, 82, 165, 255},  {99, 156, 16, 255},   {181, 24, 222, 255},
+         {41, 82, 165, 255},  {181, 24, 222, 255},  {99, 156, 16, 255},
+         {123, 206, 66, 255}},
+        { /* block 1, mode 0: (33,115,198), (41,123,206), (49,132,214),
+             transparent */
+         {33, 115, 198, 255}, {41, 123, 206, 255}, {49, 132, 214, 255},
+         {0, 0, 0, 0},        {0, 0, 0, 0},         {49, 132, 214, 255},
+         {41, 123, 206, 255}, {33, 115, 198, 255}, {41, 123, 206, 255},
+         {33, 115, 198, 255}, {0, 0, 0, 0},        {49, 132, 214, 255},
+         {33, 115, 198, 255}, {49, 132, 214, 255}, {0, 0, 0, 0},
+         {41, 123, 206, 255}},
+    };
+    uint8_t palette[24];
+    TwlhdV2TexRecord rec;
+    TwlhdTexResult result;
+    uint32_t i;
+
+    /* Every row byte must be a permutation of 0..3. */
+    for (i = 0; i < 4u; i++) {
+        unsigned seen = 0u;
+        seen |= 1u << (rows[i] & 3u);
+        seen |= 1u << ((rows[i] >> 2) & 3u);
+        seen |= 1u << ((rows[i] >> 4) & 3u);
+        seen |= 1u << ((rows[i] >> 6) & 3u);
+        CHECK_EQ_INT(seen, 0xFu);
+    }
+
+    memset(palette, 0, sizeof palette);
+    put16(palette + 0u, rgb555(5u, 10u, 20u, 0u));   /* (41,82,165) */
+    put16(palette + 2u, rgb555(15u, 25u, 8u, 0u));   /* (123,206,66) */
+    put16(palette + 4u, rgb555(22u, 3u, 27u, 0u));   /* (181,24,222) */
+    put16(palette + 6u, rgb555(12u, 19u, 2u, 0u));   /* (99,156,16) */
+    put16(palette + 16u, rgb555(4u, 14u, 24u, 0u));  /* entries 8-10 */
+    put16(palette + 18u, rgb555(5u, 15u, 25u, 0u));
+    put16(palette + 20u, rgb555(6u, 16u, 26u, 0u));
+
+    for (i = 0; i < 16u; i++) OOB_TEXEL[i] = rows[i & 3u];
+    put16(OOB_INDEX + 0u, 0x8000u); /* block 0: mode 2, offset 0 */
+    put16(OOB_INDEX + 2u, 0x0004u); /* block 1: mode 0, offset 16 bytes */
+    put16(OOB_INDEX + 4u, 0x8000u); /* block 2 */
+    put16(OOB_INDEX + 6u, 0x8000u); /* block 3 */
+
+    memset(g_oob_out, 0xA5u, sizeof g_oob_out);
+    rec = make_rec(make_param(5, 0, 0, 0), 16u, (uint32_t)sizeof palette, 8u);
+    result = twlhd_tex_decode(&rec, OOB_TEXEL, palette, OOB_INDEX, OOB_OUT,
+                              256u);
+    CHECK_EQ_INT(result, TWLHD_TEX_OK);
+
+    for (i = 0; i < 2u; i++) {
+        uint32_t k;
+        for (k = 0; k < 16u; k++) {
+            uint32_t px = (k >> 2) * 8u + i * 4u + (k & 3u);
+            expect_oob_px("4x4 full pixel", px, expected[i][k][0],
+                          expected[i][k][1], expected[i][k][2],
+                          expected[i][k][3]);
+        }
+    }
+
+    test_report("tex-decode/4x4-full-pixel-blocks");
+}
+
+/* Item 3: full RGBA of every pixel, one format per function. */
+static void test_full_rgba_a3i5(void) {
+    uint32_t i;
+
+    oob_prepare(make_param(1, 0, 0, 0), 64u, 64u, 0u, 256u, oob_fill_a3i5);
+    for (i = 0; i < 64u; i++) {
+        expect_palette_px("full rgba a3i5", i, OOB_TEXEL[i] & 0x1Fu,
+                          THREE_TO_EIGHT[OOB_TEXEL[i] >> 5]);
+    }
+    expect_oob_px("full rgba a3i5", 0, 8u, 90u, 173u, 73u);
+    expect_oob_px("full rgba a3i5", 63, 16u, 99u, 181u, 182u);
+
+    test_report("tex-decode/full-rgba-a3i5");
+}
+
+static void test_full_rgba_a5i3(void) {
+    uint32_t i;
+
+    oob_prepare(make_param(6, 0, 0, 0), 64u, 16u, 0u, 256u, oob_fill_a5i3);
+    for (i = 0; i < 64u; i++) {
+        expect_palette_px("full rgba a5i3", i, OOB_TEXEL[i] & 0x07u,
+                          FIVE_TO_EIGHT[OOB_TEXEL[i] >> 3]);
+    }
+    expect_oob_px("full rgba a5i3", 0, 8u, 90u, 173u, 16u);
+    expect_oob_px("full rgba a5i3", 63, 66u, 148u, 231u, 8u);
+
+    test_report("tex-decode/full-rgba-a5i3");
+}
+
+static void test_full_rgba_i2(void) {
+    uint32_t i;
+
+    oob_prepare(make_param(2, 0, 0, 0), 16u, 8u, 0u, 256u, oob_fill_i2);
+    for (i = 0; i < 64u; i++) {
+        uint32_t idx = ((uint32_t)OOB_TEXEL[i / 4u] >> ((i % 4u) * 2u)) & 3u;
+        expect_palette_px("full rgba i2", i, idx, 255u);
+    }
+    expect_oob_px("full rgba i2", 0, 8u, 90u, 173u, 255u);
+    expect_oob_px("full rgba i2", 63, 33u, 115u, 198u, 255u);
+
+    test_report("tex-decode/full-rgba-i2");
+}
+
+static void test_full_rgba_i4(void) {
+    uint32_t i;
+
+    oob_prepare(make_param(3, 0, 0, 0), 32u, 32u, 0u, 256u, oob_fill_i4);
+    for (i = 0; i < 64u; i++) {
+        uint32_t idx = ((uint32_t)OOB_TEXEL[i / 2u] >> ((i % 2u) * 4u)) & 15u;
+        expect_palette_px("full rgba i4", i, idx, 255u);
+    }
+    expect_oob_px("full rgba i4", 0, 8u, 90u, 173u, 255u);
+    expect_oob_px("full rgba i4", 63, 132u, 214u, 49u, 255u);
+
+    test_report("tex-decode/full-rgba-i4");
+}
+
+static void test_full_rgba_i8(void) {
+    uint32_t i;
+
+    oob_prepare(make_param(4, 0, 0, 0), 64u, 512u, 0u, 256u, oob_fill_i8);
+    for (i = 0; i < 64u; i++) {
+        expect_palette_px("full rgba i8", i, OOB_TEXEL[i], 255u);
+    }
+    expect_oob_px("full rgba i8", 0, 8u, 90u, 173u, 255u);
+    expect_oob_px("full rgba i8", 63, 33u, 115u, 198u, 255u);
+
+    test_report("tex-decode/full-rgba-i8");
+}
+
+static void test_full_rgba_16bpp(void) {
+    uint32_t i;
+
+    oob_prepare(make_param(7, 0, 0, 0), 128u, 0u, 0u, 256u, oob_fill_16bpp);
+    for (i = 0; i < 64u; i++) {
+        uint16_t word = get16(OOB_TEXEL + i * 2u);
+        if ((word & 0x8000u) == 0u) {
+            expect_oob_px("full rgba 16bpp", i, 0u, 0u, 0u, 0u);
+        } else {
+            uint32_t v = (uint32_t)word & 0x7FFFu;
+            expect_oob_px("full rgba 16bpp", i, FIVE_TO_EIGHT[v & 31u],
+                          FIVE_TO_EIGHT[(v >> 5) & 31u],
+                          FIVE_TO_EIGHT[(v >> 10) & 31u], 255u);
+        }
+    }
+    expect_oob_px("full rgba 16bpp", 0, 8u, 90u, 173u, 255u);
+    expect_oob_px("full rgba 16bpp", 62, 24u, 107u, 189u, 255u);
+    expect_oob_px("full rgba 16bpp", 63, 0u, 0u, 0u, 0u);
+
+    test_report("tex-decode/full-rgba-16bpp");
+}
+
 static void test_error_paths(void) {
     TwlhdV2TexRecord rec;
     TwlhdTexResult result;
@@ -899,6 +1420,14 @@ int main(void) {
     test_4x4_16x8_block_order();
     test_4x4_window_boundaries();
     test_4x4_high_palette_offsets();
+    test_oob_guards();
+    test_4x4_full_pixel_blocks();
+    test_full_rgba_a3i5();
+    test_full_rgba_a5i3();
+    test_full_rgba_i2();
+    test_full_rgba_i4();
+    test_full_rgba_i8();
+    test_full_rgba_16bpp();
     test_error_paths();
     test_error_leaves_output_untouched();
     return test_exit_code();

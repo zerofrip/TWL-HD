@@ -188,6 +188,31 @@ class TexDecodeGoldenTest(unittest.TestCase):
         ]
         self._assert_matches_oracle(textures)
 
+    def test_4x4_channel_position_blocks(self):
+        # Same texture as the C test test_4x4_full_pixel_blocks: block 0 is
+        # mode 2 (four opaque colours), block 1 is mode 0 (three opaque plus
+        # transparent texel 3), and every row byte is a 2-bit permutation.
+        colours = {
+            0: (5, 10, 20),
+            1: (15, 25, 8),
+            2: (22, 3, 27),
+            3: (12, 19, 2),
+            8: (4, 14, 24),
+            9: (5, 15, 25),
+            10: (6, 16, 26),
+        }
+        palette = bytearray(24)
+        for entry, (red, green, blue) in colours.items():
+            struct.pack_into("<H", palette, entry * 2,
+                             tex_decode_oracle.pack_rgb555(red, green, blue))
+        rows = bytes([0xE4, 0x1B, 0xB1, 0x78])
+        texel = rows * 4
+        index = struct.pack("<4H", 0x8000, 0x0004, 0x8000, 0x8000)
+        textures = [
+            _texture(_param(5), texel, bytes(palette), index, 0xC0),
+        ]
+        self._assert_matches_oracle(textures)
+
     def test_4x4_palette_window_errors(self):
         rng = _rng(0xE44)
         textures = [

@@ -137,3 +137,104 @@ texel/index size both directions, palette size, output size, palette-range).
   worktree).
 - `git status` shows no change under `common/`; only the new decoder, tests,
   tools, Makefile and docs changed.
+
+## Independent run (supervisor)
+
+An independent mutation run over `common/twlhd_tex_decode.c` (642 mutants,
+567 killed) found three surviving TEST GAPS. No decoder behaviour was changed:
+only new tests were added. The gaps and their new tests:
+
+### Gap 1: one-element-too-far overruns (out-of-bounds)
+
+Surviving mutant classes: loop bounds `i < texel_bytes` -> `<=` (A3I5 ~191,
+A5I3 ~287, I2/I3/I4 outer ~208) and the inner `j < per_byte` -> `<=` (~210),
+`per_byte` 4u -> 5u (~203), 16bpp `texel_bytes/2u` -> `/1u` (~297), the 4x4
+`block < blocks` -> `<=` (~249) and `sy < 4u` -> `<=` / `4u -> 5u` (~260).
+They read/write past the supplied buffers without any earlier test noticing.
+
+New test: `tex-decode/oob-guards`, a reusable harness with four
+`[64 guard][exact region][64 guard]` arrays (texel 256, palette 512, index 64,
+out 512). It runs 14 cases x 2 passes: formats 1, 2, 3, 4, 6, 7 at 8x8 and 16x8,
+plus format 5 at 8x8 and 16x8 with every block mode 2 and a palette window that
+ends exactly at its 8th byte. Each pass asserts (a) every output guard byte is
+unchanged (the sequential writes always clobber the adjacent guard first) and
+(b) the whole decoded output is identical when the input regions are filled
+with 0x00 versus 0xFF, so an over-read cannot hide. The harness comment maps
+each check to the mutant classes it kills.
+
+The Python golden path is structurally blind to these overruns and cannot be
+extended to see them without changing tooling behaviour: `tex_decode_cli`
+prints exactly `width*height` pixel lines and receives the exact
+`out_size = pixels*4`, so an extra read lands inside the `TXDT` chunk / heap
+buffer. The guard checks are therefore C-side only.
+
+### Gap 2: 4x4 channel/position coverage
+
+Surviving mutant classes: the alpha index `dst[3]` / `dst[7]` / `dst[11]`
+(`[3]` -> `[2]` / `[4]`), the `(row >> 2)`, `(row >> 4)`, `(row >> 6)` shift
+counts and `>>` -> `<<`, and some `7 -> 8` / `2 -> 1` constants in the 16
+`dst[]` writes (lines ~268-281). The old 4x4 tests used colours where blue was
+255 or alpha 0, so alpha-from-blue and shifted positions coincided.
+
+New tests: `tex-decode/4x4-full-pixel-blocks` (C) and
+`test_4x4_channel_position_blocks` (golden, tools/test_tex_decode_golden.py).
+One 8x8 texture: block 0 is mode 2 with four pairwise-distinct opaque colours,
+block 1 is mode 0 with three opaque colours plus transparent texel 3. Every row
+byte is a 2-bit permutation (`0xE4`, `0x1B`, `0xB1`, `0x78`) so each position
+holds a different index on every row. The C test asserts the full RGBA of all
+16 pixels of both blocks against hand-written literal expected values
+(including mode 0's alpha alternating 255/0, which catches skipped/stale
+writes), and verifies the row bytes are permutations. The golden test builds
+the same texture and lets the independent oracle confirm every pixel.
+
+Residual: the `col[?][3] -> col[?][4]` variant reads 1-3 bytes past the stack
+array `col[4][4]`. It is deterministically killed only under ASan/UBSan
+(default-on through `HOST_SAN` in the Makefile); without sanitizers it is an
+undefined stack read and is recorded here rather than "fixed" in the decoder.
+
+### Gap 3: per-format full-RGBA coverage
+
+Any `dst` channel assignment in A3I5/A5I3/I2/I3/I4/I8/16bpp had to be checked
+with colours whose R, G, B (and A, where distinct) all differ, so a
+source-channel mix-up cannot coincide with another channel. The new palette
+scheme uses 5-bit components in 1..30, which are pairwise distinct for every
+entry by construction, so every expanded channel is non-zero, non-255 and
+different from the others; A3I5 uses alpha 2/5 (expanded 73/182, neither a
+5-bit table value) and A5I3 picks a 5-bit alpha different from that pixel's
+three components. Every asserted opaque pixel is additionally checked for
+pairwise-distinct RGBA channels inside the test, so a bad colour choice fails
+loudly.
+
+New tests: `tex-decode/full-rgba-a3i5`, `tex-decode/full-rgba-a5i3`,
+`tex-decode/full-rgba-i2`, `tex-decode/full-rgba-i4`,
+`tex-decode/full-rgba-i8`, `tex-decode/full-rgba-16bpp`. Each fills an 8x8
+texture so pixel `i` selects index `i % entries` (packed low-bits-first for
+I2/I4, `(alpha << 5) | index` for A3I5, `(alpha << 3) | index` for A5I3),
+asserts the full RGBA of every pixel from the pinned tables, and adds literal
+first/last-pixel expectations; 16bpp includes transparent texels.
+
+The Python golden path already mirrors this gap: `test_all_formats_random_payloads`
+(tools/test_tex_decode_golden.py) asserts every pixel of every format against
+the independent oracle.
+
+### Equivalent classes not targeted (do not change the decoder for these)
+
+- comment-text line-number mutants (e.g. 1524/1752 inside comments)
+- the `fixed_palette_entries` table and its fail-safe check (unreachable after
+  `twlhd_v2_tex_palette_size_ok`)
+- `mode_palette_bytes` 6/8/4 (the window is even by construction)
+- `col[4][4]` sizes
+- `i < 3u` in 4x4 mode 1 (the average alpha is overwritten with 255)
+- `base + 0u`
+
+### Requirement traceability (independent run)
+
+- REQ-1: out-of-bounds guard harness (`tex-decode/oob-guards`): formats 1-7 at
+  8x8 and 16x8, output guard + input-guard comparison, 4x4 palette window
+  exactly at its end; mutant classes documented in the harness comment.
+- REQ-2: 4x4 channel/position coverage (`tex-decode/4x4-full-pixel-blocks`,
+  golden `test_4x4_channel_position_blocks`): mode 2 and mode 0 blocks, 32
+  literal pixels, per-row permutation patterns.
+- REQ-3: per-format full-RGBA coverage (`tex-decode/full-rgba-a3i5`,
+  `-a5i3`, `-i2`, `-i4`, `-i8`, `-16bpp`); golden
+  `test_all_formats_random_payloads` already covers every pixel per format.
