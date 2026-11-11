@@ -14,12 +14,14 @@
 static uint8_t g_file[TWLHD_V2_FILE_MAX];
 static TwlhdV2CmdEntry g_entries[TWLHD_V2_GXCM_MAX_ENTRIES];
 static TwlhdGxVertex g_out[256];
+static TwlhdGxTexVertex g_tex[256];
 static TwlhdGxViewport g_vp;
 static TwlhdGxStats g_st;
 
 static void clear_state(void) {
     memset(g_entries, 0, sizeof g_entries);
     memset(g_out, 0xCD, sizeof g_out);
+    memset(g_tex, 0xAB, sizeof g_tex);
     memset(&g_vp, 0, sizeof g_vp);
     memset(&g_st, 0, sizeof g_st);
 }
@@ -170,6 +172,44 @@ static void add_vtx_xz(uint32_t *n, int32_t x, int32_t z) {
 static void add_vtx_yz(uint32_t *n, int32_t y, int32_t z) {
     add_entry(n, TWLHD_V2_CMD_VTX_YZ,
               ((uint32_t)(uint16_t)y) | ((uint32_t)(uint16_t)z << 16));
+}
+
+/* ------------------------------------------------------------------------- */
+/* Texture helpers (Phase 5B-2b)                                             */
+/* ------------------------------------------------------------------------- */
+
+static void add_tex_coord(uint32_t *n, int32_t s, int32_t t) {
+    add_entry(n, TWLHD_V2_CMD_TEX_COORD,
+              ((uint32_t)(uint16_t)s) | ((uint32_t)(uint16_t)t << 16));
+}
+
+static void add_teximage_param(uint32_t *n, uint32_t word) {
+    add_entry(n, TWLHD_V2_CMD_TEXIMAGE_PARAM, word);
+}
+
+/* One TEX_COORD/VTX pair for texture-transform streams. */
+static void add_tex_vertex(uint32_t *n, int32_t s, int32_t t) {
+    add_tex_coord(n, s, t);
+    add_vtx_16(n, 0, 0, 0);
+}
+
+static void add_pltt_base(uint32_t *n, uint32_t word) {
+    add_entry(n, TWLHD_V2_CMD_PLTT_BASE, word);
+}
+
+static TwlhdGxResult run_tex_view(uint32_t entry_count, uint32_t capacity) {
+    TwlhdV2View view;
+    build_view(entry_count, &view);
+    return twlhd_gx_interpret_ex(&view, g_out, capacity, &g_out_count, &g_vp,
+                                 &g_st, g_tex);
+}
+
+static void check_tex(uint32_t index, double s, double t, uint32_t param,
+                      uint32_t pltt) {
+    CHECK_NEAR(g_tex[index].s, s, 0.0f);
+    CHECK_NEAR(g_tex[index].t, t, 0.0f);
+    CHECK_EQ_INT(g_tex[index].teximage_param, param);
+    CHECK_EQ_INT(g_tex[index].pltt_base, pltt);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -2318,7 +2358,7 @@ static void test_mode2_uses_position(void) {
     CHECK_NEAR(g_out[2].clip[0], 1.0f, 0.0001f);
 }
 
-static void test_texture_mode_ignored(void) {
+static void test_texture_mode_loads_matrix(void) {
     uint32_t n = 0u;
     size_t size;
     TwlhdV2View view;
@@ -2328,20 +2368,30 @@ static void test_texture_mode_ignored(void) {
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u); /* texture */
     {
         const uint32_t id[16] = {
-            0x1000u, 0u, 0u, 0u,
+            0x2000u, 0u, 0u, 0u,
             0u, 0x1000u, 0u, 0u,
             0u, 0u, 0x1000u, 0u,
             0u, 0u, 0u, 0x1000u,
         };
         add_load_4x4(&n, id);
     }
+    add_tex_coord(&n, 16, 0);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
     add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
 
     size = build_file(n);
     CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
-    r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
+    r = twlhd_gx_interpret_ex(&view, g_out, 256u, &g_out_count, &g_vp, &g_st,
+                              g_tex);
     CHECK_EQ_INT(r, TWLHD_GX_OK);
-    CHECK_EQ_INT(g_st.ignored_no_effect, 1u);
+    CHECK_EQ_INT(g_st.ignored_no_effect, 0u);
+    /* The mode-3 LOAD_4x4 is applied: s is doubled by the texture matrix. */
+    CHECK_NEAR(g_tex[0].s, 2.0f, 0.0f);
 }
 
 static void test_signed_overflow_regression(void) {
@@ -2975,8 +3025,9 @@ static void test_light_commands_not_ignored(void) {
                                         &g_vp, &g_st),
                      TWLHD_GX_OK);
     }
-    /* The six lighting commands have an effect now; the other six do not. */
-    CHECK_EQ_INT(g_st.ignored_no_effect, 6u);
+    /* The nine lighting/texture commands have an effect now; the other three
+     * (BOX_TEST/POS_TEST/VEC_TEST) do not. */
+    CHECK_EQ_INT(g_st.ignored_no_effect, 3u);
 }
 
 static void test_light_mask_zero_ignores_configured_lights(void) {
@@ -3241,7 +3292,7 @@ static void test_light_saturating_transform_clamps_both_ends(void) {
     check_lit_rgb(0, 0, 0);
 }
 
-static void test_light_mode3_stack_commands_ignored(void) {
+static void test_light_mode3_stack_commands_leave_vec(void) {
     static const uint32_t half[16] = {
         8192u, 0u, 0u, 0u,
         0u, 4096u, 0u, 0u,
@@ -3262,8 +3313,9 @@ static void test_light_mode3_stack_commands_ignored(void) {
     add_load_4x4(&n, half);
     add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
     add_load_4x4(&n, quarter);
-    /* Mode 3 ignores PUSH and matrix loads; POP afterwards restores `half`,
-     * not the mode-3-pushed `quarter`. */
+    /* Mode 3 has its own texture stack and matrix; the position PUSH/POP and
+     * the vector matrix are untouched, so POP restores `half`, not the
+     * mode-3-pushed `quarter`. */
     add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
     add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
     add_load_4x4(&n, zeros);
@@ -3277,7 +3329,7 @@ static void test_light_mode3_stack_commands_ignored(void) {
     run_view(n);
     /* vec = half (x2): fixed_diffuse = 8176 saturates the channel to 31. */
     check_lit_rgb(31, 31, 31);
-    CHECK_EQ_INT(g_st.ignored_no_effect, 2u);
+    CHECK_EQ_INT(g_st.ignored_no_effect, 0u);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -3659,7 +3711,8 @@ static void test_light_store_restore_mode0_leaves_vec(void) {
     check_lit_rgb(21, 21, 21);
 }
 
-/* Mode-3 STORE/RESTORE are ignored: vec stays rot_y45 (21). */
+/* Mode-3 STORE/RESTORE touch the texture stack: the index is ignored, slot 0
+ * is always used (gfx3d.cpp:950-1000), so vec stays rot_y45 (21). */
 static void test_light_store_restore_mode3_leaves_vec(void) {
     uint32_t n = 0u;
 
@@ -3676,6 +3729,1003 @@ static void test_light_store_restore_mode3_leaves_vec(void) {
     add_lit_triangle(&n, normal_word(0, 0, 4088), 1, 1, 1u);
     run_view(n);
     check_lit_rgb(21, 21, 21);
+}
+
+/* ------------------------------------------------------------------------- */
+/* Texture latches, transform and parallel tex_out (Phase 5B-2b)             */
+/* ------------------------------------------------------------------------- */
+
+static void test_tex_latch_order(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_tex_coord(&n, 16, 32); /* before BEGIN: latched immediately */
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0); /* (1.0, 2.0) */
+    add_tex_coord(&n, 48, 64); /* between vertices of one polygon */
+    add_vtx_16(&n, 0x1000, 0, 0); /* (3.0, 4.0) */
+    add_tex_coord(&n, -16, -32); /* after the previous VTX */
+    add_vtx_16(&n, 0, 0x1000, 0); /* (-1.0, -2.0) */
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    check_tex(0u, 1.0, 2.0, 0u, 0u);
+    check_tex(1u, 3.0, 4.0, 0u, 0u);
+    check_tex(2u, -1.0, -2.0, 0u, 0u);
+    CHECK_EQ_INT(g_st.ignored_no_effect, 0u);
+    CHECK_EQ_INT(g_st.tex_transform_unsupported, 0u);
+}
+
+static void test_tex_latch_outside_begin(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_tex_coord(&n, 1, 2);
+    add_vtx_16(&n, 0x2000, 0, 0); /* outside BEGIN: no output */
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.ignored_outside_begin, 1u);
+    check_tex(0u, 0.0625, 0.125, 0u, 0u); /* format 0 still gets tex entries */
+    check_tex(1u, 0.0625, 0.125, 0u, 0u);
+    check_tex(2u, 0.0625, 0.125, 0u, 0u);
+}
+
+static void test_tex_s16_sign_edges(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_tex_coord(&n, (int32_t)0x8000, 0x7FFF);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_tex_coord(&n, -1, -16);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    check_tex(0u, -2048.0, 2047.9375, 0u, 0u);
+    check_tex(1u, -0.0625, -1.0, 0u, 0u);
+    check_tex(2u, -0.0625, -1.0, 0u, 0u);
+}
+
+static void test_tex_param_pltt_latch_order(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_teximage_param(&n, 1u);
+    add_pltt_base(&n, 0x10u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_teximage_param(&n, 2u); /* change between vertices of one polygon */
+    add_pltt_base(&n, 0x20u);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_teximage_param(&n, 3u);
+    add_pltt_base(&n, 0x30u);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    /* Across polygons. */
+    add_teximage_param(&n, 4u);
+    add_pltt_base(&n, 0x40u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    check_tex(0u, 0.0, 0.0, 1u, 0x10u);
+    check_tex(1u, 0.0, 0.0, 2u, 0x20u);
+    check_tex(2u, 0.0, 0.0, 3u, 0x30u);
+    check_tex(3u, 0.0, 0.0, 4u, 0x40u);
+    check_tex(4u, 0.0, 0.0, 4u, 0x40u);
+    check_tex(5u, 0.0, 0.0, 4u, 0x40u);
+}
+
+static void test_tex_mode0_vs_mode1(void) {
+    static const uint32_t transform[16] = {
+        8192u, 0u,     0u, 0u,
+        0u,    2048u, 0u, 0u,
+        0u,    0u,    4096u, 0u,
+        4096u, (uint32_t)-1024, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    /* Mode 0: raw latch, matrix ignored. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, transform);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x00001234u);
+    add_pltt_base(&n, 0x5678u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    check_tex(0u, 1.0, 2.0, 0x1234u, 0x5678u);
+    check_tex(2u, 1.0, 2.0, 0x1234u, 0x5678u);
+
+    /* Mode 1: rows 0/1 x raw (s,t) + raw m8/m12 addends, >> 12, / 16.
+     * Adapted 3.0/0.75 -> 2.0625/0.9375: hand check (8192*16 + 4096) >> 12 =
+     * 33 -> 33/16 = 2.0625; (2048*32 - 1024) >> 12 = 64512 >> 12 = 15 ->
+     * 15/16 = 0.9375. The old literals encoded m12*4096 and /4096. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, transform);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40001234u);
+    add_pltt_base(&n, 0x5678u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    check_tex(0u, 2.0625, 0.9375, 0x40001234u, 0x5678u);
+    check_tex(1u, 2.0625, 0.9375, 0x40001234u, 0x5678u);
+    check_tex(2u, 2.0625, 0.9375, 0x40001234u, 0x5678u);
+}
+
+static void test_tex_mode1_rows_and_matrix_time(void) {
+    static const uint32_t rows[16] = {
+        8192u, 4096u, 0u, 0u,
+        0u,    4096u, 0u, 0u,
+        0u,    0u,    4096u, 0u,
+        0u,    0u,    0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t i;
+
+    /* Distinct rows 0/1 distinguish a row swap; no translation term. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, rows);
+    add_tex_coord(&n, 16, 0);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    for (i = 0u; i < 3u; i++) check_tex(i, 2.0, 1.0, 0x40000000u, 0u);
+
+    /* The texture matrix is sampled at VTX time, not at TEX_COORD time. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_scale(&n, 8192u, 8192u, 4096u); /* applied after TEX_COORD */
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    for (i = 0u; i < 3u; i++) check_tex(i, 2.0, 4.0, 0x40000000u, 0u);
+}
+
+static void test_tex_modes_2_3_raw_and_counter(void) {
+    static const uint32_t transform[16] = {
+        8192u, 0u, 0u, 0u,
+        0u, 8192u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n;
+    uint32_t mode;
+
+    for (mode = 2u; mode <= 3u; mode++) {
+        n = 0u;
+        clear_state();
+        add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+        add_load_4x4(&n, transform);
+        add_tex_coord(&n, 16, 32);
+        add_teximage_param(&n, mode << 30);
+        add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+        add_vtx_16(&n, 0, 0, 0);
+        add_vtx_16(&n, 0x1000, 0, 0);
+        add_vtx_16(&n, 0, 0x1000, 0);
+        add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+        add_vtx_16(&n, 0, 0, 0); /* outside BEGIN: still counted */
+        add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+        CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+        CHECK_EQ_INT(g_out_count, 3u);
+        check_tex(0u, 1.0, 2.0, mode << 30, 0u);
+        check_tex(1u, 1.0, 2.0, mode << 30, 0u);
+        check_tex(2u, 1.0, 2.0, mode << 30, 0u);
+        CHECK_EQ_INT(g_st.tex_transform_unsupported, 4u);
+    }
+}
+
+static void test_tex_quad_list_alignment(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_tex_coord(&n, 16, 0);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u); /* quad list */
+    add_vtx_16(&n, 0, 0, 0);
+    add_tex_coord(&n, 32, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_tex_coord(&n, 48, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_tex_coord(&n, 64, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    /* (0,1,2) then (0,2,3). */
+    check_tex(0u, 1.0, 0.0, 0u, 0u);
+    check_tex(1u, 2.0, 0.0, 0u, 0u);
+    check_tex(2u, 3.0, 0.0, 0u, 0u);
+    check_tex(3u, 1.0, 0.0, 0u, 0u);
+    check_tex(4u, 3.0, 0.0, 0u, 0u);
+    check_tex(5u, 4.0, 0.0, 0u, 0u);
+}
+
+static void test_tex_quad_strip_alignment(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_tex_coord(&n, 16, 0);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 3u); /* quad strip */
+    add_vtx_16(&n, 0, 0, 0);
+    add_tex_coord(&n, 32, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_tex_coord(&n, 48, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_tex_coord(&n, 64, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    /* (0,1,3) then (0,3,2). */
+    check_tex(0u, 1.0, 0.0, 0u, 0u);
+    check_tex(1u, 2.0, 0.0, 0u, 0u);
+    check_tex(2u, 4.0, 0.0, 0u, 0u);
+    check_tex(3u, 1.0, 0.0, 0u, 0u);
+    check_tex(4u, 4.0, 0.0, 0u, 0u);
+    check_tex(5u, 3.0, 0.0, 0u, 0u);
+}
+
+static void test_tex_triangle_strip_alignment(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_tex_coord(&n, 16, 0);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 2u); /* triangle strip */
+    add_vtx_16(&n, 0, 0, 0);
+    add_tex_coord(&n, 32, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_tex_coord(&n, 48, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_tex_coord(&n, 64, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    /* (0,1,2) then the winding-swapped (1,0,3). */
+    check_tex(0u, 1.0, 0.0, 0u, 0u);
+    check_tex(1u, 2.0, 0.0, 0u, 0u);
+    check_tex(2u, 3.0, 0.0, 0u, 0u);
+    check_tex(3u, 3.0, 0.0, 0u, 0u);
+    check_tex(4u, 2.0, 0.0, 0u, 0u);
+    check_tex(5u, 4.0, 0.0, 0u, 0u);
+}
+
+static void test_tex_capacity_truncation_alignment(void) {
+    TwlhdGxTexVertex canary;
+    uint32_t n = 0u;
+
+    memset(&canary, 0x5A, sizeof canary);
+    clear_state();
+    add_tex_coord(&n, 16, 0);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_tex_coord(&n, 32, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_tex_coord(&n, 48, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_tex_coord(&n, 64, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_tex_coord(&n, 80, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_tex_coord(&n, 96, 0);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    g_tex[3] = canary; /* guard: the dropped triangle must not touch it */
+
+    CHECK_EQ_INT(run_tex_view(n, 3u), TWLHD_GX_ERR_CAPACITY);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.capacity_dropped, 3u);
+    CHECK_EQ_INT(g_st.triangles_out, 1u);
+    check_tex(0u, 1.0, 0.0, 0u, 0u);
+    check_tex(1u, 2.0, 0.0, 0u, 0u);
+    check_tex(2u, 3.0, 0.0, 0u, 0u);
+    CHECK_EQ_INT(memcmp(&g_tex[3], &canary, sizeof canary), 0);
+}
+
+static void test_tex_out_null_matches_old(void) {
+    static TwlhdGxVertex saved_out[256];
+    static TwlhdGxStats saved_stats;
+    TwlhdV2View view;
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_scale(&n, 8192u, 4096u, 4096u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_pltt_base(&n, 0x4321u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 1u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_tex_coord(&n, 32, 64);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_tex_coord(&n, -16, -32);
+    add_vtx_16(&n, 0x1000, 0x1000, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    memcpy(saved_out, g_out, sizeof saved_out);
+    saved_stats = g_st;
+    CHECK_EQ_INT(g_out_count, 6u);
+
+    build_view(n, &view);
+    CHECK_EQ_INT(twlhd_gx_interpret(&view, g_out, 256u, &g_out_count, &g_vp,
+                                    &g_st),
+                 TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(memcmp(saved_out, g_out, sizeof saved_out), 0);
+    CHECK_EQ_INT(memcmp(&saved_stats, &g_st, sizeof saved_stats), 0);
+}
+
+static void test_tex_matrix_stack_ops(void) {
+    static const uint32_t identity[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_scale(&n, 8192u, 4096u, 4096u);
+    add_trans(&n, 4096u, 0u, 0u); /* translation is scaled by the matrix */
+    add_store(&n, 0u);
+    add_load_4x4(&n, identity);
+    add_restore(&n, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, identity);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        /* Adapted 4.0 -> 2.125: scale(8192)+trans(4096) folds to m0=8192,
+         * m12=8192; (8192*16 + 8192) >> 12 = 34 -> 34/16 = 2.125. t stays
+         * 2.0. The old literal encoded m12*4096. */
+        check_tex(i, 2.125, 2.0, 0x40000000u, 0u);
+    }
+}
+
+static void test_tex_matrix_stack_errors(void) {
+    uint32_t n;
+
+    /* PUSH twice: the texture stack holds one entry. DeSmuME sets
+     * gxstat.se on the second texture PUSH (gfx3d.cpp:861-871, the texture
+     * branch mirrors the projection one); this interpreter reports the same
+     * case as ERR_STACK and aborts the frame. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+
+    /* POP with an empty texture stack: the toggle wraps and DeSmuME sets
+     * gxstat.se (gfx3d.cpp:918-929); ours is ERR_STACK. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+
+    /* STORE/RESTORE in texture mode ignore the index and always use slot 0
+     * with no error (gfx3d.cpp:950-1000). */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_store(&n, 1u);
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_restore(&n, 1u);
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+}
+
+/* Mode-3 STORE 5 / matrix reload / RESTORE 7: the index is ignored, so the
+ * restore brings back the stored scale(8192,4096,4096)+TRANS(4096) matrix.
+ * Hand check: m0=8192, m12=8192; (8192*16 + 8192) >> 12 = 34 -> 2.125,
+ * t = (4096*32) >> 12 = 32 -> 2.0. Identity would give 1.0/2.0. */
+static void test_tex_matrix_store_restore_mode3_roundtrip(void) {
+    static const uint32_t identity[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_scale(&n, 8192u, 4096u, 4096u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_store(&n, 5u);
+    add_load_4x4(&n, identity);
+    add_restore(&n, 7u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 2.125, 2.0, 0x40000000u, 0u);
+    }
+}
+
+/* PUSH/POP and STORE/RESTORE share the ONE storage slot _mtxStackTexture[0]
+ * (DeSmuME gfx3d.cpp:861 PUSH, :928 POP, :965 STORE, :996 RESTORE), while the
+ * PUSH/POP depth counter is separate. Sequence 1: PUSH saves identity, LOAD A,
+ * STORE 0 overwrites the saved copy with A, LOAD identity, POP restores A, so
+ * s = (8192*16) >> 12 / 16 = 2.0 and t = (8192*32) >> 12 / 16 = 4.0.
+ * Sequence 2: STORE 3 saves A, LOAD identity, PUSH overwrites the slot with
+ * identity, RESTORE 0 therefore yields identity: s = 1.0, t = 2.0. A "separate
+ * slots" implementation gives 1.0/2.0 and 2.0/4.0 instead. */
+static void test_tex_matrix_push_store_share_slot(void) {
+    static const uint32_t A[16] = {
+        8192u, 0u,    0u,    0u,
+        0u,    8192u, 0u,    0u,
+        0u,    0u,    4096u, 0u,
+        0u,    0u,    0u,    4096u,
+    };
+    static const uint32_t identity[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+    uint32_t i;
+
+    /* Sequence 1: the POP reads what the later STORE wrote. */
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, A);
+    add_store(&n, 0u);
+    add_load_4x4(&n, identity);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 2.0, 4.0, 0x40000000u, 0u);
+    }
+
+    /* Sequence 2: the PUSH overwrites the slot the STORE filled, so the later
+     * RESTORE brings back identity. */
+    n = 0u;
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, A);
+    add_store(&n, 3u);
+    add_load_4x4(&n, identity);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_load_4x4(&n, identity);
+    add_restore(&n, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0, 0, 0);
+    add_vtx_16(&n, 0x1000, 0, 0);
+    add_vtx_16(&n, 0, 0x1000, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 1.0, 2.0, 0x40000000u, 0u);
+    }
+}
+
+/* The texture slot starts as identity, mirroring DeSmuME
+ * MatrixInit(_mtxStackTexture[0]) (gfx3d.cpp:531-532). A mode-3 RESTORE with no
+ * prior STORE/PUSH must therefore yield identity, not the zeroed stack of the
+ * other modes: s = (4096*16) >> 12 / 16 = 1.0, t = (4096*32) >> 12 / 16 = 2.0. */
+static void test_tex_restore_without_store(void) {
+    uint32_t n = 0u;
+    uint32_t i;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_restore(&n, 0u);
+    add_tex_coord(&n, 16, 32);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+    for (i = 0u; i < 3u; i++) {
+        check_tex(i, 1.0, 2.0, 0x40000000u, 0u);
+    }
+}
+
+/* Mode 1 exact DeSmuME formula (gfx3d.cpp:1578-1593): raw s1.11.4 inputs,
+ * raw m8/m9 and m12/m13 addends, 64-bit sum, arithmetic >>12, (int32_t)
+ * cast, floats /16.0. All literals below were derived from the independent
+ * Python oracle; the hand checks are in the comments. */
+static void test_tex_mode1_identity(void) {
+    static const uint32_t identity[16] = {
+        4096u, 0u,    0u,    0u,
+        0u,    4096u, 0u,    0u,
+        0u,    0u,    4096u, 0u,
+        0u,    0u,    0u,    4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, identity);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 16, -32);
+    add_tex_vertex(&n, 0x7FFF, (int32_t)0x8000);
+    add_tex_vertex(&n, 0, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    check_tex(0u, 1.0, -2.0, 0x40000000u, 0u);
+    check_tex(1u, 2047.9375, -2048.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_translation(void) {
+    static const uint32_t matrix[16] = {
+        4096u, 0u,    0u, 0u,
+        0u,    4096u, 0u, 0u,
+        0u,    0u,    4096u, 0u,
+        4096u, (uint32_t)-4096, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0, 0);
+    add_tex_vertex(&n, 16, 16);
+    add_tex_vertex(&n, 16, 16);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* m12=4096 -> +1 raw unit -> 1/16; m13=-4096 -> -1/16. */
+    check_tex(0u, 0.0625, -0.0625, 0x40000000u, 0u);
+    /* Hand: (4096*16 + 4096) >> 12 = 17 -> 1.0625;
+     * (4096*16 - 4096) >> 12 = 15 -> 0.9375. */
+    check_tex(1u, 1.0625, 0.9375, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_m8_m9(void) {
+    static const uint32_t matrix[16] = {
+        0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u,
+        8192u, (uint32_t)-6144, 0u, 0u,
+        0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* Hand: 8192 >> 12 = 2 -> 0.125; -6144 >> 12 = -2 -> -0.125. */
+    check_tex(0u, 0.125, -0.125, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_scale(void) {
+    static const uint32_t matrix[16] = {
+        8192u, 0u,    0u, 0u,
+        0u,    2048u, 0u, 0u,
+        0u,    0u,    4096u, 0u,
+        0u,    0u,    0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_tex_vertex(&n, 16, 32);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    check_tex(0u, 2.0, 1.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_shear(void) {
+    static const uint32_t matrix[16] = {
+        4096u, 0u, 0u, 0u,
+        2048u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 32, 16);
+    add_tex_vertex(&n, 32, 16);
+    add_tex_vertex(&n, 32, 16);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* Hand: s = (4096*32 + 2048*16) >> 12 = 163840 >> 12 = 40 -> 2.5. */
+    check_tex(0u, 2.5, 1.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_negative_rotation(void) {
+    static const uint32_t matrix[16] = {
+        0u, 4096u, 0u, 0u,
+        (uint32_t)-4096, 0u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, -16, -32);
+    add_tex_vertex(&n, -16, -32);
+    add_tex_vertex(&n, -16, -32);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* Hand: s = (-4096 * -32) >> 12 = 32 -> 2.0;
+     * t = (4096 * -16) >> 12 = -16 -> -1.0. */
+    check_tex(0u, 2.0, -1.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_negative_sum_floor_shift(void) {
+    static const uint32_t matrix[16] = {
+        4096u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        2048u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, -16, 0);
+    add_tex_vertex(&n, -16, 0);
+    add_tex_vertex(&n, -16, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* Hand: (-4096*16 + 2048) = -63488; floor >> 12 = -16 -> -1.0
+     * (truncation would give -15 -> -0.9375). */
+    check_tex(0u, -1.0, 0.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_64bit_headroom(void) {
+    static const uint32_t matrix[16] = {
+        0x00100000u, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* 2^20 * 0x7FFF = 34358689792 > 2^32; >> 12 = 8388352 -> 524272.0. */
+    check_tex(0u, 524272.0, 0.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_s32_wrap_extreme(void) {
+    static const uint32_t matrix[16] = {
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0u, 4096u, 0u, 0u,
+        0u, 0u, 4096u, 0u,
+        0u, 0u, 0u, 4096u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* (0x7FFFFFFF * 0x7FFF) >> 12 = 17179344888; the int32 cast wraps to
+     * -524296 -> -32768.5 (exact in float32). */
+    check_tex(0u, -32768.5, 0.0, 0x40000000u, 0u);
+}
+
+/* Repair round 2: per-term 64-bit headroom. Each test makes exactly one of
+ * the four product terms overflow 32 bits, so truncating that term alone in
+ * compute_tex_vertex() changes the int32 result. A large matrix element and a
+ * large coordinate are both required: a naive 0x40000000 element would make
+ * the truncation a no-op. */
+static void test_tex_mode1_trunc_m0_s(void) {
+    static const uint32_t matrix_pos[16] = {
+        0x00100000u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        (uint32_t)-0x00100000, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, (int32_t)0x8000, 0); /* s = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* 2^20*0x7FFF >> 12 = 8388352 -> 524272.0 (the 32-bit-truncated product
+     * would give -16.0). */
+    check_tex(0u, 524272.0, 0.0, 0x40000000u, 0u);
+    /* 2^20*-32768 >> 12 = -8388608 -> -524288.0 (truncated: 0.0). */
+    check_tex(1u, -524288.0, 0.0, 0x40000000u, 0u);
+    /* -2^20*0x7FFF >> 12 = -8388352 -> -524272.0 (truncated: +16.0). */
+    check_tex(2u, -524272.0, 0.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_trunc_m4_t(void) {
+    static const uint32_t matrix_pos[16] = {
+        0u, 0u, 0u, 0u, 0x00100000u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        0u, 0u, 0u, 0u, (uint32_t)-0x00100000, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_tex_vertex(&n, 0, (int32_t)0x8000); /* t = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* s row t-term: 2^20*0x7FFF >> 12 -> 524272.0 (truncated product: -16.0). */
+    check_tex(0u, 524272.0, 0.0, 0x40000000u, 0u);
+    check_tex(1u, -524288.0, 0.0, 0x40000000u, 0u);
+    check_tex(2u, -524272.0, 0.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_trunc_m1_s(void) {
+    static const uint32_t matrix_pos[16] = {
+        0u, 0x00100000u, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        0u, (uint32_t)-0x00100000, 0u, 0u, 0u, 0u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_tex_vertex(&n, (int32_t)0x8000, 0); /* s = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0x7FFF, 0);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* This is the term the 42-mutant run could truncate undetected:
+     * t_acc m[1]*s. s stays 0.0 in every vertex. */
+    check_tex(0u, 0.0, 524272.0, 0x40000000u, 0u);
+    check_tex(1u, 0.0, -524288.0, 0x40000000u, 0u);
+    check_tex(2u, 0.0, -524272.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_trunc_m5_t(void) {
+    static const uint32_t matrix_pos[16] = {
+        0u, 0u, 0u, 0u, 0u, 0x00100000u, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    static const uint32_t matrix_neg[16] = {
+        0u, 0u, 0u, 0u, 0u, (uint32_t)-0x00100000, 0u, 0u,
+        0u, 0u, 0u, 0u, 0u, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix_pos);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_tex_vertex(&n, 0, (int32_t)0x8000); /* t = -0x8000 */
+    add_load_4x4(&n, matrix_neg);
+    add_tex_vertex(&n, 0, 0x7FFF);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* t row t-term: 2^20*0x7FFF >> 12 -> 524272.0 (truncated product: -16.0). */
+    check_tex(0u, 0.0, 524272.0, 0x40000000u, 0u);
+    check_tex(1u, 0.0, -524288.0, 0x40000000u, 0u);
+    check_tex(2u, 0.0, -524272.0, 0x40000000u, 0u);
+}
+
+static void test_tex_mode1_sum_over_32bit(void) {
+    static const uint32_t matrix[16] = {
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+        0x7FFFFFFFu, 0u, 0u, 0u,
+    };
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 3u);
+    add_load_4x4(&n, matrix);
+    add_teximage_param(&n, 0x40000000u);
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_tex_vertex(&n, 1, 1);
+    add_tex_vertex(&n, 1, 1);
+    add_tex_vertex(&n, 1, 1);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+
+    CHECK_EQ_INT(run_tex_view(n, 256u), TWLHD_GX_OK);
+    /* Each product is 0x7FFFFFFF (fits int32) but the four-term sum
+     * 4*(2^31-1) = 2^33-4 > 2^32. >> 12 = 2^21-1 = 2097151 -> 131071.9375.
+     * A signed 32-bit accumulator gives -4 >> 12 = -1 -> -0.0625; a uint32
+     * accumulator shifted before narrowing gives 1048575 -> 65535.9375. */
+    check_tex(0u, 131071.9375, 0.0, 0x40000000u, 0u);
+    check_tex(1u, 131071.9375, 0.0, 0x40000000u, 0u);
+    check_tex(2u, 131071.9375, 0.0, 0x40000000u, 0u);
 }
 
 /* ------------------------------------------------------------------------- */
@@ -3746,8 +4796,8 @@ int main(void) {
     test_report("gx_interp/viewport");
     test_mode2_uses_position();
     test_report("gx_interp/mode2-uses-position");
-    test_texture_mode_ignored();
-    test_report("gx_interp/texture-mode-ignored");
+    test_texture_mode_loads_matrix();
+    test_report("gx_interp/texture-mode-loads-matrix");
     test_signed_overflow_regression();
     test_report("gx_interp/signed-overflow-regression");
     test_current_vertex_persistence();
@@ -3836,8 +4886,8 @@ int main(void) {
     test_report("gx_interp/light-negative-shininess-clamped");
     test_light_saturating_transform_clamps_both_ends();
     test_report("gx_interp/light-saturating-transform");
-    test_light_mode3_stack_commands_ignored();
-    test_report("gx_interp/light-mode3-stack-ignored");
+    test_light_mode3_stack_commands_leave_vec();
+    test_report("gx_interp/light-mode3-stack-leaves-vec");
     test_light_load_4x3_mode2_rotates_vec();
     test_report("gx_interp/light-load-4x3-mode2-rotates-vec");
     test_light_load_4x3_mode1_keeps_vec();
@@ -3874,5 +4924,67 @@ int main(void) {
     test_report("gx_interp/light-trans-mode2-reaches-vec-via-nonaffine-mult");
     test_light_trans_mode1_skips_vec();
     test_report("gx_interp/light-trans-mode1-skips-vec");
+    test_tex_latch_order();
+    test_report("gx_interp/tex-latch-order");
+    test_tex_latch_outside_begin();
+    test_report("gx_interp/tex-latch-outside-begin");
+    test_tex_s16_sign_edges();
+    test_report("gx_interp/tex-s16-sign-edges");
+    test_tex_param_pltt_latch_order();
+    test_report("gx_interp/tex-param-pltt-latch-order");
+    test_tex_mode0_vs_mode1();
+    test_report("gx_interp/tex-mode0-vs-mode1");
+    test_tex_mode1_rows_and_matrix_time();
+    test_report("gx_interp/tex-mode1-rows-and-matrix-time");
+    test_tex_modes_2_3_raw_and_counter();
+    test_report("gx_interp/tex-modes-2-3-raw-and-counter");
+    test_tex_quad_list_alignment();
+    test_report("gx_interp/tex-quad-list-alignment");
+    test_tex_quad_strip_alignment();
+    test_report("gx_interp/tex-quad-strip-alignment");
+    test_tex_triangle_strip_alignment();
+    test_report("gx_interp/tex-triangle-strip-alignment");
+    test_tex_capacity_truncation_alignment();
+    test_report("gx_interp/tex-capacity-truncation-alignment");
+    test_tex_out_null_matches_old();
+    test_report("gx_interp/tex-out-null-matches-old");
+    test_tex_matrix_stack_ops();
+    test_report("gx_interp/tex-matrix-stack-ops");
+    test_tex_matrix_stack_errors();
+    test_report("gx_interp/tex-matrix-stack-errors");
+    test_tex_matrix_store_restore_mode3_roundtrip();
+    test_report("gx_interp/tex-matrix-store-restore-mode3-roundtrip");
+    test_tex_matrix_push_store_share_slot();
+    test_report("gx_interp/tex-matrix-push-store-share-slot");
+    test_tex_restore_without_store();
+    test_report("gx_interp/tex-restore-without-store");
+    test_tex_mode1_identity();
+    test_report("gx_interp/tex-mode1-identity");
+    test_tex_mode1_translation();
+    test_report("gx_interp/tex-mode1-translation");
+    test_tex_mode1_m8_m9();
+    test_report("gx_interp/tex-mode1-m8-m9");
+    test_tex_mode1_scale();
+    test_report("gx_interp/tex-mode1-scale");
+    test_tex_mode1_shear();
+    test_report("gx_interp/tex-mode1-shear");
+    test_tex_mode1_negative_rotation();
+    test_report("gx_interp/tex-mode1-negative-rotation");
+    test_tex_mode1_negative_sum_floor_shift();
+    test_report("gx_interp/tex-mode1-negative-sum-floor-shift");
+    test_tex_mode1_64bit_headroom();
+    test_report("gx_interp/tex-mode1-64bit-headroom");
+    test_tex_mode1_s32_wrap_extreme();
+    test_report("gx_interp/tex-mode1-s32-wrap-extreme");
+    test_tex_mode1_trunc_m0_s();
+    test_report("gx_interp/tex-mode1-trunc-m0-s");
+    test_tex_mode1_trunc_m4_t();
+    test_report("gx_interp/tex-mode1-trunc-m4-t");
+    test_tex_mode1_trunc_m1_s();
+    test_report("gx_interp/tex-mode1-trunc-m1-s");
+    test_tex_mode1_trunc_m5_t();
+    test_report("gx_interp/tex-mode1-trunc-m5-t");
+    test_tex_mode1_sum_over_32bit();
+    test_report("gx_interp/tex-mode1-sum-over-32bit");
     return test_exit_code();
 }

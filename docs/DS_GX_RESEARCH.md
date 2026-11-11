@@ -258,7 +258,11 @@ The vertex colour starts as the emission colour and is clamped with `min(31, x)`
 - Test plan hint (UNIT): an independent Python oracle that re-implements the integer equations above, golden streams for one light diffuse-only, ambient-only, emission-only, specular with and without the shininess table, light mask bits, clamping at 31; mutation tests for each shift constant.
 
 ## Textures (5B-2 research)
-Status: research only; no source, test or Makefile change. Sources are the DeSmuME checkout cited at the top (commit `fc504ee0`); GBATEK was not consulted. Labels: **VERIFIED** = read at the cited line, **READ** = derived from the cited source, **UNVERIFIED** = not checked against hardware or register docs.
+Status: research plus the host-side 5B-2b interpreter (BUILD/UNIT only; no
+EMULATOR or HARDWARE run). Sources are the DeSmuME checkout cited at the top
+(commit `fc504ee0`); GBATEK was not consulted. Labels: **VERIFIED** = read at
+the cited line, **READ** = derived from the cited source, **UNVERIFIED** = not
+checked against hardware or register docs.
 
 ### TEXIMAGE_PARAM (0x2A) and PLTT_BASE (0x2B)
 **VERIFIED:** command ids `GFX3D_TEXIMAGE_PARAM = 0x2A`, `GFX3D_PLTT_BASE = 0x2B`
@@ -326,13 +330,81 @@ s1.11.4. The setter latches `_texCoord16` and raises
 mode even when the flag is clear (`gfx3d.cpp:1579-1580`). Modes come from
 `TexCoordTransformMode` (`gfx3d.h:124-129`):
 - 0 none: `s = texCoord.s`, `t = texCoord.t` (raw latch passed on).
-- 1 texcoord source: texture-matrix rows 0/1 x (s,t) + translation, `>> 12`.
+- 1 texcoord source (`gfx3d.cpp:1578-1593`):
+  `s' = (s32)(((s64)Mul32x16(mtx[0], s) + (s64)Mul32x16(mtx[4], t) +
+  (s64)mtx[8] + (s64)mtx[12]) >> 12)`, and the same with rows
+  `mtx[1]/[5]/[9]/[13]` for `t'`; `s/t` are the raw sign-extended s1.11.4
+  values (no promotion), the m8/m9 and m12/m13 terms are raw 20.12 addends,
+  the sum is 64-bit, the shift is arithmetic `>>12`, the result is cast to
+  s32 and converted to floats by `/16.0f` (same units as mode 0). A 20.12
+  translation of 4096 therefore moves **+1 raw s1.11.4 unit = 1/16 texel**,
+  not 1 texture unit.
 - 2 normal source: rows 0/1 x (nx,ny,nz) + (s<<24, t<<24), `>> 24`.
 - 3 vertex source: rows 0/1 x (vx,vy,vz) + (s<<24, t<<24), `>> 24`.
 
 **READ:** all modes are integer fixed point with no normalisation; the texture
 matrix is `MATRIXMODE_TEXTURE` as latched at VTX time, so matrix changes between
 TEX_COORD and VTX are observed.
+
+### Implementation status 5B-2b (host interpreter)
+
+Implemented in `common/twlhd_gx_interp.c` / `.h`; **BUILD/UNIT only**, no
+EMULATOR or HARDWARE verification:
+
+- **VERIFIED (host tests only, not hardware):** TEX_COORD (0x22),
+  TEXIMAGE_PARAM (0x2A) and PLTT_BASE (0x2B) are latched, each with no
+  `ignored_no_effect` increment. TEXIMAGE_PARAM/PLTT_BASE are latched
+  immediately; TEX_COORD and the transform mode are sampled at each VTX
+  command. `twlhd_gx_interpret_ex()` reports them per output vertex in a
+  parallel `TwlhdGxTexVertex` (`float s,t; uint32_t teximage_param;
+  uint32_t pltt_base;`, 16 B). `TwlhdGxVertex` stays 32 B (static asserts) and
+  `twlhd_gx_interpret()` is a `tex_out == NULL` wrapper.
+- **READ:** TEX_COORD is two packed s16 (S low, T high), s1.11.4 -> float
+  value/16.0. Format 0 (no texture / TEXIMAGE_PARAM 0) still receives an
+  entry, with `teximage_param == 0`; the consumer decides.
+- **VERIFIED (formula against DeSmuME `desmume/src/gfx3d.cpp:1578-1593`;
+  host tests only, not hardware):** mode 1 applies texture-matrix rows 0/1 to
+  the **raw** latched s1.11.4 coordinate (no `<<8` promotion):
+  `s' = (s32)(((s64)Mul32x16(m[0], s) + (s64)Mul32x16(m[4], t) +
+  (s64)m[8] + (s64)m[12]) >> 12)`, and the same with
+  `m[1]/m[5]/m[9]/m[13]` for `t'`. The m8/m9 and m12/m13 addends are raw
+  20.12 words (no FX_ONE multiply), the sum is 64-bit, the shift is
+  arithmetic, the result wraps to int32 and the output floats are
+  `value / 16.0f` (same units as mode 0). Column-major `m[col*4+row]`.
+  A 20.12 translation of 4096 is +1 raw s1.11.4 unit = 1/16 texel, **not**
+  1.0 texture unit (earlier text here was wrong; repair round 1).
+- **IMPLEMENTED (BUILD/UNIT):** MTX_MODE 3 now has its own 20.12 texture
+  matrix and a **one-entry shared storage slot**, verified in the DeSmuME
+  checkout. PUSH copies into `_mtxStackTexture[0]` (`gfx3d.cpp:861`), POP copies
+  out of it (`gfx3d.cpp:928`; an earlier note said :927, the blank line
+  before it), STORE copies into it (`gfx3d.cpp:965`) and RESTORE copies out of
+  it (`gfx3d.cpp:996`): all four commands share the **one** slot, and only the
+  PUSH/POP depth counter is separate. The slot is initialised to identity
+  (`MatrixInit(_mtxStackTexture[0])`, `gfx3d.cpp:532`), so a mode-3
+  RESTORE/POP before any STORE/PUSH yields identity, not zeros. LOAD_4x4/4x3,
+  MULT_4x4/4x3/3x3, IDENTITY, SCALE, TRANS, PUSH, POP, STORE and RESTORE work
+  on it; the lighting vector matrix is untouched. PUSH overflows to
+  `stack_errors`/`ERR_STACK` (DeSmuME sets `gxstat.se` and keeps going,
+  `gfx3d.cpp:861-871`); POP ignores its parameter, restores slot 0 and reports
+  underflow as `stack_errors`/`ERR_STACK` (`gfx3d.cpp:918-929`); STORE/RESTORE
+  in mode 3: index ignored, always slot 0, no `ERR_STACK` (`gfx3d.cpp:950-1000`).
+- **GAP:** modes 2 (normal source) and 3 (vertex source) are **not
+  implemented**. Those vertices get the raw latched s,t and every VTX command
+  in such a mode increments `TwlhdGxStats.tex_transform_unsupported`; the
+  counter is per VTX command and is also incremented outside BEGIN..END, so it
+  is a stream property.
+- **GAP (known divergence, not addressed):** the projection, position and
+  vector stacks still start zeroed (the `memset` in `twlhd_gx_interpret_ex`),
+  whereas DeSmuME MatrixInits them: `_mtxStackProjection[0]`,
+  `_mtxStackPosition[i]`, `_mtxStackPositionVector[i]` and
+  `_mtxStackTexture[0]` (`gfx3d.cpp:530-533`). Only the texture slot is
+  identity-initialised here (repair round 4); changing the other stacks would
+  alter pre-existing mode-0/1 RESTORE-without-STORE behaviour that existing
+  tests rely on.
+- `tex_out[i]` describes `out[i]`: same ordering (including quad splitting and
+  strip winding swaps) and the capacity check drops the triangle from both
+  arrays, so no texture entry is written past `out_count`.
+- Colour/lighting/alpha behaviour is unchanged.
 
 ### Texture formats 1-7
 **VERIFIED:** `NDSTextureFormat` (`gfx3d.h:111-120`) and per-format unpacking
