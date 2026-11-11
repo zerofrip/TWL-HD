@@ -279,6 +279,33 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   `tex-matrix-push-store-share-slot` and `tex-restore-without-store` kill the
   separate-slots and init mutants; see `docs/reports/5b2b-mutation-report.md`.
 
+#### Status 5B-2c — host texture decoder (formats 1-7 to RGBA8)
+
+Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+
+- `common/twlhd_tex_decode.[ch]`: allocation-free decoder from one TXDS record
+  (formats 1-7) to a caller-owned RGBA8 buffer (row-major, top row first,
+  R,G,B,A), with an explicit `TwlhdTexResult` error enum and
+  `twlhd_tex_dimensions()` / `twlhd_tex_result_string()` helpers. Size checks
+  call `twlhd_v2_tex_sizes()` / `twlhd_v2_tex_palette_size_ok()`; no formula is
+  duplicated and the output buffer is untouched on every error path.
+- Formulas were re-verified against the DeSmuME checkout
+  (`desmume/src/texcache.cpp`, commit `fc504ee0`): A3I5 `:1522-1528`, A5I3
+  `:1743-1749`, I2/I4/I8 `:1057-1112/1341-1386/1389-1405`, 4x4 `:1752/1755-1885`,
+  16bpp `:2007-2026`, colour-0 rule `:429-436`. The verified formulas, the
+  sub-byte packing order (low bits = first texel) and the per-mode 4x4 rules are
+  written up in `docs/DS_GX_RESEARCH.md` section "Decoder (5B-2c)".
+- Tests: `tests/host/test_tex_decode.c` (hand-computed literals for every
+  format, both square and non-square sizes, alpha edges, palette boundaries,
+  colour-0 on/off/ignored, 4x4 modes/offsets/window bounds, error paths and the
+  output-canary check), `tests/host/tex_decode_cli.c` plus the independent
+  oracle `tools/tex_decode_oracle.py` and golden cross-check
+  `tools/test_tex_decode_golden.py`, both wired into `make test`.
+- Mutation evidence: `docs/reports/5b2c-mutation-report.md`.
+- Not done: no PICA upload, no recorder-side capture change, no v2-format,
+  vertex-layout or interpreter change. The 4x4 decoder reads only the captured
+  PLDT window and errors past it instead of wrapping palette RAM.
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in

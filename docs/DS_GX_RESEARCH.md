@@ -398,9 +398,9 @@ EMULATOR or HARDWARE verification:
   whereas DeSmuME MatrixInits them: `_mtxStackProjection[0]`,
   `_mtxStackPosition[i]`, `_mtxStackPositionVector[i]` and
   `_mtxStackTexture[0]` (`gfx3d.cpp:530-533`). Only the texture slot is
-  identity-initialised here (repair round 4); changing the other stacks would
-  alter pre-existing mode-0/1 RESTORE-without-STORE behaviour that existing
-  tests rely on.
+  identity-initialised here (repair round 4). The zero start of the projection,
+  position and vector stacks is **unpinned by any test**; it was left unchanged
+  only to keep 5B-2b small.
 - `tex_out[i]` describes `out[i]`: same ordering (including quad splitting and
   strip winding swaps) and the capacity check drops the triangle from both
   arrays, so no texture entry is written past `out_count`.
@@ -422,7 +422,10 @@ EMULATOR or HARDWARE verification:
 
 **VERIFIED:** palette entries are 16-bit RGB555 with bit 15 ignored
 (`src & 0x7FFF`, `utils/colorspacehandler/colorspacehandler.h:128-131`).
-The I-formats carry no texel alpha; 4x4 block modes 1 and 3 derive the last two colours (average / 5:3 interpolation) from the first two (`texcache.cpp:1806-1843`). 4x4 unpacking receives only the first 128 KB slot of texel data and warns when it overruns the slot (`texcache.cpp:646-654`).
+The I-formats carry no texel alpha; 4x4 block modes 1 and 3 derive extra
+colours from the first two (mode 1: a per-channel average as the third colour
+only; mode 3: 5:3 and 3:5 blends as the third and fourth colours)
+(`texcache.cpp:1805-1851`). 4x4 unpacking receives only the first 128 KB slot of texel data and warns when it overruns the slot (`texcache.cpp:646-654`).
 **VERIFIED (format 5 palette):** the PAL4X4 macro (`texcache.cpp` ~1752) reads
 palette RAM per block: `palAddress = PLTT_BASE<<4 + pal1offset`,
 `pal1offset = (blockword & 0x3FFF)<<1`, consumed by the unpacker at
@@ -435,6 +438,96 @@ starting at byte `PLTT_BASE<<4` (the record has no start field). DeSmuME wraps
 palette reads across the six 16 KiB palette slots (`(addr >> 14) & 7`), so a
 decoder must treat the captured window as contiguous and error beyond it rather
 than wrap; colours beyond it are a later decoder-stage error.
+
+### Decoder (5B-2c)
+**IMPLEMENTED (BUILD/UNIT only; no EMULATOR or HARDWARE verification):**
+`common/twlhd_tex_decode.c` / `.h` decode one TXDS record (formats 1-7) into a
+caller-owned RGBA8 buffer (row-major, top row first, R,G,B,A byte order). Pure
+C11, no malloc, no libm. Every formula below was re-verified against the
+DeSmuME checkout (`desmume/src/texcache.cpp`) for 5B-2c; where the earlier text
+of this document disagreed with the source, the source won and the text was
+corrected.
+
+Dimensions and validation:
+- `width = 8 << ((param>>20)&7)`, `height = 8 << ((param>>23)&7)`
+  (`texcache.cpp:422-423`), each 8..1024, so `width*height <= 1 MiB` and the
+  uint32 size computation cannot overflow.
+- Texel/index/palette sizes come from `twlhd_v2_tex_sizes()` and
+  `twlhd_v2_tex_palette_size_ok()`; the decoder duplicates no size formula. The
+  fixed palette tables are `paletteSizeList[] = {0,32,4,16,256,0,8,0}` 16-bit
+  entries (`texcache.cpp:417`), i.e. 64/8/32/512/16 bytes for formats 1/2/3/4/6.
+
+Component expansion (`utils/colorspacehandler/colorspacehandler.cpp:113,151`):
+`common/` has no integer 5-bit -> 8-bit helper (the only 5-bit paths are the
+float `/31.0f` normalisations in `twlhd_vertex_convert.c:41-43` and
+`twlhd_gx_interp.c:394-396`, a different consumer), so the formula is pinned in
+the decoder and tested as a literal table:
+- 5-bit -> 8-bit: `(c<<3)|(c>>2)` (`material_5bit_to_8bit`:
+  `00 08 10 18 21 ... F7 FF`).
+- 3-bit -> 8-bit: `(a<<5)|(a<<2)|(a>>1)` (`material_3bit_to_8bit`:
+  `00 24 49 6D 92 B6 DB FF`; `a=2` gives 73, not 72).
+- RGB555 -> RGBA8: R = bits 0-4, G = bits 5-9, B = bits 10-14, each through
+  the 5-bit table; in the 32-bit 8888 word R is the low byte
+  (`colorspacehandler.h:110-114,126-129`). Bit 15 of a palette entry is ignored
+  by every palette path: A3I5/A5I3 mask `& 0x7FFF` (`texcache.cpp:1524,1745`),
+  PAL4X4 masks `& 0x7FFF` (`texcache.cpp:1752`), I2/I4/I8 go through
+  `ColorspaceConvert555To8888Opaque` which masks (`colorspacehandler.h:126-129`),
+  and 16bpp goes through the same `CONVERT` macro (`texcache.cpp:50,2023`).
+
+Per format (all verified against the checkout):
+- **Format 1 A3I5** (`texcache.cpp:1505,1522-1528`): 1 byte/texel; palette
+  index = bits 0-4, alpha = bits 5-7 through `material_3bit_to_8bit`; alpha 0
+  keeps the RGB bytes and sets A=0, alpha 7 is opaque. `KeyColor0` ignored
+  (`texcache.cpp:429-436`).
+- **Format 6 A5I3** (`texcache.cpp:1730,1743-1749`): index = bits 0-2, alpha =
+  bits 3-7 through `material_5bit_to_8bit`; same alpha-0/opaque rule;
+  `KeyColor0` ignored.
+- **Formats 2/3/4 I2/I4/I8** (`texcache.cpp:1057-1112,1341-1386,1389-1405`):
+  sub-byte packing is **low bits = first texel**: I2 `*srcData & 3`, `>>2 & 3`,
+  `>>4 & 3`, `>>6 & 3`; I4 low nibble then high nibble; I8 one byte per texel.
+  Every palette entry is opaque. `KeyColor0` applies only when
+  `_isPalZeroTransparent` is set, which `TextureStore` does only for I2/I4/I8
+  (`texcache.cpp:429-436`); with it set, index 0 is written as `0x00000000`
+  and all other indices as opaque palette colours.
+- **Format 5 4x4** (`texcache.cpp:1752,1755-1885`): `(width/4)*(height/4)`
+  blocks, row-major across the texture (inner x loop, outer y loop,
+  `texcache.cpp:1763-1789`), one 32-bit texel word and one 16-bit index word
+  per block. Index word: `pal1offset = (word & 0x3FFF) << 1` counts 16-bit
+  entries and `mode = word >> 14` (2 bits, so only modes 0-3 exist; the
+  `default` arm at `:1855-1858` is unreachable). PAL4X4 reads byte
+  `palAddress + (pal1offset+k)*2`, i.e. byte offset `(word & 0x3FFF)*4 + 2k`
+  from the window start. Block colours (`texcache.cpp:1795-1858`):
+  - mode 0: entries 0-2 opaque, colour 3 = `0x00000000`.
+  - mode 1: entries 0-1 opaque, colour 2 = per-8-bit-channel average
+    `(a+b)>>1` of colours 0/1 with alpha 255 (`texcache.cpp:1813-1815`,
+    little-endian arm), colour 3 = `0x00000000`.
+  - mode 2: entries 0-3 opaque.
+  - mode 3: entries 0-1 opaque; colours 2/3 are the 5:3 and 3:5 blends of the
+    **expanded 8-bit** channels, `(r0*5+r1*3)>>6` / `(r0*3+r1*5)>>6`, folded
+    back to 5 bits and re-expanded through the 5-bit table
+    (`texcache.cpp:1843-1851`).
+  - Texels: each of the four bytes of the block word is one row
+    (`currRow = (currBlock >> (sy*8)) & 0xFF`, `texcache.cpp:1876`), leftmost
+    texel in bits 0-1, then 2-3, 4-5, 6-7 (`texcache.cpp:1878-1881`).
+  - Palette window: the captured contiguous PLDT block is the only palette the
+    decoder has; every read beyond it is an error, including the third colour
+    of a mode-0 block and the fourth of a mode-2 block. A block therefore needs
+    `(word & 0x3FFF)*4 + 2*entries <= palette_size` bytes; reads never wrap.
+- **Format 7 16bpp** (`texcache.cpp:2007-2026`): one 16-bit LE RGB555 word per
+  texel; bit 15 set -> opaque `CONVERT(c)` (RGB from bits 0-14), clear -> fully
+  transparent `0x00000000`. No palette; `KeyColor0` ignored.
+
+Decoder guarantees: errors are an explicit `TwlhdTexResult` enum (NULL, format
+0, texel/index size, palette size, output size, palette range); the output
+buffer is never written on an error path (the 4x4 palette window is pre-scanned
+over the whole index block before any pixel is written). A3I5/A5I3 alpha 0
+keeps the RGB bytes and only clears A, matching `COLOR555TO8888(c, 0)`; the
+I-format key colour, 4x4 modes 0/1 colour 3 and 16bpp transparent texels write
+`0,0,0,0` exactly as DeSmuME does. Host tests:
+`tests/host/test_tex_decode.c`; independent oracle `tools/tex_decode_oracle.py`
+cross-checked through `tests/host/tex_decode_cli.c` by
+`tools/test_tex_decode_golden.py`; mutation evidence in
+`docs/reports/5b2c-mutation-report.md`.
 
 ### Texture application (TexEnv / polygon modes)
 **VERIFIED:** `PolygonMode` is `MODULATE=0, DECAL=1, TOONHIGHLIGHT=2, SHADOW=3`
