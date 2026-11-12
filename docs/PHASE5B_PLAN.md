@@ -93,7 +93,11 @@ blend off; alpha forced to 1.0.
 
 ### Stage 5B-1 — lighting on the CPU in the interpreter (colour out, 32 B stride unchanged)
 
-**STATUS (2026-11-08): implemented BUILD/UNIT, HARDWARE UNVERIFIED.**
+**STATUS (2026-11-12): implemented BUILD/UNIT; EMULATOR (Azahar) and HARDWARE OBSERVED (Run 18) for the colour path.**
+Run 18 (New 3DS, NTR numeric capture, tools/hw): lit colours of three synthetic frames (one white light with four normals;
+red light/emission/specular/two lights; unlit control) match the host interpreter's prediction within 1 level; Azahar: deviation 0.
+Not shown: equality of the DeSmuME-derived equations with real DS hardware, toon/highlight, textures.
+Earlier status (2026-11-08): implemented BUILD/UNIT, HARDWARE UNVERIFIED.
 Commands NORMAL, DIF_AMB, SPE_EMI, LIGHT_VECTOR, LIGHT_COLOR and SHININESS are
 latched in `common/twlhd_gx_interp.c`; NORMAL computes the lit colour with
 DeSmuME's integer equations (source-read, not hardware-measured). Executed
