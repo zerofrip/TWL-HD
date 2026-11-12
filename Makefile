@@ -1,5 +1,5 @@
 .PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag \
-	emu-expected emu-validate azahar-host ntr-capture
+	emu-expected emu-validate azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
@@ -85,6 +85,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_blend_config \
 	tests/host/build/test_azahar_host_ppm \
 	tests/host/build/test_ntr_capture_util \
+	tests/host/build/test_ntr_input_util \
 	tests/host/build/test_diag_config
 
 host-test: $(HOST_TESTS)
@@ -149,6 +150,11 @@ tests/host/build/test_azahar_host_ppm: tests/host/test_azahar_host_ppm.c \
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
 
 tests/host/build/test_ntr_capture_util: tests/host/test_ntr_capture_util.c \
+		tools/ntr_capture/ntr_capture_util.h $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -Itools/ntr_capture -o $@ $< $(HOST_LDFLAGS)
+
+tests/host/build/test_ntr_input_util: tests/host/test_ntr_input_util.c \
+		tools/ntr_capture/ntr_input_util.h \
 		tools/ntr_capture/ntr_capture_util.h $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -Itools/ntr_capture -o $@ $< $(HOST_LDFLAGS)
 
@@ -456,6 +462,21 @@ tools/ntr_capture/build/ntr_capture: tools/ntr_capture/ntr_capture.c \
 
 tools/ntr_capture/build:
 	mkdir -p $@
+
+# ---------------------------------------------------------------------------
+# Headless NTR-HR input redirection (opt-in; NEVER part of `all` or `test`).
+#
+# Sends 20-byte input_redirection_frame_t datagrams to Rosalina's (Luma3DS)
+# input redirection, UDP port 4950; the console is only contacted when the
+# binary is run, never by this target. Plain POSIX sockets, no libjpeg.
+# ---------------------------------------------------------------------------
+ntr-input: tools/ntr_capture/build/ntr_input
+
+tools/ntr_capture/build/ntr_input: tools/ntr_capture/ntr_input.c \
+		tools/ntr_capture/ntr_input_util.h \
+		tools/ntr_capture/ntr_capture_util.h | tools/ntr_capture/build
+	$(HOST_CC) -std=c11 -Wall -Wextra -Werror -O2 -D_POSIX_C_SOURCE=200809L \
+		-Itools/ntr_capture -o $@ $<
 
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
