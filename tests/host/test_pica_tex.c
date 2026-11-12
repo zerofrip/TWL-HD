@@ -31,15 +31,21 @@ static uint8_t g_roundtrip[MAX_IMAGE_BYTES];
 
 static uint8_t g_oob_src[OOB_GUARD + OOB_IMAGE_BYTES + OOB_GUARD];
 static uint8_t g_oob_dst[OOB_GUARD + OOB_IMAGE_BYTES + OOB_GUARD];
-static TwlhdPicaTexCoord
-    g_oob_coord[OOB_GUARD + OOB_TEXCOORD_MAX * sizeof(TwlhdPicaTexCoord) +
-                OOB_GUARD];
-static TwlhdGxTexVertex g_oob_tex[OOB_TEXCOORD_MAX + 2];
+/*
+ * Byte-exact OOB regions: [OOB_GUARD bytes][exact payload][OOB_GUARD bytes].
+ * The payload is accessed as a struct array, so both regions are 8-byte
+ * aligned; OOB_GUARD (64) keeps the payload offset aligned too.
+ */
+#define OOB_COORD_BYTES (OOB_TEXCOORD_MAX * sizeof(TwlhdPicaTexCoord))
+#define OOB_TEX_BYTES (OOB_TEXCOORD_MAX * sizeof(TwlhdGxTexVertex))
+static _Alignas(8)
+    uint8_t g_oob_coord[OOB_GUARD + OOB_COORD_BYTES + OOB_GUARD];
+static _Alignas(8) uint8_t g_oob_tex[OOB_GUARD + OOB_TEX_BYTES + OOB_GUARD];
 
 #define OOB_SRC (g_oob_src + OOB_GUARD)
 #define OOB_DST (g_oob_dst + OOB_GUARD)
-#define OOB_COORD \
-    ((TwlhdPicaTexCoord *)(g_oob_coord + OOB_GUARD))
+#define OOB_COORD ((TwlhdPicaTexCoord *)(g_oob_coord + OOB_GUARD))
+#define OOB_TEX ((const TwlhdGxTexVertex *)(g_oob_tex + OOB_GUARD))
 
 static int guard_intact(const uint8_t *base, size_t used, int fill) {
     size_t i;
@@ -223,6 +229,14 @@ static void test_errors(void) {
                  TWLHD_PICA_TEX_ERR_SIZE);
     CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(src, 8u, 0u, dst, 256u),
                  TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(src, 0u, 8u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    /* Valid width, invalid height and the reverse kill the `||` -> `&&`
+     * size-check mutants at twlhd_pica_tex.c:39. */
+    CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(src, 8u, 12u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(src, 8u, 2048u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
     CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(src, 8u, 8u, dst, 255u),
                  TWLHD_PICA_TEX_ERR_OUTPUT_SIZE);
 
@@ -230,6 +244,19 @@ static void test_errors(void) {
                  TWLHD_PICA_TEX_ERR_NULL);
     CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 8u, 8u, NULL, 256u),
                  TWLHD_PICA_TEX_ERR_NULL);
+    /* The unswizzle size validation (twlhd_pica_tex.c:73) was untested. */
+    CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 4u, 8u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 12u, 8u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 0u, 8u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 8u, 0u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 8u, 12u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
+    CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 8u, 2048u, dst, 256u),
+                 TWLHD_PICA_TEX_ERR_SIZE);
     CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(src, 8u, 8u, dst, 255u),
                  TWLHD_PICA_TEX_ERR_OUTPUT_SIZE);
 
@@ -372,6 +399,12 @@ static void test_texcoords(void) {
                      TWLHD_PICA_TEX_ERR_SIZE);
         CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(tex, 1u, 12u, 8u, p, 4u),
                      TWLHD_PICA_TEX_ERR_SIZE);
+        /* Valid width with invalid height and the reverse (the `||` -> `&&`
+         * mutant at twlhd_pica_tex.c:133 must not skip validation). */
+        CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(tex, 1u, 8u, 12u, p, 4u),
+                     TWLHD_PICA_TEX_ERR_SIZE);
+        CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(tex, 1u, 8u, 0u, p, 4u),
+                     TWLHD_PICA_TEX_ERR_SIZE);
         CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(tex, 4u, 8u, 8u, p, 3u),
                      TWLHD_PICA_TEX_ERR_CAPACITY);
         CHECK_NEAR(guard[0].u, 0x5Bu, 0.0);
@@ -388,6 +421,22 @@ static void set_tri(TwlhdGxTexVertex *tex, uint32_t tri, uint32_t param,
         tex[tri * 3u + i].teximage_param = param;
         tex[tri * 3u + i].pltt_base = pltt;
     }
+}
+
+/* Per-vertex override: the run key is documented as vertex 0 only. */
+static void set_vertex(TwlhdGxTexVertex *tex, uint32_t v, uint32_t param,
+                       uint32_t pltt) {
+    tex[v].s = 0.0f;
+    tex[v].t = 0.0f;
+    tex[v].teximage_param = param;
+    tex[v].pltt_base = pltt;
+}
+
+/* Five triangles: A A A B B, so the second run starts at vertex 9. */
+static void set_aaabb(TwlhdGxTexVertex *tex) {
+    uint32_t t;
+    for (t = 0; t < 5u; t++)
+        set_tri(tex, t, t < 3u ? 0x04000000u : 0x08000000u, 1u);
 }
 
 static void test_bind_plan(void) {
@@ -458,6 +507,12 @@ static void test_bind_plan(void) {
                  TWLHD_PICA_TEX_ERR_CAPACITY);
     CHECK_EQ_INT(count, 0xDEADBEEFu);
     CHECK_EQ_INT(((const uint8_t *)plan)[0], 0x5Bu);
+    {
+        /* The whole caller buffer, not just the first byte, stays untouched. */
+        uint8_t want[sizeof(plan)];
+        memset(want, 0x5B, sizeof(want));
+        CHECK(memcmp(plan, want, sizeof(plan)) == 0);
+    }
 
     /* Exactly fitting capacity is accepted. */
     CHECK_EQ_INT(twlhd_pica_tex_bind_plan(tex, 6u, plan, 2u, &count),
@@ -500,66 +555,206 @@ static void test_bind_plan(void) {
     CHECK_EQ_INT(twlhd_pica_tex_bind_plan(tex, 0u, plan, 0u, &count),
                  TWLHD_PICA_TEX_OK);
     CHECK_EQ_INT(count, 0u);
+
+    /* Only vertex 0 of each triangle is the run key (documented in the
+     * header). Vertices 1 and 2 carry different state, so any key read at
+     * tex[i-2u] (vertex 1) changes the run boundaries. */
+    {
+        TwlhdGxTexVertex weird[6];
+
+        /* Merge direction: triangle 1's vertex 0 repeats triangle 0's vertex
+         * 0. Correct is one run; tex[i-2u] compares triangle 0's vertex 1 and
+         * splits. */
+        set_vertex(weird, 0, 0x04000000u, 1u);
+        set_vertex(weird, 1, 0x08000000u, 2u);
+        set_vertex(weird, 2, 0x10000000u, 3u);
+        set_vertex(weird, 3, 0x04000000u, 1u);
+        set_vertex(weird, 4, 0x08000000u, 2u);
+        set_vertex(weird, 5, 0x10000000u, 3u);
+
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(weird, 6u, plan, 4u, &count),
+                     TWLHD_PICA_TEX_OK);
+        CHECK_EQ_INT(count, 1u);
+        CHECK_EQ_INT(plan[0].first_vertex, 0u);
+        CHECK_EQ_INT(plan[0].vertex_count, 6u);
+        CHECK_EQ_INT(plan[0].teximage_param, 0x04000000u);
+        CHECK_EQ_INT(plan[0].pltt_base, 1u);
+
+        /* Capacity 1: the correct single run fits; a spurious second run
+         * from the mutant is rejected before any write. */
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(weird, 6u, plan, 1u, &count),
+                     TWLHD_PICA_TEX_OK);
+        CHECK_EQ_INT(count, 1u);
+
+        /* Split direction: triangle 1's vertex 0 equals triangle 0's vertex
+         * 1, so tex[i-2u] merges runs that must split. */
+        set_vertex(weird, 3, 0x08000000u, 2u);
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(weird, 6u, plan, 4u, &count),
+                     TWLHD_PICA_TEX_OK);
+        CHECK_EQ_INT(count, 2u);
+        CHECK_EQ_INT(plan[0].first_vertex, 0u);
+        CHECK_EQ_INT(plan[0].vertex_count, 3u);
+        CHECK_EQ_INT(plan[1].first_vertex, 3u);
+        CHECK_EQ_INT(plan[1].vertex_count, 3u);
+        CHECK_EQ_INT(plan[1].teximage_param, 0x08000000u);
+        CHECK_EQ_INT(plan[1].pltt_base, 2u);
+
+        /* A capacity of 1 must reject the two runs; an undercounted run count
+         * from the counting-loop mutant would pass the gate and then write
+         * past it. */
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(weird, 6u, plan, 1u, &count),
+                     TWLHD_PICA_TEX_ERR_CAPACITY);
+        CHECK_EQ_INT(count, 0xDEADBEEFu);
+    }
+
+    /* Runs of three or more triangles with a non-zero first_vertex: A A A B B.
+     * The second run starts at vertex 9, which the i += 4u write-loop mutant
+     * gets wrong. */
+    {
+        TwlhdGxTexVertex big[15];
+        set_aaabb(big);
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(big, 15u, plan, 4u, &count),
+                     TWLHD_PICA_TEX_OK);
+        CHECK_EQ_INT(count, 2u);
+        CHECK_EQ_INT(plan[0].first_vertex, 0u);
+        CHECK_EQ_INT(plan[0].vertex_count, 9u);
+        CHECK_EQ_INT(plan[0].teximage_param, 0x04000000u);
+        CHECK_EQ_INT(plan[0].pltt_base, 1u);
+        CHECK_EQ_INT(plan[1].first_vertex, 9u);
+        CHECK_EQ_INT(plan[1].vertex_count, 6u);
+        CHECK_EQ_INT(plan[1].teximage_param, 0x08000000u);
+
+        /* Capacity 1: the counting-loop i += 4u mutant sees one run and
+         * passes the gate, then either overruns this 1-entry buffer or
+         * returns OK where ERR_CAPACITY is required. */
+        {
+            TwlhdPicaBindPlan one[1];
+            uint8_t want[sizeof(one)];
+            memset(one, 0x5B, sizeof(one));
+            memset(want, 0x5B, sizeof(want));
+            count = 0xDEADBEEFu;
+            CHECK_EQ_INT(twlhd_pica_tex_bind_plan(big, 15u, one, 1u, &count),
+                         TWLHD_PICA_TEX_ERR_CAPACITY);
+            CHECK_EQ_INT(count, 0xDEADBEEFu);
+            CHECK(memcmp(one, want, sizeof(one)) == 0);
+        }
+    }
+
+    /* Change of ONLY pltt_base, then ONLY teximage_param, at the boundary of
+     * the five-triangle layout (both halves of the run key). */
+    {
+        TwlhdGxTexVertex big[15];
+        uint32_t t;
+
+        for (t = 0; t < 5u; t++)
+            set_tri(big, t, 0x04000000u, t < 3u ? 1u : 4u);
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(big, 15u, plan, 4u, &count),
+                     TWLHD_PICA_TEX_OK);
+        CHECK_EQ_INT(count, 2u);
+        CHECK_EQ_INT(plan[0].first_vertex, 0u);
+        CHECK_EQ_INT(plan[0].vertex_count, 9u);
+        CHECK_EQ_INT(plan[0].teximage_param, 0x04000000u);
+        CHECK_EQ_INT(plan[0].pltt_base, 1u);
+        CHECK_EQ_INT(plan[1].first_vertex, 9u);
+        CHECK_EQ_INT(plan[1].vertex_count, 6u);
+        CHECK_EQ_INT(plan[1].teximage_param, 0x04000000u);
+        CHECK_EQ_INT(plan[1].pltt_base, 4u);
+
+        for (t = 0; t < 5u; t++)
+            set_tri(big, t, t < 3u ? 0x04000000u : 0x0C000000u, 1u);
+        count = 0xDEADBEEFu;
+        CHECK_EQ_INT(twlhd_pica_tex_bind_plan(big, 15u, plan, 4u, &count),
+                     TWLHD_PICA_TEX_OK);
+        CHECK_EQ_INT(count, 2u);
+        CHECK_EQ_INT(plan[0].first_vertex, 0u);
+        CHECK_EQ_INT(plan[0].vertex_count, 9u);
+        CHECK_EQ_INT(plan[0].teximage_param, 0x04000000u);
+        CHECK_EQ_INT(plan[0].pltt_base, 1u);
+        CHECK_EQ_INT(plan[1].first_vertex, 9u);
+        CHECK_EQ_INT(plan[1].vertex_count, 6u);
+        CHECK_EQ_INT(plan[1].teximage_param, 0x0C000000u);
+        CHECK_EQ_INT(plan[1].pltt_base, 1u);
+    }
     test_report("pica-tex/bind-plan");
 }
 
 static void test_swizzle_out_of_bounds(void) {
+    uint8_t swizzle_out[2][OOB_IMAGE_BYTES];
+    uint8_t unswizzle_out[2][OOB_IMAGE_BYTES];
     uint32_t pass;
 
     for (pass = 0; pass < 2u; pass++) {
         int fill = pass == 0 ? 0x00 : 0xFF;
         memset(g_oob_src, fill, sizeof(g_oob_src));
         memset(g_oob_dst, OOB_FILL, sizeof(g_oob_dst));
-        fill_random(OOB_SRC, OOB_IMAGE_BYTES, 1234u + pass);
+        /* Same payload in both passes; only the guard bytes differ. An input
+         * read outside [OOB_SRC, OOB_SRC + OOB_IMAGE_BYTES) therefore sees
+         * 0x00 in pass A and 0xFF in pass B, and the copied outputs diverge. */
+        fill_random(OOB_SRC, OOB_IMAGE_BYTES, 1234u);
 
         CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(OOB_SRC, 16u, 8u, OOB_DST,
                                                   OOB_IMAGE_BYTES),
                      TWLHD_PICA_TEX_OK);
         CHECK(guard_intact(g_oob_src, OOB_IMAGE_BYTES, fill));
         CHECK(guard_intact(g_oob_dst, OOB_IMAGE_BYTES, OOB_FILL));
+        memcpy(swizzle_out[pass], OOB_DST, OOB_IMAGE_BYTES);
 
+        memset(g_oob_dst, OOB_FILL, sizeof(g_oob_dst));
         CHECK_EQ_INT(twlhd_pica_tex_unswizzle_rgba8(OOB_SRC, 16u, 8u, OOB_DST,
                                                     OOB_IMAGE_BYTES),
                      TWLHD_PICA_TEX_OK);
         CHECK(guard_intact(g_oob_src, OOB_IMAGE_BYTES, fill));
         CHECK(guard_intact(g_oob_dst, OOB_IMAGE_BYTES, OOB_FILL));
+        memcpy(unswizzle_out[pass], OOB_DST, OOB_IMAGE_BYTES);
     }
+    /* Any first/last-texel input over-read changed a pass-A output byte. */
+    CHECK(memcmp(swizzle_out[0], swizzle_out[1], OOB_IMAGE_BYTES) == 0);
+    CHECK(memcmp(unswizzle_out[0], unswizzle_out[1], OOB_IMAGE_BYTES) == 0);
     test_report("pica-tex/oob-swizzle");
 }
 
 static void test_texcoord_out_of_bounds(void) {
+    uint8_t out_bytes[2][OOB_COORD_BYTES];
+    TwlhdGxTexVertex payload[OOB_TEXCOORD_MAX];
     uint32_t pass;
     uint32_t i;
 
-    for (i = 0; i < OOB_TEXCOORD_MAX + 2u; i++) {
-        g_oob_tex[i].s = (float)i;
-        g_oob_tex[i].t = (float)(i * 2u);
-        g_oob_tex[i].teximage_param = 0u;
-        g_oob_tex[i].pltt_base = 0u;
+    for (i = 0; i < OOB_TEXCOORD_MAX; i++) {
+        payload[i].s = (float)i;
+        payload[i].t = (float)(i * 2u);
+        payload[i].teximage_param = 0u;
+        payload[i].pltt_base = 0u;
     }
 
     for (pass = 0; pass < 2u; pass++) {
-        size_t bytes = sizeof(g_oob_tex);
-        uint8_t snapshot[sizeof(g_oob_tex)];
+        int fill = pass == 0 ? 0x00 : 0xFF;
+        uint8_t snapshot[OOB_TEX_BYTES];
 
-        memcpy(snapshot, g_oob_tex, bytes);
+        /* Identical input payload both passes; guards 0x00 then 0xFF. */
+        memset(g_oob_tex, fill, sizeof(g_oob_tex));
+        memcpy(g_oob_tex + OOB_GUARD, payload, OOB_TEX_BYTES);
         memset(g_oob_coord, OOB_FILL, sizeof(g_oob_coord));
+        memcpy(snapshot, g_oob_tex + OOB_GUARD, OOB_TEX_BYTES);
 
-        CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(g_oob_tex, OOB_TEXCOORD_MAX,
+        CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(OOB_TEX, OOB_TEXCOORD_MAX,
                                                   64u, 32u, OOB_COORD,
                                                   OOB_TEXCOORD_MAX),
                      TWLHD_PICA_TEX_OK);
-        {
-            const uint8_t *cb = (const uint8_t *)g_oob_coord;
-            CHECK_EQ_INT(cb[OOB_GUARD - 1u], OOB_FILL);
-            for (i = 0; i < OOB_GUARD; i++) {
-                CHECK_EQ_INT(
-                    cb[OOB_GUARD + OOB_TEXCOORD_MAX * sizeof(TwlhdPicaTexCoord) + i],
-                    OOB_FILL);
-            }
-        }
-        CHECK(memcmp(snapshot, g_oob_tex, bytes) == 0);
+        /* Every guard byte around both regions, not just byte 63. */
+        CHECK(guard_intact(g_oob_tex, OOB_TEX_BYTES, fill));
+        CHECK(guard_intact(g_oob_coord, OOB_COORD_BYTES, OOB_FILL));
+        CHECK(memcmp(snapshot, g_oob_tex + OOB_GUARD, OOB_TEX_BYTES) == 0);
+        memcpy(out_bytes[pass], g_oob_coord + OOB_GUARD, OOB_COORD_BYTES);
     }
+    /* tex[-1]/tex[count] over-reads see 0x00 vs 0xFF (0.0f vs NaN) and
+     * change u/v, so the outputs of the two passes diverge. */
+    CHECK(memcmp(out_bytes[0], out_bytes[1], OOB_COORD_BYTES) == 0);
     test_report("pica-tex/oob-texcoord");
 }
 
