@@ -446,9 +446,10 @@ position by `TOUCH_SCREEN_COORD_RANGE` (0xfff) over the screen dimensions before
 encoding (`ui_input_redirection.c:383,417-429,478-481`). The HID module converts
 raw to pixels — the shared-memory touch entries consumed by applications are
 pixel coordinates (3dbrew "HID Shared Memory", 0xA8+0x20), while +0x18 holds the
-raw entry. `ntr_input` therefore scales its pixel argument the same way:
-`raw = 0xfff * pixel / 320` for x, `0xfff * pixel / 240` for y (so pixel
-`319,239` → raw `4082,4077`). Pixel arguments are range-checked: 320, 240 or a
+raw entry. `ntr_input` therefore scales its pixel argument the same way
+(round-to-nearest, then clamped to 0xfff): `raw = (0xfff * pixel + 160) / 320`
+for x, `(0xfff * pixel + 120) / 240` for y (so pixel `319,239` → raw
+`4082,4078`). Pixel arguments are range-checked: 320, 240 or a
 negative value is a usage error (exit 2), never a silent clamp.
 
 Cadence: the viewer's input timer fires every `1000/60` ms from `main.c:883`.
@@ -518,8 +519,8 @@ idle frame.
   once, not at 60 Hz; `ntr_input`'s repetition is a deliberate deviation and
   its necessity is unverified.
 - The pixel → 12-bit raw scaling is transcribed from the viewer at a 1:1 window
-  (`ui_input_redirection.c:417-429,478-481`); rounding can differ by one raw
-  unit. That the console converts the raw fields to pixels is inferred from the
+  (`ui_input_redirection.c:417-429,478-481`): round-to-nearest, then clamped to
+  0xfff. That the console converts the raw fields to pixels is inferred from the
   HID shared-memory layout (3dbrew), not observed on this console.
 - UDP has no acknowledgement, so exit 0 means "datagrams sent", not "buttons
   were applied".
@@ -528,7 +529,7 @@ idle frame.
 
 ### Mutation evidence (ntr_input)
 
-Baseline: `make test` green — all host tests plus 11 groups in
+Baseline: `make test` green — all host tests plus 12 groups in
 `test_ntr_input_util`, and 86 Python tests OK, exit 0.
 
 Each mutant was applied to a copy of `ntr_input_util.h`, the unchanged test
@@ -547,8 +548,13 @@ restored after each run; the final header is byte-identical to the tested one
 | `ntr_input_build_frame` | (e) `interfaceButtons` written as 1 | PASS | exit 1: `test_ntr_input_util.c:62: CHECK failed: memcmp(frame, expected, sizeof(expected)) == 0` |
 | `ntr_input_build_frame` | (f) `touch_valid` ignored | PASS | exit 1: `test_ntr_input_util.c:62: CHECK failed: memcmp(frame, expected, sizeof(expected)) == 0` |
 | `ntr_input_build_frame` | (g) press-mask range check removed | PASS | exit 1: `test_ntr_input_util.c:140: expected -1 == -1, got 0` |
-| `ntr_input_touch_raw` | (h) pixel passed through unscaled | PASS | exit 1: `test_ntr_input_util.c:110: expected cases[i].touch == 33480690, got 17756479` |
-| `ntr_input_touch_raw` | (i) divided by `dimension - 1` | PASS | exit 1: `test_ntr_input_util.c:110: expected cases[i].touch == 33480690, got 33554431` |
+| `ntr_input_touch_raw` | (h) pixel passed through unscaled | PASS | exit 1: `test_ntr_input_util.c:124: expected cases[i].touch == 33484786, got 17756479` |
+| `ntr_input_touch_raw` | (i) divided by `dimension - 1` | PASS | exit 1: `test_ntr_input_util.c:124: expected cases[i].touch == 33484786, got 33554431` |
+| `ntr_input_touch_raw` | (ag) round term `+ dimension/2` dropped | PASS | exit 1: `test_ntr_input_util.c:124: expected cases[i].touch == 33484786, got 33480690` |
+| `ntr_input_touch_raw` | (ah) `/2u` → `/3u` | PASS | exit 1: `test_ntr_input_util.c:124: expected cases[i].touch == 25167872, got 25163775` |
+| `ntr_input_build_frame` | (ai) x/y dimensions swapped | PASS | exit 1: `test_ntr_input_util.c:124: expected cases[i].touch == 33484786, got 29306879` |
+| `ntr_input_touch_raw` | (aj) clamp removed | PASS | exit 1: `test_ntr_input_util.c:148: expected 0xfff == 4095, got 6398` |
+| `ntr_input_touch_raw` | (ak) `NTR_INPUT_TOUCH_RANGE` 0xfff → 0xffe | PASS | exit 1: `test_ntr_input_util.c:124: expected cases[i].touch == 33484786, got 33480689` |
 | `ntr_input_validate_ipv4` | (j) every string accepted | PASS | exit 1: `test_ntr_input_util.c:175: expected 0 == 0, got 1` |
 | `ntr_input_validate_ipv4` | (k) `inet_pton` failure treated as valid | PASS | exit 1: `test_ntr_input_util.c:175: expected 0 == 0, got 1` |
 | `ntr_input_clamp` | (l) lower bound not clamped | PASS | exit 1: `test_ntr_input_util.c:186: expected 50 == 50, got 49` |
