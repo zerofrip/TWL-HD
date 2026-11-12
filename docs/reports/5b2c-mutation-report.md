@@ -238,3 +238,34 @@ the independent oracle.
 - REQ-3: per-format full-RGBA coverage (`tex-decode/full-rgba-a3i5`,
   `-a5i3`, `-i2`, `-i4`, `-i8`, `-16bpp`); golden
   `test_all_formats_random_payloads` already covers every pixel per format.
+
+### Round 2 (repair)
+
+Re-running the surviving mutants after repair 1 left two real gaps; everything
+else is an accepted equivalent class (comment line numbers, the
+`fixed_palette_entries` table/fail-safe, `mode_palette_bytes`, the `col[4][4]`
+sizes, the mode-1 alpha loop, `base + 0u`). Gap 1: `dst[7]` alpha at pixel
+position 1 of a 4x4 block row (`col[(row >> 2) & 3u][3]`) was never compared
+where the shifted lookup selects a different alpha, so `(row >> 2)` ->
+`(row >> 1)`/`(row >> 3)` and `>>` -> `<<` survived; new tests
+`tex-decode/4x4-transparent-positions` and golden
+`test_4x4_transparent_texel_positions` place the transparent texel (index 3) at
+pixel positions 1, 2 and 3 of every row in modes 0 and 1, with neighbours
+2/1/0 around position 1, and assert all 128 pixels with hand-computed literals.
+Gap 2: the format-7 `i < texel_bytes / 2u` -> `i <= ...` survivor — root cause:
+the 0x00/0xFF output-guard fills coincide exactly with what
+`store_transparent`/`store_rgba` write for the extra iteration, so the write
+was invisible; the fix is a fixed non-writable out-guard fill `OOB_OUT_FILL`
+(0x5B, not in either expansion table) plus a new
+`oob_fill_16bpp_last_opaque` variant so the two fmt7 guard cases cover the last
+16-bit texel with bit 15 clear (8x8) and set (16x8). Scratch-mutant evidence:
+`<=` at common/twlhd_tex_decode.c:297 now fails `tex-decode/oob-guards`
+(fmt7-8x8 and fmt7-16x8); the line-272 mutants (`>> 2` -> `>> 1`/`>> 3`,
+`>>` -> `<<`) fail `tex-decode/4x4-transparent-positions`; the loop-bound
+mutants of formats 1-6 and the 4x4 block loop are still killed; the unmutated
+baseline is green.
+
+- REQ-4: 4x4 transparent-texel position coverage (modes 0/1, positions 1/2/3,
+  neighbours 2/1/0 case), C + golden. TESTS: make test
+- REQ-5: format-7 output-guard fill fix + last-texel bit-15 state coverage.
+  TESTS: make test

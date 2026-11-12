@@ -213,6 +213,27 @@ class TexDecodeGoldenTest(unittest.TestCase):
         ]
         self._assert_matches_oracle(textures)
 
+    def test_4x4_transparent_texel_positions(self):
+        # Same texture as the C test test_4x4_transparent_positions: the
+        # transparent texel (index 3 in modes 0/1) sits at pixel position 1, 2
+        # and 3 of every block row in turn, with opaque neighbours.
+        palette = b"".join(
+            struct.pack("<H", tex_decode_oracle.pack_rgb555(red, green, blue))
+            for red, green, blue in ((5, 10, 20), (15, 25, 8), (22, 3, 27))
+        )
+        row_bytes = [
+            (0x9C, 0x2D, 0x4E, 0x8D),  # blocks 0/1
+            (0xB4, 0x39, 0x72, 0x78),  # blocks 2/3
+            (0xE4, 0xC9, 0xD2, 0xD8),  # blocks 4/5
+            (0x2D, 0x2D, 0x2D, 0x2D),  # blocks 6/7
+        ]
+        texel = b"".join(bytes(row_bytes[block >> 1]) for block in range(8))
+        index = struct.pack("<8H", *([0x0000, 0x4000] * 4))
+        textures = [
+            _texture(_param(5, shift_s=1), texel, palette, index, 0xD0),
+        ]
+        self._assert_matches_oracle(textures)
+
     def test_4x4_palette_window_errors(self):
         rng = _rng(0xE44)
         textures = [
