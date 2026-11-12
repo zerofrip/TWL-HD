@@ -105,12 +105,23 @@ static void expect_px(const char *what, uint32_t idx, unsigned r, unsigned g,
  * x 2 passes. Guard checks are C-side only: the Python golden path cannot see
  * these overruns because tex_decode_cli prints exactly width*height pixels and
  * passes the exact out_size, so an extra read lands inside TXDT.
+ *
+ * The output guard uses a fixed fill (OOB_OUT_FILL) rather than the 0x00/0xFF
+ * pass fill: for format 7 the one-past-the-end iteration reads a guard-filled
+ * word and writes transparent (0,0,0,0) from 0x00 or opaque white
+ * (255,255,255,255) from 0xFF, i.e. exactly the pass fill. The write was
+ * invisible, which is why `<` -> `<=` at the 16bpp loop survived round 1.
+ * 0x5B is neither 0x00/0xFF nor a value the decoder can write at that position
+ * (it is not in FIVE_TO_EIGHT; the 5-bit neighbours are 0x5A/0x63, and it is
+ * not in THREE_TO_EIGHT either). The texel/palette/index regions keep the
+ * 0x00/0xFF fills because the input-guard comparison depends on them.
  */
 #define OOB_GUARD 64u
 #define OOB_TEXEL_MAX 256u
 #define OOB_PALETTE_MAX 512u
 #define OOB_INDEX_MAX 64u
 #define OOB_OUT_MAX 512u
+#define OOB_OUT_FILL 0x5Bu
 
 static uint8_t g_oob_texel[OOB_GUARD + OOB_TEXEL_MAX + OOB_GUARD];
 static uint8_t g_oob_palette[OOB_GUARD + OOB_PALETTE_MAX + OOB_GUARD];
@@ -240,6 +251,15 @@ static void oob_fill_16bpp(uint32_t texel_size, uint32_t palette_size,
     }
 }
 
+/* Guard-harness variant: last 16-bit texel bit 15 SET (opaque), so the two
+ * fmt7 guard cases exercise the final texel in both transparency states. */
+static void oob_fill_16bpp_last_opaque(uint32_t texel_size,
+                                       uint32_t palette_size,
+                                       uint32_t index_size) {
+    oob_fill_16bpp(texel_size, palette_size, index_size);
+    put16(OOB_TEXEL + texel_size - 2u, rgb555(3u, 5u, 7u, 1u));
+}
+
 /*
  * 4x4: every block mode 2, offset 0, with a 4-entry / 8-byte palette window, so
  * the window ends exactly at byte 8 and any entry-4 read hits the guard. Row
@@ -297,7 +317,7 @@ static void oob_run_case(const OobCase *tc) {
         memset(g_oob_texel, fillv, sizeof g_oob_texel);
         memset(g_oob_palette, fillv, sizeof g_oob_palette);
         memset(g_oob_index, fillv, sizeof g_oob_index);
-        memset(g_oob_out, fillv, sizeof g_oob_out);
+        memset(g_oob_out, OOB_OUT_FILL, sizeof g_oob_out);
         tc->fill(tc->texel_size, tc->palette_size, tc->index_size);
 
         rec = make_rec(tc->param, tc->texel_size, tc->palette_size,
@@ -308,7 +328,8 @@ static void oob_run_case(const OobCase *tc) {
             tc->index_size != 0u ? OOB_INDEX : NULL, OOB_OUT, tc->out_size);
         CHECK_EQ_INT(result, TWLHD_TEX_OK);
 
-        oob_check_region(tc->name, "out", g_oob_out, tc->out_size, fillv);
+        oob_check_region(tc->name, "out", g_oob_out, tc->out_size,
+                         OOB_OUT_FILL);
         oob_check_region(tc->name, "texel", g_oob_texel, tc->texel_size,
                          fillv);
         oob_check_region(tc->name, "palette", g_oob_palette, tc->palette_size,
@@ -1048,7 +1069,7 @@ static void test_oob_guards(void) {
         {make_param(7, 0, 0, 0), 128u, 0u, 0u, 256u, "fmt7-8x8",
          oob_fill_16bpp},
         {make_param(7, 1, 0, 0), 256u, 0u, 0u, 512u, "fmt7-16x8",
-         oob_fill_16bpp},
+         oob_fill_16bpp_last_opaque},
     };
     uint32_t i;
 
@@ -1147,6 +1168,137 @@ static void test_4x4_full_pixel_blocks(void) {
     }
 
     test_report("tex-decode/4x4-full-pixel-blocks");
+}
+
+/*
+ * 4x4 transparent-texel positions (round 2). The transparent texel (index 3 in
+ * modes 0/1) sits at pixel position 1, 2 and 3 of every block row in turn,
+ * with opaque neighbours, in both modes and at both 16x8 block rows. That is
+ * what makes the alpha of the second pixel of a row (dst[7],
+ * col[(row >> 2) & 3][3]) observable: with index 3 at position 1 the
+ * unmutated lookup reads alpha 0, while (row >> 1) / (row >> 3) / (row << 2)
+ * read an opaque neighbour's alpha 255. Blocks 6/7 hold index 2/1/0 around
+ * position 1 so any shifted lookup also changes the colour index.
+ *
+ * Palette: entry 0 (41,82,165), 1 (123,206,66), 2 (181,24,222), all opaque;
+ * mode-1 index 2 is the average (82,144,115). Every pixel of the 16x8 output
+ * is asserted with hand-computed literals.
+ */
+static void test_4x4_transparent_positions(void) {
+    static const uint8_t rows[4][4] = {
+        {0x9Cu, 0x2Du, 0x4Eu, 0x8Du}, /* blocks 0/1 */
+        {0xB4u, 0x39u, 0x72u, 0x78u}, /* blocks 2/3 */
+        {0xE4u, 0xC9u, 0xD2u, 0xD8u}, /* blocks 4/5 */
+        {0x2Du, 0x2Du, 0x2Du, 0x2Du}, /* blocks 6/7 */
+    };
+    static const uint8_t expected[8][16][4] = {
+        { /* block 0, mode 0: A T B C / B T C A / C T A B / B T A C */
+         {41, 82, 165, 255},  {0, 0, 0, 0},        {123, 206, 66, 255},
+         {181, 24, 222, 255}, {123, 206, 66, 255}, {0, 0, 0, 0},
+         {181, 24, 222, 255}, {41, 82, 165, 255},  {181, 24, 222, 255},
+         {0, 0, 0, 0},        {41, 82, 165, 255},  {123, 206, 66, 255},
+         {123, 206, 66, 255}, {0, 0, 0, 0},        {41, 82, 165, 255},
+         {181, 24, 222, 255}},
+        { /* block 1, mode 1: A T B M / B T M A / M T A B / B T A M */
+         {41, 82, 165, 255},  {0, 0, 0, 0},        {123, 206, 66, 255},
+         {82, 144, 115, 255}, {123, 206, 66, 255}, {0, 0, 0, 0},
+         {82, 144, 115, 255}, {41, 82, 165, 255},  {82, 144, 115, 255},
+         {0, 0, 0, 0},        {41, 82, 165, 255},  {123, 206, 66, 255},
+         {123, 206, 66, 255}, {0, 0, 0, 0},        {41, 82, 165, 255},
+         {82, 144, 115, 255}},
+        { /* block 2, mode 0: A B T C / B C T A / C A T B / A C T B */
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {0, 0, 0, 0},
+         {181, 24, 222, 255}, {123, 206, 66, 255}, {181, 24, 222, 255},
+         {0, 0, 0, 0},        {41, 82, 165, 255},  {181, 24, 222, 255},
+         {41, 82, 165, 255},  {0, 0, 0, 0},        {123, 206, 66, 255},
+         {41, 82, 165, 255},  {181, 24, 222, 255}, {0, 0, 0, 0},
+         {123, 206, 66, 255}},
+        { /* block 3, mode 1: A B T M / B M T A / M A T B / A M T B */
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {0, 0, 0, 0},
+         {82, 144, 115, 255}, {123, 206, 66, 255}, {82, 144, 115, 255},
+         {0, 0, 0, 0},        {41, 82, 165, 255},  {82, 144, 115, 255},
+         {41, 82, 165, 255},  {0, 0, 0, 0},        {123, 206, 66, 255},
+         {41, 82, 165, 255},  {82, 144, 115, 255}, {0, 0, 0, 0},
+         {123, 206, 66, 255}},
+        { /* block 4, mode 0: A B C T / B C A T / C A B T / A C B T */
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {181, 24, 222, 255},
+         {0, 0, 0, 0},        {123, 206, 66, 255}, {181, 24, 222, 255},
+         {41, 82, 165, 255},  {0, 0, 0, 0},        {181, 24, 222, 255},
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {0, 0, 0, 0},
+         {41, 82, 165, 255},  {181, 24, 222, 255}, {123, 206, 66, 255},
+         {0, 0, 0, 0}},
+        { /* block 5, mode 1: A B M T / B M A T / M A B T / A M B T */
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {82, 144, 115, 255},
+         {0, 0, 0, 0},        {123, 206, 66, 255}, {82, 144, 115, 255},
+         {41, 82, 165, 255},  {0, 0, 0, 0},        {82, 144, 115, 255},
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {0, 0, 0, 0},
+         {41, 82, 165, 255},  {82, 144, 115, 255}, {123, 206, 66, 255},
+         {0, 0, 0, 0}},
+        { /* block 6, mode 0: B T C A on every row */
+         {123, 206, 66, 255}, {0, 0, 0, 0},        {181, 24, 222, 255},
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {0, 0, 0, 0},
+         {181, 24, 222, 255}, {41, 82, 165, 255},  {123, 206, 66, 255},
+         {0, 0, 0, 0},        {181, 24, 222, 255}, {41, 82, 165, 255},
+         {123, 206, 66, 255}, {0, 0, 0, 0},        {181, 24, 222, 255},
+         {41, 82, 165, 255}},
+        { /* block 7, mode 1: B T M A on every row */
+         {123, 206, 66, 255}, {0, 0, 0, 0},        {82, 144, 115, 255},
+         {41, 82, 165, 255},  {123, 206, 66, 255}, {0, 0, 0, 0},
+         {82, 144, 115, 255}, {41, 82, 165, 255},  {123, 206, 66, 255},
+         {0, 0, 0, 0},        {82, 144, 115, 255}, {41, 82, 165, 255},
+         {123, 206, 66, 255}, {0, 0, 0, 0},        {82, 144, 115, 255},
+         {41, 82, 165, 255}},
+    };
+    uint8_t palette[6];
+    TwlhdV2TexRecord rec;
+    TwlhdTexResult result;
+    uint32_t i;
+
+    /* Every one of the 32 texel bytes is a 2-bit permutation of 0..3. */
+    for (i = 0; i < 8u; i++) {
+        uint32_t r;
+        for (r = 0; r < 4u; r++) {
+            uint8_t byte = rows[i >> 1][r];
+            unsigned seen = (1u << (byte & 3u)) |
+                            (1u << ((byte >> 2) & 3u)) |
+                            (1u << ((byte >> 4) & 3u)) |
+                            (1u << ((byte >> 6) & 3u));
+            CHECK_EQ_INT(seen, 0xFu);
+        }
+    }
+
+    memset(palette, 0, sizeof palette);
+    put16(palette + 0u, rgb555(5u, 10u, 20u, 0u)); /* (41,82,165) */
+    put16(palette + 2u, rgb555(15u, 25u, 8u, 0u)); /* (123,206,66) */
+    put16(palette + 4u, rgb555(22u, 3u, 27u, 0u)); /* (181,24,222) */
+
+    memset(g_oob_texel, 0, sizeof g_oob_texel);
+    memset(g_oob_index, 0, sizeof g_oob_index);
+    for (i = 0; i < 8u; i++) {
+        uint32_t r;
+        /* Blocks 0/1 mode 0/1 share a row byte; 6/7 use 0x2D. */
+        for (r = 0; r < 4u; r++) OOB_TEXEL[i * 4u + r] = rows[i >> 1][r];
+        put16(OOB_INDEX + i * 2u, (i & 1u) != 0u ? 0x4000u : 0x0000u);
+    }
+
+    memset(g_oob_out, 0xA5u, sizeof g_oob_out);
+    rec = make_rec(make_param(5, 1, 0, 0), 32u, (uint32_t)sizeof palette, 16u);
+    result = twlhd_tex_decode(&rec, OOB_TEXEL, palette, OOB_INDEX, OOB_OUT,
+                              512u);
+    CHECK_EQ_INT(result, TWLHD_TEX_OK);
+
+    for (i = 0; i < 8u; i++) {
+        uint32_t k;
+        for (k = 0; k < 16u; k++) {
+            uint32_t px = ((i >> 2) * 4u + (k >> 2)) * 16u +
+                          (i & 3u) * 4u + (k & 3u);
+            expect_oob_px("4x4 transparent position", px, expected[i][k][0],
+                          expected[i][k][1], expected[i][k][2],
+                          expected[i][k][3]);
+        }
+    }
+
+    test_report("tex-decode/4x4-transparent-positions");
 }
 
 /* Item 3: full RGBA of every pixel, one format per function. */
@@ -1422,6 +1574,7 @@ int main(void) {
     test_4x4_high_palette_offsets();
     test_oob_guards();
     test_4x4_full_pixel_blocks();
+    test_4x4_transparent_positions();
     test_full_rgba_a3i5();
     test_full_rgba_a5i3();
     test_full_rgba_i2();
