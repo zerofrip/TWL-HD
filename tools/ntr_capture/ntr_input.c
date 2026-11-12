@@ -17,6 +17,7 @@
  */
 #include <arpa/inet.h>
 #include <errno.h>
+#include <limits.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdint.h>
@@ -120,22 +121,6 @@ static void usage(FILE *fp) {
             "The UDP port is fixed; there is no option for it.\n"
             "Exit codes: 2 usage errors, 1 runtime errors, 0 success.\n",
             NTR_INPUT_UDP_PORT);
-}
-
-static int parse_int(const char *s, int min, int max, int *out) {
-    char *end = NULL;
-    long v;
-
-    if (s == NULL || *s == '\0') {
-        return -1;
-    }
-    errno = 0;
-    v = strtol(s, &end, 10);
-    if (errno != 0 || end == s || *end != '\0' || v < min || v > max) {
-        return -1;
-    }
-    *out = (int)v;
-    return 0;
 }
 
 /* Parse "x,y" bottom-screen pixels; both coordinates are range-checked. */
@@ -258,20 +243,24 @@ int main(int argc, char **argv) {
             }
         } else if (strcmp(arg, "--hold-ms") == 0) {
             if (++i >= argc ||
-                parse_int(argv[i], -1000000, 1000000, &o.hold_ms) != 0) {
+                ntr_input_parse_int(argv[i], -1000000, 1000000, &o.hold_ms) !=
+                    0) {
                 die_usage("--hold-ms needs an integer");
             }
             o.hold_ms = ntr_input_clamp(o.hold_ms, NTR_INPUT_HOLD_MS_MIN,
                                         NTR_INPUT_HOLD_MS_MAX);
         } else if (strcmp(arg, "--repeat") == 0) {
             if (++i >= argc ||
-                parse_int(argv[i], 1, NTR_INPUT_REPEAT_MAX, &o.repeat) != 0) {
+                ntr_input_parse_int(argv[i], INT_MIN, INT_MAX, &o.repeat) !=
+                    0 ||
+                !ntr_input_repeat_ok(o.repeat)) {
                 die_usage("--repeat needs a value in 1..%d",
                           NTR_INPUT_REPEAT_MAX);
             }
         } else if (strcmp(arg, "--gap-ms") == 0) {
             if (++i >= argc ||
-                parse_int(argv[i], 0, NTR_INPUT_GAP_MS_MAX, &o.gap_ms) != 0) {
+                ntr_input_parse_int(argv[i], 0, NTR_INPUT_GAP_MS_MAX,
+                                    &o.gap_ms) != 0) {
                 die_usage("--gap-ms needs a value in 0..%d",
                           NTR_INPUT_GAP_MS_MAX);
             }
@@ -284,8 +273,8 @@ int main(int argc, char **argv) {
             o.touch_valid = 1;
         } else if (strcmp(arg, "--release-frames") == 0) {
             if (++i >= argc ||
-                parse_int(argv[i], 1, NTR_INPUT_RELEASE_FRAMES_MAX,
-                          &o.release_frames) != 0) {
+                ntr_input_parse_int(argv[i], 1, NTR_INPUT_RELEASE_FRAMES_MAX,
+                                    &o.release_frames) != 0) {
                 die_usage("--release-frames needs a value in 1..%d",
                           NTR_INPUT_RELEASE_FRAMES_MAX);
             }

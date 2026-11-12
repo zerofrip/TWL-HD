@@ -11,8 +11,10 @@
  */
 #pragma once
 
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "ntr_capture_util.h" /* ntr_cap_put_u32le; same directory */
@@ -44,6 +46,31 @@
 #define NTR_INPUT_GAP_MS_MAX 60000
 #define NTR_INPUT_RELEASE_FRAMES_DEFAULT 6
 #define NTR_INPUT_RELEASE_FRAMES_MAX 600
+
+/* --repeat bounds: the CLI's only range check, kept pure so tests/host can
+ * pin it without opening a socket. */
+static inline int ntr_input_repeat_ok(long v) {
+    return v >= 1 && v <= NTR_INPUT_REPEAT_MAX;
+}
+
+/* Strict decimal parse, range-checked: -1 on empty, non-numeric, trailing
+ * junk, overflow or out of [min, max]. Shared by every numeric CLI option. */
+static inline int ntr_input_parse_int(const char *s, int min, int max,
+                                      int *out) {
+    char *end = NULL;
+    long v;
+
+    if (s == NULL || *s == '\0') {
+        return -1;
+    }
+    errno = 0;
+    v = strtol(s, &end, 10);
+    if (errno != 0 || end == s || *end != '\0' || v < min || v > max) {
+        return -1;
+    }
+    *out = (int)v;
+    return 0;
+}
 
 /* ui_input_redirection.c:481 encodes (1 << 24) | (y << 12) | x, and the
  * viewer feeds it TOUCH_SCREEN_COORD_RANGE (0xfff) scaled values

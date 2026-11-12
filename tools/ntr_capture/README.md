@@ -366,12 +366,13 @@ Options:
 |---|---|
 | `--console-ip <ip>` | console IPv4 (required unless `--dry-run`; no hostnames) |
 | `--press A,B,X,...` | buttons to hold while the frame is held; comma-separated, OR-ed |
-| `--hold-ms <n>` | hold duration, **clamped** to `50..5000`, default `150` |
+| `--hold-ms <n>` | hold duration, any integer in `-1000000..1000000` (outside that is a usage error), then **clamped** to `50..5000`; default `150` |
 | `--repeat <n>` | iterations, `1..20`, default `1` (out of range is a usage error) |
 | `--gap-ms <n>` | idle wait between iterations, `0..60000`, default `250` |
 | `--touch <x>,<y>` | touch the bottom screen at pixel `x 0..319`, `y 0..239` while holding |
 | `--release-frames <n>` | idle frames after each hold, `1..600`, default `6` |
 | `--dry-run` | print the exact 20-byte frames; open no sockets |
+| `--help`, `-h` | show the usage text; exit `0` |
 
 There is **no port option**: 4950 is fixed (`NTR_INPUT_UDP_PORT`). There is no
 `--pc-ip`: UDP sends need no local bind. Exit codes: `2` usage/validation,
@@ -459,8 +460,9 @@ independent of that send-on-change optimisation. The loop is deadline-based on
 - **Button whitelist only.** The 12 names in the table; anything else is a
   usage error (exit 2). No analog circle pad or C-stick/trigger input:
   `circlePadState` and `cppState` always carry their centre/idle values.
-- **Ranges.** Touch pixels are range-checked; `--hold-ms` is clamped to
-  `50..5000`; `--repeat` 1..20; `--gap-ms` 0..60000; `--release-frames` ≥ 1.
+- **Ranges.** Touch pixels are range-checked; `--hold-ms` accepts
+  `-1000000..1000000` and is clamped to `50..5000`; `--repeat` 1..20;
+  `--gap-ms` 0..60000; `--release-frames` 1..600.
   Release frames are always sent, including on interrupt.
 - **One target, one port.** Only `--console-ip` (validated dotted-quad IPv4,
   no DNS) and the fixed port 4950. No option can redirect traffic elsewhere.
@@ -515,7 +517,7 @@ idle frame.
 
 ### Mutation evidence (ntr_input)
 
-Baseline: `make test` green — all host tests plus 8 groups in
+Baseline: `make test` green — all host tests plus 9 groups in
 `test_ntr_input_util`, and 86 Python tests OK, exit 0.
 
 Each mutant was applied to a copy of `ntr_input_util.h`, the unchanged test
@@ -542,6 +544,19 @@ restored after each run; the final header is byte-identical to the tested one
 | `ntr_input_clamp` | (m) upper bound not clamped | PASS | exit 1: `test_ntr_input_util.c:189: expected 5000 == 5000, got 5001` |
 | `ntr_input_hold_frames` | (n) round-up constant 999 → 1 | PASS | exit 1: `test_ntr_input_util.c:209: expected 1 == 1, got 0` |
 | `ntr_input_hold_frames` | (o) divides by 1024 instead of 1000 | PASS | exit 1: `test_ntr_input_util.c:208: expected 300 == 300, got 293` |
+| `ntr_input_repeat_ok` | (p) `NTR_INPUT_REPEAT_MAX` 20 → 21 | PASS | exit 1: `test_ntr_input_util.c:227: expected 0 == 0, got 1` |
+| `ntr_input_repeat_ok` | (q) `NTR_INPUT_REPEAT_MAX` 20 → 19 | PASS | exit 1: `test_ntr_input_util.c:226: expected 1 == 1, got 0` |
+| `ntr_input_repeat_ok` | (r) lower bound 1 → 0 | PASS | exit 1: `test_ntr_input_util.c:222: expected 0 == 0, got 1` |
+| `ntr_input_repeat_ok` | (s) lower bound 1 → 2 | PASS | exit 1: `test_ntr_input_util.c:223: expected 1 == 1, got 0` |
+| `ntr_input_repeat_ok` | (t) `>=` → `>` (lower bound) | PASS | exit 1: `test_ntr_input_util.c:223: expected 1 == 1, got 0` |
+| `ntr_input_repeat_ok` | (u) `<=` → `<` (upper bound) | PASS | exit 1: `test_ntr_input_util.c:226: expected 1 == 1, got 0` |
+| `ntr_input_repeat_ok` | (v) bounds check removed (always 1) | PASS | exit 1: `test_ntr_input_util.c:222: expected 0 == 0, got 1` |
+| header constant | (w) `NTR_INPUT_HOLD_MS_DEFAULT` 150 → 151 | PASS | exit 1: `test_ntr_input_util.c:255: expected 150 == 150, got 151` |
+| header constant | (x) `NTR_INPUT_REPEAT_DEFAULT` 1 → 2 | PASS | exit 1: `test_ntr_input_util.c:258: expected 1 == 1, got 2` |
+| header constant | (y) `NTR_INPUT_GAP_MS_DEFAULT` 250 → 251 | PASS | exit 1: `test_ntr_input_util.c:260: expected 250 == 250, got 251` |
+| header constant | (z) `NTR_INPUT_GAP_MS_MAX` 60000 → 60001 | PASS | exit 1: `test_ntr_input_util.c:261: expected 60000 == 60000, got 60001` |
+| header constant | (aa) `NTR_INPUT_RELEASE_FRAMES_DEFAULT` 6 → 7 | PASS | exit 1: `test_ntr_input_util.c:262: expected 6 == 6, got 7` |
+| header constant | (ab) `NTR_INPUT_RELEASE_FRAMES_MAX` 600 → 601 | PASS | exit 1: `test_ntr_input_util.c:263: expected 600 == 600, got 601` |
 
 The CLI-only checks (`--press`/`--touch`/`--repeat` usage errors, `--dry-run`
 socket-free path, the fixed port) are not reachable by mutants of the header;

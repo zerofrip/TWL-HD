@@ -214,6 +214,55 @@ static void test_clamp_and_hold(void) {
     CHECK_EQ_INT(NTR_INPUT_FRAME_SIZE, 20);
 }
 
+static void test_repeat_and_parse_int(void) {
+    int v;
+
+    /* --repeat bounds: the header owns them so they are testable without a
+     * socket; the CLI calls repeat_ok() as its only range check. */
+    CHECK_EQ_INT(ntr_input_repeat_ok(0), 0);
+    CHECK_EQ_INT(ntr_input_repeat_ok(1), 1);
+    CHECK_EQ_INT(ntr_input_repeat_ok(2), 1);
+    CHECK_EQ_INT(ntr_input_repeat_ok(19), 1);
+    CHECK_EQ_INT(ntr_input_repeat_ok(20), 1);
+    CHECK_EQ_INT(ntr_input_repeat_ok(21), 0);
+    CHECK_EQ_INT(ntr_input_repeat_ok(-1), 0);
+    CHECK_EQ_INT(ntr_input_repeat_ok(-1000000000L), 0);
+    CHECK_EQ_INT(ntr_input_repeat_ok(1000000000L), 0);
+
+    /* Strict decimal parse shared by every numeric option. */
+    v = -1;
+    CHECK_EQ_INT(ntr_input_parse_int("1", 1, 20, &v), 0);
+    CHECK_EQ_INT(v, 1);
+    CHECK_EQ_INT(ntr_input_parse_int("20", 1, 20, &v), 0);
+    CHECK_EQ_INT(v, 20);
+    CHECK_EQ_INT(ntr_input_parse_int("0", 0, 60000, &v), 0);
+    CHECK_EQ_INT(v, 0);
+    CHECK_EQ_INT(ntr_input_parse_int("-1000000", -1000000, 1000000, &v), 0);
+    CHECK_EQ_INT(v, -1000000);
+
+    /* Rejected: non-numeric, empty, trailing junk, overflow, out of range. */
+    CHECK_EQ_INT(ntr_input_parse_int("abc", -1000000000, 1000000000, &v), -1);
+    CHECK_EQ_INT(ntr_input_parse_int("", -1000000000, 1000000000, &v), -1);
+    CHECK_EQ_INT(ntr_input_parse_int("5x", -1000000000, 1000000000, &v), -1);
+    CHECK_EQ_INT(ntr_input_parse_int("99999999999", -1000000000, 1000000000,
+                                     &v),
+                 -1);
+    CHECK_EQ_INT(ntr_input_parse_int(NULL, -1000000000, 1000000000, &v), -1);
+    CHECK_EQ_INT(ntr_input_parse_int("0", 1, 20, &v), -1);
+    CHECK_EQ_INT(ntr_input_parse_int("21", 1, 20, &v), -1);
+
+    /* Literal pins for limits only the CLI consumes (no pure consumer). */
+    CHECK_EQ_INT(NTR_INPUT_HOLD_MS_DEFAULT, 150);
+    CHECK_EQ_INT(NTR_INPUT_HOLD_MS_MIN, 50);
+    CHECK_EQ_INT(NTR_INPUT_HOLD_MS_MAX, 5000);
+    CHECK_EQ_INT(NTR_INPUT_REPEAT_DEFAULT, 1);
+    CHECK_EQ_INT(NTR_INPUT_REPEAT_MAX, 20);
+    CHECK_EQ_INT(NTR_INPUT_GAP_MS_DEFAULT, 250);
+    CHECK_EQ_INT(NTR_INPUT_GAP_MS_MAX, 60000);
+    CHECK_EQ_INT(NTR_INPUT_RELEASE_FRAMES_DEFAULT, 6);
+    CHECK_EQ_INT(NTR_INPUT_RELEASE_FRAMES_MAX, 600);
+}
+
 int main(void) {
     test_button_bits();
     test_report("input/button-bits");
@@ -231,5 +280,7 @@ int main(void) {
     test_report("input/validate-ipv4");
     test_clamp_and_hold();
     test_report("input/clamp-hold");
+    test_repeat_and_parse_int();
+    test_report("input/repeat-parse-int");
     return test_exit_code();
 }
