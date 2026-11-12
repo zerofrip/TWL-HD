@@ -381,9 +381,17 @@ timestamped stderr line stating what was sent and how many frames.
 
 Per iteration the tool sends ~60 Hz frames carrying the pressed buttons (and
 the touch, if any) for `--hold-ms`, then `--release-frames` idle frames, then
-waits `--gap-ms`. The release burst is also sent before exiting on
-`SIGINT`/`SIGTERM`, because the console's HID patch keeps applying the last
-frame it received — a missing release would leave a button held.
+waits `--gap-ms` before the next iteration. The frame period is
+`NTR_INPUT_FRAME_NS = 1e9/60` ns ≈ 16.667 ms (the viewer's 60 Hz input timer,
+`main.c:883`); `--hold-ms` maps to frames via `ntr_input_hold_frames()` =
+`ceil(ms * 60 / 1000)` (150 ms → 9 frames), and the `--release-frames` idle
+frames follow at the same 60 Hz. The frame deadline is **re-based from
+`CLOCK_MONOTONIC` at the start of every iteration**, so the 60 Hz spacing holds
+across repeats and `--hold-ms` is honoured whenever `--repeat > 1` (before this
+fix, every frame of iteration ≥ 2 was sent in one burst). The release burst is
+also sent before exiting on `SIGINT`/`SIGTERM`, because the console's HID patch
+keeps applying the last frame it received — a missing release would leave a
+button held.
 
 ### Protocol
 
@@ -450,7 +458,10 @@ The viewer only calls `sendto()` when the frame differs from the previous one
 overwrites its HID data, Luma3DS
 `sysmodules/rosalina/source/input_redirection.c:95,142-145`) and keeps the timing
 independent of that send-on-change optimisation. The loop is deadline-based on
-`CLOCK_MONOTONIC`, so sleeps do not accumulate drift.
+`CLOCK_MONOTONIC`: each frame advances one absolute deadline by
+`NTR_INPUT_FRAME_NS` (with the nanosecond carry), and the deadline is re-based
+from the clock at the start of each iteration, so sleeps do not accumulate
+drift and the 60 Hz spacing holds across `--repeat` iterations.
 
 ### Safety rules
 
@@ -517,7 +528,7 @@ idle frame.
 
 ### Mutation evidence (ntr_input)
 
-Baseline: `make test` green — all host tests plus 9 groups in
+Baseline: `make test` green — all host tests plus 11 groups in
 `test_ntr_input_util`, and 86 Python tests OK, exit 0.
 
 Each mutant was applied to a copy of `ntr_input_util.h`, the unchanged test
@@ -557,6 +568,10 @@ restored after each run; the final header is byte-identical to the tested one
 | header constant | (z) `NTR_INPUT_GAP_MS_MAX` 60000 → 60001 | PASS | exit 1: `test_ntr_input_util.c:261: expected 60000 == 60000, got 60001` |
 | header constant | (aa) `NTR_INPUT_RELEASE_FRAMES_DEFAULT` 6 → 7 | PASS | exit 1: `test_ntr_input_util.c:262: expected 6 == 6, got 7` |
 | header constant | (ab) `NTR_INPUT_RELEASE_FRAMES_MAX` 600 → 601 | PASS | exit 1: `test_ntr_input_util.c:263: expected 600 == 600, got 601` |
+| `ntr_input_iter_rebase` | (ac) re-base removed (no-op) | PASS | exit 1: `test_ntr_input_util.c:303: expected now.tv_nsec == 333333335, got 83333335` |
+| `NTR_INPUT_FRAME_NS` | (ad) period 16666667 → 1000000 | PASS | exit 1: `test_ntr_input_util.c:309: expected start_ns[n] + (long)k * period_ns == 16666667, got 1000000` |
+| `ntr_input_deadline_advance` | (ae) nanosecond carry (`>= 1000000000`) removed | PASS | exit 1: `test_ntr_input_util.c:339: expected 6 == 6, got 5` |
+| `ntr_input_iter_advance` | (af) gap addition removed | PASS | exit 1: `test_ntr_input_util.c:327: expected end_ns[0] + gap_ns == 333333335, got 83333335` |
 
 The CLI-only checks (`--press`/`--touch`/`--repeat` usage errors, `--dry-run`
 socket-free path, the fixed port) are not reachable by mutants of the header;

@@ -263,6 +263,90 @@ static void test_repeat_and_parse_int(void) {
     CHECK_EQ_INT(NTR_INPUT_RELEASE_FRAMES_MAX, 600);
 }
 
+static long ts_to_ns(const struct timespec *t) {
+    return t->tv_sec * 1000000000L + t->tv_nsec;
+}
+
+/* Simulates main()'s repeat loop with a fake clock: the deadline is re-based
+ * from the clock at the top of every iteration, then each frame advances by
+ * one period. No sockets, no sleeping. The expected period/gap are LITERALS
+ * here so that mutating the header constants cannot also change the test's
+ * expectations. */
+static void test_deadline_schedule(void) {
+    const long period_ns = 16666667L; /* literal: NOT NTR_INPUT_FRAME_NS */
+    const int hold_frames = 3;
+    const int release_frames = 2;
+    const int frames = hold_frames + release_frames;
+    const int gap_ms = 250;
+    const long gap_ns = 250000000L; /* literal: 250 ms in ns */
+    struct timespec now;
+    struct timespec next;
+    struct timespec model;
+    long start_ns[2];
+    long end_ns[2];
+    int n;
+    int k;
+
+    now.tv_sec = 0;
+    now.tv_nsec = 0;
+    /* main() re-reads the clock inside the loop; seed `next` like the first
+     * re-base so iteration 1 behaves the same with or without the re-base,
+     * leaving iteration 2 to expose a missing re-base. */
+    next = now;
+
+    for (n = 0; n < 2; n++) {
+        ntr_input_iter_rebase(&next, &now);
+        start_ns[n] = ts_to_ns(&next);
+
+        /* The deadline must sit exactly at "now" after the re-base. */
+        CHECK_EQ_INT(next.tv_sec, now.tv_sec);
+        CHECK_EQ_INT(next.tv_nsec, now.tv_nsec);
+
+        for (k = 0; k < frames; k++) {
+            /* Frame k of iteration n is at start_n + k * period, so consecutive
+             * deadlines differ by exactly one period, and no frame is sent in
+             * the past (iteration 2 must not collapse). */
+            CHECK_EQ_INT(ts_to_ns(&next),
+                         start_ns[n] + (long)k * period_ns);
+            CHECK(ts_to_ns(&next) >= ts_to_ns(&now));
+            ntr_input_deadline_advance(&next, NTR_INPUT_FRAME_NS);
+        }
+        end_ns[n] = ts_to_ns(&next);
+
+        if (n == 0) {
+            /* Model the earliest legal start of the next iteration with the
+             * same header helper the schedule uses, then move the fake clock. */
+            model = now;
+            ntr_input_iter_advance(&model, hold_frames, release_frames, gap_ms);
+            now = model;
+        }
+    }
+
+    /* Iteration 2 starts exactly at iteration 1's last deadline + the gap; if
+     * the gap addition is lost, start_ns[1] is too small for this check. */
+    CHECK_EQ_INT(start_ns[1], end_ns[0] + gap_ns);
+    CHECK(start_ns[1] >= end_ns[0] + gap_ns);
+}
+
+/* The nanosecond carry must happen at >= 1e9, including for a full max gap. */
+static void test_deadline_normalize(void) {
+    struct timespec t;
+
+    /* One period at the second boundary carries into tv_sec. */
+    t.tv_sec = 5;
+    t.tv_nsec = 999999999L;
+    ntr_input_deadline_advance(&t, NTR_INPUT_FRAME_NS);
+    CHECK_EQ_INT(t.tv_sec, 6);
+    CHECK_EQ_INT(t.tv_nsec, 16666666L);
+
+    /* The largest legal gap (60000 ms) normalises into whole seconds. */
+    t.tv_sec = 0;
+    t.tv_nsec = 0;
+    ntr_input_deadline_advance(&t, 60000L * 1000000L);
+    CHECK_EQ_INT(t.tv_sec, 60);
+    CHECK_EQ_INT(t.tv_nsec, 0);
+}
+
 int main(void) {
     test_button_bits();
     test_report("input/button-bits");
@@ -282,5 +366,9 @@ int main(void) {
     test_report("input/clamp-hold");
     test_repeat_and_parse_int();
     test_report("input/repeat-parse-int");
+    test_deadline_schedule();
+    test_report("input/deadline-schedule");
+    test_deadline_normalize();
+    test_report("input/deadline-normalize");
     return test_exit_code();
 }

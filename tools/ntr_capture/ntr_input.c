@@ -30,9 +30,6 @@
 
 #include "ntr_input_util.h"
 
-/* One frame per ~16.67 ms, as the viewer's 60 Hz timer (main.c:883). */
-#define NTR_INPUT_FRAME_NS 16666667L
-
 struct options {
     const char *console_ip;
     uint32_t press_mask;
@@ -181,13 +178,11 @@ static int send_frame(int fd, const struct sockaddr_in *addr,
 /* Deadline-based sleep: repeated relative sleeps drift and change how long
  * the console sees a press. */
 static void wait_next_frame(struct timespec *next) {
-    next->tv_nsec += NTR_INPUT_FRAME_NS;
-    while (next->tv_nsec >= 1000000000L) {
-        next->tv_nsec -= 1000000000L;
-        next->tv_sec++;
-    }
-    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL) != 0 &&
-           errno == EINTR) {
+    ntr_input_deadline_advance(next, NTR_INPUT_FRAME_NS);
+    /* clock_nanosleep() returns the error number and does NOT set errno; the
+     * old errno == EINTR check read stale errno and never retried. */
+    while (clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, next, NULL) ==
+           EINTR) {
         /* keep waiting until the deadline */
     }
 }
@@ -209,6 +204,7 @@ int main(int argc, char **argv) {
     struct options o;
     struct sockaddr_in addr;
     struct timespec next;
+    struct timespec now;
     uint8_t pressed[NTR_INPUT_FRAME_SIZE];
     uint8_t idle[NTR_INPUT_FRAME_SIZE];
     uint32_t button_mask = 0;
@@ -331,12 +327,17 @@ int main(int argc, char **argv) {
            o.touch_valid ? "yes" : "no", o.hold_ms, hold_frames, o.repeat,
            o.gap_ms);
 
-    clock_gettime(CLOCK_MONOTONIC, &next);
-
     for (i = 0; i < o.repeat; i++) {
         unsigned sent_pressed = 0;
         unsigned sent_idle = 0;
         int n;
+
+        /* Re-base the frame deadline from CLOCK_MONOTONIC at the start of
+         * every iteration: the previous iteration's deadlines are already in
+         * the past, so without this the 60 Hz spacing collapses and --hold-ms
+         * is ignored whenever --repeat > 1. */
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        ntr_input_iter_rebase(&next, &now);
 
         for (n = 0; n < hold_frames && !g_stop; n++) {
             if (send_frame(fd, &addr, pressed) != 0) {
