@@ -675,3 +675,80 @@ diagram read bottom-up) and the independent oracle
   `C3D_TexLoadImage` it must not swizzle twice.
 - **UNVERIFIED** sampler defaults: mag/min filter (nearest vs linear) and
   mipmap behaviour for DS textures.
+
+## Textured frame preparation (5B-2e-1)
+
+Status: **BUILD/UNIT only**, host-side C. Nothing EMULATOR or HARDWARE
+verified. `common/twlhd_pica_frame.[ch]` glues the v2 parser, the DS texture
+decoder, the PICA texture swizzle/wrap/texcoord helpers and the interpreter's
+per-vertex texture latch into one allocation-free call.
+
+### Keying and lookup rules
+
+- A bind-plan entry's key is the **triangle's first vertex**:
+  `(tex[3k].teximage_param, tex[3k].pltt_base)`; consecutive triangles with the
+  same pair form one run (`common/twlhd_pica_tex.h:118-129`).
+- The texture for an entry is the TXDS record with the **exact same pair**
+  (`twlhd_v2_tex_record.teximage_param == entry.teximage_param &&
+  rec.pltt_base == entry.pltt_base`). The chunk guarantees that pair is unique
+  (`common/twlhd_v2_parse.c:358-366`, `docs/TWLHD_V2_FORMAT.md:296`), so the
+  lookup is unambiguous.
+- Record data comes from the parser accessors, which already enforce bounds:
+  `twlhd_v2_tex_texel_ptr()` / `twlhd_v2_tex_palette_ptr()` /
+  `twlhd_v2_tex_index_ptr()` (`common/twlhd_v2_parse.h:110-117`,
+  implementation `common/twlhd_v2_parse.c:741-781`).
+- `width = 8 << SizeShiftS`, `height = 8 << SizeShiftT`, format = bits 26-28
+  (`common/twlhd_tex_decode.h:53-60`, size formula in
+  `docs/TWLHD_V2_FORMAT.md:308-330`). DS sizes are always powers of two in
+  8..1024, so they satisfy the PICA size check; the module still validates
+  defensively and reports a per-entry `UNSUPPORTED` instead of crashing.
+- PackedFormat 0 (including `TEXIMAGE_PARAM == 0`) means untextured: no record
+  is needed and the entry gets texture index -1.
+- Per-entry `NO_DATA` means no matching TXDS record or its data pointers are
+  absent/out of bounds. Per-entry `UNSUPPORTED` means the decoder or the size
+  check refused it. Both keep the plan slot and get `(0.0f, 0.0f)` texcoords;
+  only NULL / capacity / arena / `count % 3` errors fail the whole call.
+
+### Deduplication, offsets and texcoords
+
+- Identical `(teximage_param, pltt_base)` keys are stored once: a linear scan
+  over the already-stored textures (at most 256) assigns the first index to
+  every later run with that key.
+- The arena is packed in first-use order with **no padding**. Every RGBA8
+  texture is `width*height*4` bytes, and `width*height` is at least 64, so
+  every size is a multiple of 256. Therefore every texture start stays
+  128-byte aligned as long as the arena base itself is 128-byte aligned.
+- Texcoords reuse `twlhd_pica_texcoords_from_gx()`: `u = s/width`,
+  `v = 1 - t/height`, with the width/height of the texture that the vertex's
+  entry uses (`common/twlhd_pica_tex.h:94-115`). Failed and untextured
+  vertices are written as `(0.0f, 0.0f)`.
+
+### Memory budget (exact numbers, no rounding down)
+
+| Item | Bytes |
+|---|---:|
+| one 1024x1024 RGBA8 texture | 4,194,304 (4 MiB) |
+| worst-case arena, 256 TXDS records | 1,073,741,824 (1 GiB) |
+| non-overlapping worst case (TXDT cap 524,288 B) | 8,388,608 (8 MiB) |
+| scratch (one decoded texture before swizzle) | 4,194,304 (4 MiB) |
+| texcoords, 65,536 vertices | 524,288 (512 KiB) |
+| bind plan, 21,845 entries | ~437 KiB |
+
+The 1 GiB figure is honest, not theoretical exaggeration: the parser is lax
+about overlapping ranges (`docs/TWLHD_V2_FORMAT.md:369-372`), so 256 distinct
+keys can point at the same 262,144-byte I2 block and each expands to 4 MiB.
+For canonical captures (non-overlapping TXDT), the ceiling is 8 MiB because
+the largest expansion is 16x (I2 / 4x4 at 1/4 byte per texel). The function
+returns the distinct `ERR_ARENA` when the summed need exceeds `arena_capacity`
+and never silently drops a texture.
+
+### UNVERIFIED (need hardware or citro3d source)
+
+- **UNVERIFIED** the 128-byte texture-start alignment assumption. It is the
+  safe choice (all sizes are 256-byte multiples) and is stated as an assumption,
+  not a hardware fact.
+- **UNVERIFIED** whether the prepared images go to VRAM or to linear memory,
+  and which PICA address/alignment class applies to each.
+- **UNVERIFIED** the arm11 heap budget: a call needs the caller's arena
+  (up to 1 GiB worst case) plus a 4 MiB scratch buffer, and nothing here proves
+  that budget exists on the 3DS side.
