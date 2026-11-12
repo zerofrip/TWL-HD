@@ -310,6 +310,38 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   vertex-layout or interpreter change. The 4x4 decoder reads only the captured
   PLDT window and errors past it instead of wrapping palette RAM.
 
+#### Status 5B-2d — host-side PICA texture preparation (RGBA8)
+
+Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+
+- `common/twlhd_pica_tex.[ch]`: allocation-free host preparation of a decoded
+  RGBA8 image for the PICA200. `twlhd_pica_tex_swizzle_rgba8()` /
+  `..._unswizzle_rgba8()` produce/consume 8x8 Morton tiles with A,B,G,R texel
+  bytes and bottom-up tile rows (facts and `file:line` citations in
+  `docs/DS_GX_RESEARCH.md`, "PICA texture upload (5B-2d)");
+  `twlhd_pica_wrap_from_teximage()` maps DS TEXIMAGE_PARAM bits 16-19 to the
+  PICA wrap values 0-3; `twlhd_pica_texcoords_from_gx()` normalises DS texel
+  coordinates to a packed 8-byte `TwlhdPicaTexCoord` array with
+  `u = s/width`, `v = 1 - t/height`; `twlhd_pica_tex_bind_plan()` groups a
+  triangle list into one entry per `(TEXIMAGE_PARAM, PLTT_BASE)` run, with an
+  `untextured` flag for PackedFormat 0. Sizes are powers of two in 8..1024,
+  every error path leaves the output untouched and no core function allocates.
+- Owner decision point 3 is **ANSWERED** (2026-11-12): texcoords travel in a
+  separate attribute buffer; `TwlhdGxVertex` stays 32 B and main-buffer vertex
+  `i` pairs with texcoord `i`.
+- Tests: `tests/host/test_pica_tex.c` (hand-written 8x8 destination-index table
+  and literal corners, non-square 16x8/8x16, round trips, all 16 wrap
+  combinations, hand-computed texcoord floats, bind-plan runs/capacity/%3/
+  untextured, and guard-byte harnesses), `tests/host/pica_tex_cli.c` plus the
+  independent oracle `tools/pica_tex_oracle.py` and golden cross-check
+  `tools/test_pica_tex_golden.py`, all wired into `make test`.
+- Mutation evidence: `docs/reports/5b2d-mutation-report.md` (58/58 mutants
+  killed).
+- Not done: no renderer/arm11 consumer, no GPU calls, no recorder-side texture
+  capture, no v2-format change, no second texture format (RGBA8 only), and no
+  hardware verification of the layout, alignment, size limits or sampler
+  defaults.
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in
@@ -339,7 +371,9 @@ mark unverified items with **CHECK** until hardware confirms them, exactly as
    Answered 2026-11-06: extend the v2 format with TXDS/TXDT/PLDT (stage-5B-2 implementation still needs its own approval).
 3. Accept a vertex stride/layout change for textures, or keep 32 B and use a
    separate texcoord attribute buffer? (Recommend: decide after 5B-1 results.)
-   Answered 2026-11-06: open — decide after 5B-1 results.
+   Answered 2026-11-12: **ANSWERED** — keep the 32 B vertex and use a separate
+   texcoord attribute buffer (`common/twlhd_pica_tex.h`, 8-byte
+   `TwlhdPicaTexCoord`); implemented host-side in 5B-2d.
 4. Are test-ROM scenes required for each stage (alpha/cull cube, lit cube,
    textured cube), and who produces the captures? (Recommend: yes; owner/ROM
    author runs the demo with AUTODUMP.)

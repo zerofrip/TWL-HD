@@ -579,3 +579,99 @@ lookup tables are built in `rasterize.cpp:2074-2085` as
   a separate buffer?
 - Payload layout of `TXDS`/`TXDT`/`PLDT`: per-texture records vs raw VRAM dumps,
   and how to key textures to the polygons that use them.
+
+## PICA texture upload (5B-2d)
+
+Status: host-side RGBA8 preparation implemented in `common/twlhd_pica_tex.[ch]`
+and `tests/host/pica_tex_cli.c` (**BUILD/UNIT only**; nothing EMULATOR or
+HARDWARE verified). Sources read for this section: the Azahar checkout in
+`/home/one/3ds/azahar` (preferred where sources disagree), Panda3DS in
+`/home/one/3ds/Panda3DS`, libctru in `/opt/devkitpro/libctru/include`, and
+3DBrew "GPU/Internal_Registers" (reachable online on 2026-11-12; only its wrap
+table is used below, it does not document the texture memory layout).
+
+### Verified facts
+
+- **VERIFIED RGBA8 texel byte order is A,B,G,R.** Azahar writes
+  `bytes[3]=r, bytes[2]=g, bytes[1]=b, bytes[0]=a`
+  (`src/common/color.h:195-199`) and decodes in reverse
+  (`src/common/color.h:65-67`). Panda3DS reads `data[offset]=alpha`,
+  `+1=b`, `+2=g`, `+3=r` (`src/core/renderer_gl/textures.cpp:175-182`).
+  libctru names the format `GPU_RGBA8 = 0x0`
+  (`3ds/gpu/enums.h:65`). The swizzle therefore writes source R,G,B,A as
+  destination A,B,G,R.
+- **VERIFIED layout: 8x8 tiles in row-major tile order, Morton (Z) order
+  inside a tile.** Azahar's in-tile interleave tables are
+  `xlut={0,1,4,5,0x10,0x11,0x14,0x15}` and
+  `ylut={0,2,8,0xa,0x20,0x22,0x28,0x2a}`
+  (`src/video_core/utils.h:12-16`), with the full 8x8 diagram at
+  `:29-38`; the same tables are `MORTON_X`/`MORTON_ROW` at
+  `src/video_core/rasterizer_cache/texture_codec.h:554-559`. Panda3DS uses
+  identical `xOffsets`/`yOffsets` and tile offset
+  `(u & ~7) * 8 + (v & ~7) * width`
+  (`src/core/renderer_gl/textures.cpp:94-107`). No source disagrees.
+- **VERIFIED tile rows are stored bottom-up.** Azahar's decode says "Row y of
+  the tile lands on linear row 7 - y"
+  (`texture_codec.h:577-604`) and the tile walk starts tile row 0 at linear row
+  `height - 8`
+  (`((height - 8 - y) * width + x) * bpp`, `texture_codec.h:892-897`) because
+  "In OpenGL the texture origin is in the bottom left corner ... we read/write
+  the linear buffer from the bottom up" (`:892-894`). Panda3DS decodes `v=0`
+  first (`textures.cpp:250-261`) and uploads it as row 0 of
+  `glTexSubImage2D` (`:263`), i.e. the bottom row of the GL texture.
+  So PICA tile row 0 is the bottom of the image.
+- **VERIFIED PICA wrap register values.** `ClampToEdge = 0`,
+  `ClampToBorder = 1`, `Repeat = 2`, `MirroredRepeat = 3`
+  (Azahar `src/video_core/pica/regs_texturing.h:27-31`; the register fields are
+  `wrap_t` bits 8-10 and `wrap_s` bits 12-14, `:60-61`). libctru matches:
+  `GPU_CLAMP_TO_EDGE=0, GPU_CLAMP_TO_BORDER=1, GPU_REPEAT=2,
+  GPU_MIRRORED_REPEAT=3` (`3ds/gpu/enums.h:35-41`), packed by
+  `GPU_TEXTURE_WRAP_S/T` at bits 12/8 (`:14-16`). 3DBrew's
+  "GPU/Internal_Registers" wrap table lists the same 0-3 values.
+- **VERIFIED DS side (already above):** TEXIMAGE_PARAM bits 16/17 = repeat S/T,
+  18/19 = flip S/T, and flip without repeat behaves as clamp (bits table and
+  DeSmuME `rasterize.cpp:1814-1843`). Mapping used:
+  repeat+flip -> `MIRRORED_REPEAT`, repeat -> `REPEAT`, otherwise
+  `CLAMP_TO_EDGE` (cases 4/8/0xC equal case 0).
+
+### V-axis derivation (what the swizzle and texcoords agree on)
+
+Let image row `y` be the decoded RGBA8 row (`y=0` is the top row, matching DS
+`t=0`). The tile/Morton facts above place image row `y` at in-memory tile row
+`height-1-y` (bottom-up). PICA samples `v=0` at in-memory row 0, so the GPU
+sees the DS bottom row at `v=0` and the DS top row at `v=1`. For DS texel-space
+`t` (grows downward from the top) the normalised coordinate is therefore
+
+    u = s / width,      v = 1 - t / height
+
+With no extra flip. Hand-computed literals in `tests/host/test_pica_tex.c`
+(8x8: top row lands on Morton indexes 42..63, which is exactly the Azahar
+diagram read bottom-up) and the independent oracle
+`tools/pica_tex_oracle.py` encode the same choice.
+
+### Deliberate scope choices
+
+- **No second texture format.** RGBA8 is the only layout implemented; the
+  sources do not make a cheaper format trivially verifiable at this stage
+  (YAGNI for 5B-2d).
+- **Texcoords are a separate attribute buffer.** `TwlhdPicaTexCoord` is 8 bytes
+  (`u,v`); the 32-byte `TwlhdGxVertex` is untouched and main-buffer vertex `i`
+  pairs with texcoord `i` (owner decision point 3, 2026-11-12).
+- **Bind plan** groups consecutive triangles by the `(TEXIMAGE_PARAM,
+  PLTT_BASE)` of the triangle's first vertex. `untextured` means PackedFormat
+  bits 26-28 == 0, which includes `TEXIMAGE_PARAM == 0`.
+
+### UNVERIFIED (need hardware or citro3d source)
+
+- **UNVERIFIED** texture memory alignment requirements (the 8-byte/128-byte
+  alignment rules used by the capture format and PICA ADDR registers).
+- **UNVERIFIED** maximum texture size per memory class (linear vs VRAM) and
+  whether 1024x1024 RGBA8 (4 MiB) fits the title's budget.
+- **UNVERIFIED** whether citro3d's `C3D_TexLoadImage` swizzles internally.
+  Only the prebuilt `libcitro3d.a` and the header
+  (`/opt/devkitpro/libctru/include/c3d/texture.h:55`) are installed; the
+  implementation source is absent, so the header cannot settle it. This module
+  produces already-Mortonised data for a raw upload path; if the renderer uses
+  `C3D_TexLoadImage` it must not swizzle twice.
+- **UNVERIFIED** sampler defaults: mag/min filter (nearest vs linear) and
+  mipmap behaviour for DS textures.
