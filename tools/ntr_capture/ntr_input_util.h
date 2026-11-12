@@ -16,6 +16,7 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h> /* struct timespec for the scheduling helpers */
 
 #include "ntr_capture_util.h" /* ntr_cap_put_u32le; same directory */
 
@@ -206,4 +207,35 @@ static inline int ntr_input_clamp(int value, int min, int max) {
 /* Number of ~60 Hz frames that cover hold_ms, rounded up. */
 static inline int ntr_input_hold_frames(int hold_ms) {
     return (hold_ms * 60 + 999) / 1000;
+}
+
+/* One ~60 Hz frame period in nanoseconds: 1e9/60 rounded to the nearest ns,
+ * matching the viewer's 60 Hz input timer (main.c:883). */
+#define NTR_INPUT_FRAME_NS 16666667L
+
+/* Advance a monotonic deadline by `ns`, carrying whole seconds out of tv_nsec.
+ * This is the frame-to-frame arithmetic wait_next_frame() uses. */
+static inline void ntr_input_deadline_advance(struct timespec *t, long ns) {
+    t->tv_nsec += ns;
+    while (t->tv_nsec >= 1000000000L) {
+        t->tv_nsec -= 1000000000L;
+        t->tv_sec++;
+    }
+}
+
+/* Re-base the frame deadline onto `now` at the start of an iteration. Without
+ * this, every iteration after the first would send its frames back-to-back:
+ * the previous iteration's deadlines are already in the past. */
+static inline void ntr_input_iter_rebase(struct timespec *next,
+                                         const struct timespec *now) {
+    *next = *now;
+}
+
+/* Earliest start of the next iteration: one full iteration (hold + release
+ * frames at the frame period) plus the inter-iteration gap. */
+static inline void ntr_input_iter_advance(struct timespec *t, int hold_frames,
+                                          int release_frames, int gap_ms) {
+    long ns = (long)(hold_frames + release_frames) * NTR_INPUT_FRAME_NS +
+              (long)gap_ms * 1000000L;
+    ntr_input_deadline_advance(t, ns);
 }
