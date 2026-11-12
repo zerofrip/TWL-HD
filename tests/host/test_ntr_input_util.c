@@ -88,17 +88,31 @@ static void test_combined_presses(void) {
 
 static void test_touch_encoding(void) {
     /* (1 << 24) | (y << 12) | x, with x/y scaled from bottom-screen pixels to
-     * the 12-bit raw range 0..0xfff exactly as the viewer does:
-     * raw = 0xfff * pixel / screen_dimension (320 wide, 240 high). */
+     * the 12-bit raw range 0..0xfff exactly as the viewer does. At a 1:1
+     * window (ctx_width=320, ctx_height=240) the viewer computes
+     * (0xfff*pixel*320/320 + 320/2) / 320 = (0xfff*pixel + 160) / 320 for x
+     * and (0xfff*pixel + 120) / 240 for y (ui_input_redirection.c:417-429,
+     * 478-481): round-to-nearest, then clamped to 0xfff. */
     static const struct {
         int x;
         int y;
         uint32_t touch;
     } cases[] = {
-        {0, 0, 0x1000000u},      /* raw (0, 0) */
-        {319, 239, 0x1fedff2u},  /* raw x 4082 (0xff2), y 4077 (0xfed) */
-        {160, 120, 0x17ff7ffu},  /* raw x 2047, y 2047 (centre) */
-        {1, 1, 0x101100cu},      /* raw x 12 (0xc), y 17 (0x11) */
+        {0, 0, 0x1000000u},     /* raw (0, 0) */
+        {319, 239, 0x1feeff2u}, /* raw x 4082 (0xff2), y 4078 (0xfee) */
+        {160, 120, 0x1800800u}, /* raw (2048, 2048): exact centre */
+        {1, 1, 0x101100du},     /* raw x 13 (0xd), y 17 (0x11) */
+        /* Both axes' extremes. */
+        {319, 0, 0x1000ff2u},   /* raw x 4082 (0xff2), y 0 */
+        {0, 239, 0x1fee000u},   /* raw x 0, y 4078 (0xfee) */
+        /* Mid-rounding x: truncation gives 12/25/38, rounding 13/26/38. */
+        {1, 0, 0x100000du},     /* raw x 13: differs from truncating 12 */
+        {2, 0, 0x100001au},     /* raw x 26: differs from truncating 25 */
+        {3, 0, 0x1000026u},     /* raw x 38: truncation agrees */
+        /* Mid-rounding y: y=1 agrees (17), y=8 is the first that differs
+         * (136 truncated vs 137 rounded). */
+        {0, 1, 0x1011000u},     /* raw y 17: truncation agrees */
+        {0, 8, 0x1089000u},     /* raw y 137: differs from truncating 136 */
     };
     uint8_t frame[NTR_INPUT_FRAME_SIZE];
     size_t i;
@@ -114,7 +128,7 @@ static void test_touch_encoding(void) {
     {
         static const uint8_t expected[NTR_INPUT_FRAME_SIZE] = {
             0xfe, 0x0f, 0x00, 0x00, /* hidPad 0xffe: A pressed */
-            0xff, 0xf7, 0x7f, 0x01, /* touch (160, 120) */
+            0x00, 0x08, 0x80, 0x01, /* touch (160, 120): 0x01800800 */
             0xff, 0xf7, 0x7f, 0x00,
             0x81, 0x00, 0x80, 0x80,
             0x00, 0x00, 0x00, 0x00
@@ -122,6 +136,18 @@ static void test_touch_encoding(void) {
         CHECK_EQ_INT(ntr_input_build_frame(frame, 0x001u, 160, 120, 1), 0);
         CHECK(memcmp(frame, expected, sizeof(expected)) == 0);
     }
+}
+
+static void test_touch_raw_clamp(void) {
+    /* build_frame only passes in-screen pixels (max raw 4082/4078), so the
+     * 0xfff clamp is only observable through direct calls. Unclamped,
+     * (500, 320) would be (0xfff*500 + 160)/320 = 6398 and (500, 240) would
+     * be (0xfff*500 + 120)/240 = 8531. */
+    CHECK_EQ_INT(ntr_input_touch_raw(0, 320), 0);
+    CHECK_EQ_INT(ntr_input_touch_raw(319, 320), 0xff2);
+    CHECK_EQ_INT(ntr_input_touch_raw(500, 320), 0xfff);
+    CHECK_EQ_INT(ntr_input_touch_raw(500, 240), 0xfff);
+    CHECK_EQ_INT(ntr_input_touch_raw(320, 320), 0xfff);
 }
 
 static void test_build_frame_rejects(void) {
@@ -356,6 +382,8 @@ int main(void) {
     test_report("input/combined-presses");
     test_touch_encoding();
     test_report("input/touch-encoding");
+    test_touch_raw_clamp();
+    test_report("input/touch-raw-clamp");
     test_build_frame_rejects();
     test_report("input/build-frame-rejects");
     test_parse_buttons();

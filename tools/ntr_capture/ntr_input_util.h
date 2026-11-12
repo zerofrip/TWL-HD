@@ -75,10 +75,17 @@ static inline int ntr_input_parse_int(const char *s, int min, int max,
 
 /* ui_input_redirection.c:481 encodes (1 << 24) | (y << 12) | x, and the
  * viewer feeds it TOUCH_SCREEN_COORD_RANGE (0xfff) scaled values
- * (ui_input_redirection.c:383,417-429,478-481). The console's HID module
- * converts those 12-bit raw coordinates to pixels. */
+ * (ui_input_redirection.c:383,417-429,478-481). At a 1:1 window
+ * (ctx_width=320, ctx_height=240) the viewer's expression reduces to
+ * (0xfff * pixel + dimension / 2) / dimension: round-to-nearest, then
+ * clamped to 0xfff. The console's HID module converts those 12-bit raw
+ * coordinates to pixels. */
 static inline uint32_t ntr_input_touch_raw(int pixel, int dimension) {
-    return (uint32_t)pixel * NTR_INPUT_TOUCH_RANGE / (uint32_t)dimension;
+    uint32_t raw = ((uint32_t)pixel * NTR_INPUT_TOUCH_RANGE +
+                    (uint32_t)dimension / 2u) /
+                   (uint32_t)dimension;
+
+    return raw > NTR_INPUT_TOUCH_RANGE ? NTR_INPUT_TOUCH_RANGE : raw;
 }
 
 /*
