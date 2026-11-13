@@ -1,10 +1,13 @@
 # 5B-2e-2 mutation report: host-testable textured draw plan
 
-Status: **IMPLEMENTED**, BUILD/UNIT/EMULATOR. `make test` is green and the
-Azahar emulator screenshots were regenerated with the procedure in
-docs/EMULATOR_VALIDATION.md. The strengthened checker rejects the regenerated
-textured screenshot because it renders as solid colours (the texture path falls
-back to the untextured path in this emulator run). HARDWARE is not verified.
+Status: **IMPLEMENTED**, BUILD/UNIT/EMULATOR. `make test` is green, both
+arm11 builds compile with `-Wall -Wextra -Werror`, and the Azahar emulator
+screenshots were regenerated with the procedure in docs/EMULATOR_VALIDATION.md.
+The textured and control screenshots differ; `check_tex_shot.py --frame tex`
+passes (colour, structure, ratio, reuse) and `--frame ctl` passes the colour
+check. The bottom-screen readout shows `tex staged OK: 4 entries, 3 textures`
+and the trace ring includes `tex commit`, `tex bind`, and `clip tex DrawArrays`,
+confirming the texture path is exercised. HARDWARE is not verified.
 This report contains only numbers and results produced by the run described
 below.
 
@@ -73,7 +76,9 @@ Kill distribution:
 | build | 20 | 19.0 % |
 | survived | 7 | 6.7 % |
 
-The runner command and final summary:
+The runner command and final summary (re-run on the final `common/` module
+after the round-3 renderer fixes; the target file was unchanged, so the mutant
+set and counts are identical to the previous run):
 
     $ python3 docs/reports/5b2e2_mutate_tex_draw_plan.py --jobs 4
     baseline: build OK, test OK
@@ -83,6 +88,14 @@ The runner command and final summary:
     killed by build:  20
     survived:         7
     total:            105
+    survivors:
+      line 71 const 1024 -> 1025
+      line 71 const 1024 -> 1025
+      line 71 const 8 -> 7
+      line 71 const 8 -> 7
+      line 72 const 1 -> 2
+      line 72 const 1 -> 2
+      line 173 const 0 -> 1
     common/ restored: YES
 
 ## Pin table
@@ -93,9 +106,9 @@ Lines refer to `common/twlhd_tex_draw_plan.c` as of the run.
 | --- | --- | --- |
 | 13 | `TEX_DRAW_ALIGN_MASK` | 127 = alignment mask for the 128-byte arena assumption |
 | 24-120 | `twlhd_tex_draw_plan_build` | main draw-plan builder |
-| 39-44 | `out_result` initialisation | defensive defaults before validation |
-| 46-49 | NULL guard | reject missing required pointers |
-| 51-54 | empty-entry-count early return | `NO_TEXTURE` for zero entries |
+| 34-43 | `out_result` initialisation | defensive defaults before validation |
+| 46-48 | NULL guard | reject missing required pointers |
+| 51-53 | empty-entry-count early return | `NO_TEXTURE` for zero entries |
 | 56-59 | budget guard | capacity/arena/texcoord overflow fallback |
 | 61-65 | alignment guard | `arena_used > 0` and 128-byte alignment check |
 | 67-80 | texture size loop | PICA power-of-two 8..1024 guard + per-texture byte cap + arena offset/bounds guard |

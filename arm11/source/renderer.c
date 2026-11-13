@@ -19,6 +19,7 @@
 
 #include <math.h>
 #include <stdbool.h>
+#include <stdio.h>
 #include <string.h>
 
 #include "renderer.h"
@@ -114,6 +115,16 @@ static TextureSet g_tex_active;
 static TextureSet g_tex_pending;
 static TwlhdTexLifecycleState g_tex_lifecycle;
 
+/* Last textured staging outcome, readable from main.c for the bottom-screen
+ * console. Updated in every branch of renderer_set_clip_scene_textured()
+ * including the silent OK path. */
+static char g_tex_staging_status[64];
+
+const char *renderer_get_tex_staging_status(void) {
+    return g_tex_staging_status;
+}
+
+static void unbind_texture_unit0(void);
 static void release_texture_set(TextureSet *set);
 static int upload_textures(TextureSet *set, const TwlhdPicaFrameTexture *src,
                            uint32_t count, const uint8_t *arena);
@@ -646,6 +657,9 @@ void renderer_shutdown(void) {
             release_texture_set(&g_tex_pending);
         }
         if (action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW) {
+            /* The active set may still be bound to unit 0; unbind first.
+             * HARDWARE UNVERIFIED; see unbind_texture_unit0(). */
+            unbind_texture_unit0();
             release_texture_set(&g_tex_active);
         }
     }
@@ -902,6 +916,14 @@ int renderer_set_geometry(const TwlhdVertex *vertices,
         return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
     }
 
+    /* A newly loaded debug/v1 frame must not keep old texture state around. */
+    {
+        TwlhdTexLifecycleAction action = twlhd_tex_lifecycle_clear(&g_tex_lifecycle);
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW) {
+            release_texture_set(&g_tex_pending);
+        }
+    }
+
     g_renderer.vertex_count = vertex_count;
     g_renderer.pending_mode = RENDER_MODE_DEBUG;
 
@@ -975,10 +997,15 @@ int renderer_set_clip_scene_textured(
     }
 
     memset(&set, 0, sizeof set);
+    g_tex_staging_status[0] = '\0';
 
     set.entries = (TwlhdTexDrawEntry *)linearAlloc(
         entry_count * sizeof(TwlhdTexDrawEntry));
-    if (!set.entries) goto fail;
+    if (!set.entries) {
+        snprintf(g_tex_staging_status, sizeof g_tex_staging_status,
+                 "tex entries alloc failed");
+        goto fail;
+    }
 
     verdict = twlhd_tex_draw_plan_build(
         plan, entry_count, entry_texture, entry_status, textures,
@@ -987,6 +1014,9 @@ int renderer_set_clip_scene_textured(
         entry_count, &plan_result);
 
     if (verdict != TWLHD_TEX_DRAW_OK) {
+        snprintf(g_tex_staging_status, sizeof g_tex_staging_status,
+                 "tex plan fallback: %s",
+                 twlhd_tex_draw_verdict_string(verdict));
         renderer_trace("tex plan fallback");
         goto fail;
     }
@@ -994,12 +1024,18 @@ int renderer_set_clip_scene_textured(
     if (vertex_count > 0u) {
         size_t tc_bytes = (size_t)vertex_count * sizeof(TwlhdPicaTexCoord);
         set.tc_buf = linearAlloc(tc_bytes);
-        if (!set.tc_buf) goto fail;
+        if (!set.tc_buf) {
+            snprintf(g_tex_staging_status, sizeof g_tex_staging_status,
+                     "tex texcoord alloc failed");
+            goto fail;
+        }
         memcpy(set.tc_buf, texcoords, tc_bytes);
         GSPGPU_FlushDataCache(set.tc_buf, (u32)tc_bytes);
     }
 
     if (upload_textures(&set, textures, texture_count, arena) != 0) {
+        snprintf(g_tex_staging_status, sizeof g_tex_staging_status,
+                 "tex upload fallback");
         renderer_trace("tex upload fallback");
         goto fail;
     }
@@ -1007,6 +1043,8 @@ int renderer_set_clip_scene_textured(
     /* Geometry is staged last so a earlier failure leaves pending/active
      * geometry state exactly as before the call. */
     if (twlhd_geometry_slots_stage(&g_renderer.slots, vertices, bytes) != 0) {
+        snprintf(g_tex_staging_status, sizeof g_tex_staging_status,
+                 "tex geometry stage failed");
         release_texture_set(&set);
         return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
     }
@@ -1020,10 +1058,18 @@ int renderer_set_clip_scene_textured(
         TwlhdTexLifecycleAction action =
             twlhd_tex_lifecycle_stage(&g_tex_lifecycle);
         if (action & TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW) {
+            /* Defensive: the old pending set should never be bound, but keep
+             * the unbind discipline consistent. HARDWARE UNVERIFIED; see
+             * unbind_texture_unit0(). */
+            unbind_texture_unit0();
             release_texture_set(&g_tex_pending);
         }
     }
     g_tex_pending = set;
+
+    snprintf(g_tex_staging_status, sizeof g_tex_staging_status,
+             "tex staged OK: %u entries, %u textures",
+             (unsigned)entry_count, (unsigned)texture_count);
 
     g_renderer.vertex_count = vertex_count;
     g_renderer.pending_mode = RENDER_MODE_CLIP_TEXTURED;
@@ -1061,6 +1107,17 @@ static void draw_debug_internal(void) {
      * queue, so the old active buffer is no longer read by the GPU and can be
      * freed here. See upstream citro3d renderqueue.c/base.c, read from the
      * devkitPro/citro3d repository; HARDWARE UNVERIFIED. */
+
+    {
+        TwlhdTexLifecycleAction action =
+            twlhd_tex_lifecycle_commit(&g_tex_lifecycle);
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW) {
+            /* The active texture set may still be bound to unit 0; unbind
+             * first. HARDWARE UNVERIFIED; see unbind_texture_unit0(). */
+            unbind_texture_unit0();
+            release_texture_set(&g_tex_active);
+        }
+    }
 
     target = compute_target_layout();
     target_no_pad = (g_debug_flags & TWLHD_RDBG_NO_PAD) ? 1 : 0;
@@ -1168,6 +1225,17 @@ static void draw_debug_internal(void) {
     }
 }
 
+/* Unbind texture unit 0 before freeing a C3D_Tex that may still be bound.
+ * C3D_TexBind(int unitId, C3D_Tex* tex) keeps the tex pointer in the citro3d
+ * context (c3d/texture.h:57); C3D_TexDelete() then frees it
+ * (c3d/texture.h:59), leaving a dangling binding. Passing NULL unbinds the
+ * unit.
+ * HARDWARE UNVERIFIED: reasoned from the citro3d header only; the exact
+ * NULL-bind semantics on real hardware/emulator have not been measured. */
+static void unbind_texture_unit0(void) {
+    C3D_TexBind(0, NULL);
+}
+
 /* Release every resource owned by a TextureSet. The caller must guarantee the
  * GPU has finished reading `set` before calling this for the active set; the
  * pending set is always safe to release. */
@@ -1192,6 +1260,9 @@ static void commit_pending_textures(void) {
     g_tex_active = g_tex_pending;
     g_tex_pending = tmp;
     if (g_tex_pending.ready) {
+        /* g_tex_pending now holds the old active set; unbind before delete.
+         * HARDWARE UNVERIFIED; see unbind_texture_unit0(). */
+        unbind_texture_unit0();
         release_texture_set(&g_tex_pending);
     }
 }
@@ -1390,6 +1461,11 @@ draw_arrays:
         C3D_DrawArrays(GPU_TRIANGLES, (int)e->first_vertex,
                        (int)e->vertex_count);
     }
+
+    /* Leave unit 0 unbound so a later untextured frame never samples a
+     * texture that is about to be released. HARDWARE UNVERIFIED; see
+     * unbind_texture_unit0(). */
+    unbind_texture_unit0();
 }
 
 /* Clip-space render path. RDBG flags are deliberately ignored here: they only
@@ -1422,6 +1498,9 @@ static void draw_clip_internal(int committed) {
             twlhd_tex_lifecycle_commit(&g_tex_lifecycle);
         if (action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW) {
             renderer_trace("tex release on commit");
+            /* The active set may still be bound to unit 0; unbind first.
+             * HARDWARE UNVERIFIED; see unbind_texture_unit0(). */
+            unbind_texture_unit0();
             release_texture_set(&g_tex_active);
         }
     }

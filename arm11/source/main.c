@@ -72,6 +72,20 @@ static char g_status[96];
 static char g_transport_status[64];
 static int g_fs_ready;
 
+#define TRACE_RING_LEN 5
+static const char *g_trace_ring[TRACE_RING_LEN];
+static unsigned g_trace_head;
+
+static void trace_cb(const char *step) {
+    g_trace_ring[g_trace_head % TRACE_RING_LEN] = step;
+    g_trace_head++;
+}
+
+static const char *trace_latest(unsigned n) {
+    if (n >= TRACE_RING_LEN || n >= g_trace_head) return "";
+    return g_trace_ring[(g_trace_head - 1 - n) % TRACE_RING_LEN];
+}
+
 static int g_seq_on;
 static uint32_t g_seq_counter;
 static TwlhdSeqState g_seq_state;
@@ -110,6 +124,10 @@ static int try_textured_clip_scene(uint32_t vertex_count,
     prep_result = twlhd_pica_frame_arena_needed(
         g_tex_vertices, vertex_count, &g_v2view, &arena_needed);
     if (prep_result != TWLHD_PICA_FRAME_OK || arena_needed == 0u) {
+        renderer_trace("tex arena silent fallback");
+        snprintf(g_status, sizeof g_status, "tex arena: %s need=%u",
+                 twlhd_pica_frame_result_string(prep_result),
+                 (unsigned)arena_needed);
         return 0;
     }
 
@@ -341,6 +359,7 @@ static int load_sd_frame(const char *path,
  * | ignored (v1)          | "ignored: %lu outside-begin\n"            | ignored: 999999 outside-begin             | 29   |
  * | dropped (v1)          | "dropped: %lu incomplete\n\n"             | dropped: 999999 incomplete                | 26   |
  * | gx counters (v2)      | "stk%lu cap%lu inc%lu uns%lu vd%lu\n"    | stk9999 cap9999 inc9999 uns9999 vd9999    | 38   |
+ * | trace ring            | "T:%.8s|%.8s|%.8s|%.8s\n"                | T:tex comm|tex bind|clip tex|tex staged  | 38   |
  * | key legend            | "A=load SD  Y=builtin  X=seq  START=exit\n" | A=load SD  Y=builtin  X=seq  START=exit  | 39   |
  */
 static void update_console(void) {
@@ -412,6 +431,9 @@ static void update_console(void) {
                (unsigned long)clamp_4digit(g_scene.gx_stats.geometry_incomplete));
     }
 
+    printf("T:%.8s|%.8s|%.8s|%.8s\n",
+           trace_latest(3), trace_latest(2), trace_latest(1),
+           trace_latest(0));
     printf("A=load SD  Y=builtin  X=seq  START=exit\n");
     status_line(g_transport_status);
     status_line(g_status);
@@ -444,6 +466,7 @@ int main(void) {
 
     g_fs_ready = R_SUCCEEDED(fsInit());
 
+    renderer_set_trace(trace_cb);
     renderer_status = renderer_init();
     if (renderer_status == TWLHD_RENDER_OK) {
         set_builtin_scene();
@@ -604,6 +627,8 @@ int main(void) {
                                                      &pending_viewport);
                 } else {
                     result = TWLHD_RENDER_OK;
+                    snprintf(g_status, sizeof g_status, "tex: %s",
+                             renderer_get_tex_staging_status());
                 }
             } else {
                 result = renderer_set_geometry(g_vertices, pending_vertex_count);

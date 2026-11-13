@@ -204,6 +204,10 @@ output directory:
 Both frames end with SWAP_BUFFERS and set `FLAG_FRAME_COMPLETE`. The texture
 frame uses DS 16bpp (format 7) TXDS/TXDT chunks and no palette, so the
 `common/twlhd_pica_frame_prepare()` path decodes and swizzles them into RGBA8.
+The texture frame emits `CMD_COLOR RGB555_WHITE` (0x8FFF) before every textured
+run; `tests/host/build/gx_interp_cli` on the generated frame confirms all 24
+vertices have RGBA `(1, 1, 1, 1)`, so the chosen MODULATE TexEnv shows the
+texels unchanged.
 
 ### Procedure
 
@@ -282,6 +286,32 @@ A matching textured frame prints `colour OK`, `structure OK`, `ratio OK` and
 `reuse OK` and exits 0; a mismatch exits non-zero. Synthetic match/mismatch
 cases are in `tools/test_check_tex_shot.py` and run as part of `make test`.
 
+### Root cause of the identical-screenshot symptom
+
+The earlier reference run showed `tex_shot_199.ppm` byte-identical to
+`tex_ctl_shot_199.ppm`. The trace readout added for this round shows the ARM11
+code *did* reach the textured path: the bottom screen records
+`tex staged OK: 4 entries, 3 textures` and the trace ring at frame 199 includes
+`tex commit`, `tex bind`, and `clip tex DrawArrays`. The path was therefore
+being exercised, but the textured screenshot still matched the untextured
+control.
+
+The real cause is in `arm11/source/renderer.c`: `commit_pending_textures()`
+swaps the active texture set back into the pending slot and frees it on the
+next commit. In the old code the set was freed while Citro3d unit 0 still held
+the pointer from the previous `C3D_TexBind(0, tex)`. From that frame onward the
+bound texture memory was invalid, so the MODULATE TexEnv sampled effectively
+white texels and the output collapsed to the per-vertex base colour — exactly
+the same solid colours produced by the untextured control frame.
+
+The fix is `C3D_TexBind(0, NULL)` before every free of a possibly-bound set
+(`commit_pending_textures()`, the commit block in `draw_clip_internal()`,
+`renderer_set_clip_scene_textured()` pending replacement, `renderer_shutdown()`,
+and at the end of `draw_clip_textured_entries()`), plus the same lifecycle
+clear/commit in `renderer_set_geometry()` and the DEBUG draw branch. After the
+fix the texture set stays valid while bound, the screenshots differ, and
+the checker passes. This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
+
 ### Reference run (EMULATOR)
 
 Reproduced in this sandbox, 2026-11-13, with the external core
@@ -291,18 +321,26 @@ Reproduced in this sandbox, 2026-11-13, with the external core
 - `make azahar-host`: clean build, no warnings.
 - Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
 - Textured frame `tex_shot_199.ppm` sha256:
-  `648728e258bddca25bc4f1b2f46105b1da9799a924df36510b363748e240c53e`.
+  `5010d58a11c858ad49c96f99c1f238a5822c535bb56bff79f8df13e358dee672`.
 - Control frame `tex_ctl_shot_199.ppm` sha256:
-  `648728e258bddca25bc4f1b2f46105b1da9799a924df36510b363748e240c53e`.
-- The two screenshots are byte-identical; the textured frame did not produce
-  the expected white checker texels in this run, so the stronger structure
-  check was not exercised on a real checker pattern.
+  `91c8b18200ad7a37372b7c9edce70ccb5f754461c94c98901ba1086874b24710`.
+- The two screenshots differ; the texture path is exercised.
+- Bottom-screen readout at frame 199 shows the staging verdict
+  `tex staged OK: 4 entries, 3 textures` and the trace ring includes
+  `tex commit`, `tex bind`, and `clip tex DrawArrays`, confirming the
+  textured shader path ran.
 - `check_tex_shot.py` output for the textured screenshot:
 
-      UL colour FAIL: 1 distinct colours: (0, 255, 0)
-      UR colour FAIL: 1 distinct colours: (132, 132, 132)
-      LL colour FAIL: 1 distinct colours: (255, 0, 0)
-      LR colour FAIL: 1 distinct colours: (0, 0, 255)
+      UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
+      UR colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LL colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LR colour OK: 2 distinct colours: (0, 0, 255) (255, 255, 255)
+      UL structure OK: quad=125x66 cells=4x2 predicted_period=31.2x33.0 measured_period=31.0x32.5
+      UR structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+      LL structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+      LR structure OK: quad=125x66 cells=4x4 predicted_period=31.2x16.5 measured_period=31.0x16.2
+      UL ratio OK: UL=0.95 square_avg=1.91 diff=0.95
+      UR==LL reuse OK: period=True phase=True
 
 - `check_tex_shot.py` output for the control screenshot:
 

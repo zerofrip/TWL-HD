@@ -81,6 +81,10 @@ int renderer_is_ready(void);
 uint32_t renderer_vertex_count(void);
 const char *renderer_result_string(int result);
 
+/* Last textured staging status from renderer_set_clip_scene_textured(),
+ * or an empty string if no textured staging has happened. */
+const char *renderer_get_tex_staging_status(void);
+
 /* Per-frame runtime debug toggles. All default to zero. Vertex buffer padding
  * is declared by default so that the declared bytes match the stride; NO_PAD
  * reverts to the old unpadded behaviour for diagnostic contrast. Init-time

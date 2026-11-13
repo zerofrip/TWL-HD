@@ -229,6 +229,44 @@ class TestCheckTexShot(unittest.TestCase):
             self.assertNotEqual(rc, 0)
             self.assertIn("UR==LL reuse FAIL", out)
 
+    def test_modulate_with_base_colour_fails(self):
+        """MODULATE (texel x vertex colour) with a base-colour vertex colour
+        collapses the checker to the base colour; the checker must reject it
+        as a textured frame. White vertex colour is tested by
+        test_textured_passes."""
+        ctl_map = {
+            "UL": (0, 255, 0),
+            "UR": (128, 128, 128),
+            "LL": (255, 0, 0),
+            "LR": (0, 0, 255),
+        }
+
+        def modulated_callback(x, y):
+            for name, qx0, qx1, qy0, qy1, colour, tex_size in QUADS:
+                if qx0 <= x < qx1 and qy0 <= y < qy1:
+                    tex_w, tex_h = tex_size
+                    cells_x = tex_w // 4
+                    cells_y = tex_h // 4
+                    quad_w = qx1 - qx0
+                    quad_h = qy1 - qy0
+                    cell_w = quad_w / cells_x
+                    cell_h = quad_h / cells_y
+                    cx = int((x - qx0) / cell_w)
+                    cy = int((y - qy0) / cell_h)
+                    texel = WHITE if (cx + cy) & 1 else colour
+                    vertex = ctl_map[name]
+                    return tuple(
+                        (texel[i] * vertex[i]) // 255 for i in range(3)
+                    )
+            return BG
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "modulated.ppm")
+            make_ppm(path, modulated_callback)
+            rc, out, _ = self.run_script(path, ["--frame", "tex"])
+            self.assertNotEqual(rc, 0)
+            self.assertIn("FAIL", out)
+
 
 if __name__ == "__main__":
     unittest.main()

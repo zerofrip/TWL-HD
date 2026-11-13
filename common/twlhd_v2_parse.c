@@ -373,8 +373,10 @@ static TwlhdV2Result validate_tex(const uint8_t *txds, uint32_t txds_size,
         uint32_t index_bytes;
 
         read_tex_record(txds + (size_t)i * TWLHD_V2_TXDS_RECORD_SIZE, &rec);
-        (void)twlhd_v2_tex_sizes(rec.teximage_param, &texel_bytes, NULL,
-                                 &index_bytes);
+        if (!twlhd_v2_tex_sizes(rec.teximage_param, &texel_bytes, NULL,
+                                &index_bytes)) {
+            return TWLHD_V2_ERR_TXDS_SIZE;
+        }
 
         if (rec.texel_size != texel_bytes ||
             !twlhd_v2_tex_palette_size_ok(rec.teximage_param,

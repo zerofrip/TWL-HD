@@ -748,23 +748,45 @@ static void test_lifecycle_stage_then_fail(void) {
 
 static void test_lifecycle_clear_then_commit(void) {
     TwlhdTexLifecycleState s;
+    TwlhdTexLifecycleAction action;
+    int free_active_count = 0;
 
     twlhd_tex_lifecycle_init(&s);
-    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
-    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s), TWLHD_TEX_LIFECYCLE_NONE);
-    CHECK_EQ_INT(s.active_ready, 1);
 
-    /* Untextured reload while a textured active set is still in flight. */
-    CHECK_EQ_INT(twlhd_tex_lifecycle_clear(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    /* Renderer sequence for finding 5: textured frame is staged, drawn
+     * (commit), then a v1/debug frame load calls clear(), then the next
+     * debug draw calls commit() again. The active texture set must be freed
+     * exactly once. */
+    action = twlhd_tex_lifecycle_stage(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.pending_ready, 1);
+    CHECK_EQ_INT(s.active_ready, 0);
+
+    action = twlhd_tex_lifecycle_commit(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.active_ready, 1);
+    CHECK_EQ_INT(s.pending_ready, 0);
+
+    /* Load an untextured frame while the textured set is active. */
+    action = twlhd_tex_lifecycle_clear(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_LIFECYCLE_NONE);
     CHECK_EQ_INT(s.textured_mode, 0);
     CHECK_EQ_INT(s.drop_active_on_commit, 1);
 
-    /* Commit frees the old active and promotes the new (empty) pending. */
-    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s),
-                 TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW);
+    /* Draw the debug frame: commit frees the old active exactly once. */
+    action = twlhd_tex_lifecycle_commit(&s);
+    if (action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW) {
+        free_active_count++;
+    }
+    CHECK_EQ_INT(free_active_count, 1);
     CHECK_EQ_INT(s.active_ready, 0);
     CHECK_EQ_INT(s.drop_active_on_commit, 0);
     CHECK_EQ_INT(s.textured_mode, 0);
+
+    /* A second commit with no new stage must not free again. */
+    action = twlhd_tex_lifecycle_commit(&s);
+    CHECK_EQ_INT(action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW, 0);
+    CHECK_EQ_INT(free_active_count, 1);
 
     test_report("tex-draw-plan/lifecycle-clear-then-commit");
 }
