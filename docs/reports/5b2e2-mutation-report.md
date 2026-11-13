@@ -1,8 +1,9 @@
 # 5B-2e-2 mutation report: host-testable textured draw plan
 
 Status: **IMPLEMENTED**, BUILD/UNIT/EMULATOR. `make test` is green, both
-arm11 builds compile with `-Wall -Wextra -Werror`, and the Azahar emulator
-screenshots were regenerated with the procedure in docs/EMULATOR_VALIDATION.md.
+arm11 builds compile with the project's existing ARM11 flags (`-g -Wall -O2`
+per `arm11/Makefile`), and the Azahar emulator screenshots were regenerated
+with the procedure in docs/EMULATOR_VALIDATION.md.
 The textured and control screenshots differ; `check_tex_shot.py --frame tex`
 passes (colour, structure, ratio, reuse) and `--frame ctl` passes the colour
 check. The bottom-screen readout shows `tex staged OK: 4 entries, 3 textures`
@@ -77,8 +78,8 @@ Kill distribution:
 | survived | 7 | 6.7 % |
 
 The runner command and final summary (re-run on the final `common/` module
-after the round-3 renderer fixes; the target file was unchanged, so the mutant
-set and counts are identical to the previous run):
+after repair round 4; the target file was unchanged, so the mutant set and
+counts are identical to the previous run):
 
     $ python3 docs/reports/5b2e2_mutate_tex_draw_plan.py --jobs 4
     baseline: build OK, test OK

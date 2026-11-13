@@ -400,14 +400,22 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 
 Status labels:
 
-- **BUILD:** `make -C arm11` and `make -C arm11 DIAG=1` compile clean with
-  `-Wall -Wextra -Werror`; the new shader
-  `arm11/shaders/twlhd_clip_tex_vshader.v.pica` assembles via picasso in both
-  builds.
+- **BUILD:** `make -C arm11` and `make -C arm11 DIAG=1` compile with the
+  project's existing ARM11 flags (`-g -Wall -O2` per `arm11/Makefile`); the new
+  shader `arm11/shaders/twlhd_clip_tex_vshader.v.pica` assembles via picasso in
+  both builds. A pre-existing `-Wmaybe-uninitialized` warning in
+  `common/twlhd_v2_parse.c` reappears after reverting a stage hunk that was out
+  of scope; see OPEN ITEM below.
 - **UNIT:** `make test` green, including the new
-  `tests/host/test_tex_draw_plan` and `tools/test_check_tex_shot.py`; existing
-  structural tests `test_diag_config` and `test_blend_config` did not need
-  re-pinning. Mutation report `docs/reports/5b2e2-mutation-report.md` covers
+  `tests/host/test_tex_draw_plan`, `tools/test_check_tex_shot.py` and
+  `tools/test_gen_tex_frames.py`. `tests/host/test_diag_config.c` WAS re-pinned:
+  the `twlhd_diag_config(` count in `renderer.c` went 1 → 2 and the whole-file
+  `g_diag_mode` count went 4 → 5, because the new
+  `draw_clip_textured_entries()` adds one more `twlhd_diag_config(g_diag_mode)`
+  call; a new exact-count check for `draw_clip_textured_entries` was added at
+  `test_diag_config.c:231-234, 248-251`. `tests/host/test_blend_config.c` was
+  not changed. No assertion was loosened. Mutation report
+  `docs/reports/5b2e2-mutation-report.md` covers
   `common/twlhd_tex_draw_plan.c` (105 unique mutants, 78 killed by tests,
   20 killed by `-Werror` build, 7 equivalent survivors).
 - **EMULATOR:** generator script `tools/gen_tex_frames.py` and checker
@@ -416,9 +424,11 @@ Status labels:
   sandbox with `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
   (Azahar `9c38437`). The regenerated screenshots differ:
   `tex_shot_199.ppm` sha256
-  `5010d58a11c858ad49c96f99c1f238a5822c535bb56bff79f8df13e358dee672`,
+  `7c74e132cf5e269b775ad607633cf34a5a8ba4f31a13b468906f46dd6d6500df`,
   `tex_ctl_shot_199.ppm` sha256
-  `91c8b18200ad7a37372b7c9edce70ccb5f754461c94c98901ba1086874b24710`.
+  `5eb9a7b00858dae3eb48a03eae4c78a8e08102add0e22d3ac2fb206db5d58211`.
+  The control screenshot sha256 changed because the `T:` trace-ring console
+  line is now printed only when the texture path is active.
   The bottom-screen readout shows `tex staged OK: 4 entries, 3 textures` and
   the trace ring includes `tex commit`, `tex bind`, and `clip tex DrawArrays`,
   confirming the texture path is exercised. `check_tex_shot.py --frame tex`
@@ -464,11 +474,16 @@ What changed:
   functions; existing signatures unchanged.
 - `arm11/source/main.c`: switched to `twlhd_gx_interpret_ex()` so per-vertex
   texture latches are filled; at v2 load it calls `arena_needed` and, only when
-  the frame actually carries texture data, `prepare()` + the new renderer API;
-  otherwise the existing `renderer_set_clip_scene()` path runs unchanged. Added
-  a silent-arena-fallback trace marker, a bottom-screen staging-status readout,
-  and a trace-ring display so one screenshot captures the whole texture-path
-  verdict.
+  the frame actually carries texture data and fits the budget, installs the
+  renderer trace hook (`renderer_set_trace(trace_cb)` at line 145) and calls
+  `prepare()` + the new renderer API; otherwise it clears the hook and the
+  existing `renderer_set_clip_scene()` path runs unchanged. The hook is also
+  cleared on the built-in triangle path (lines 628-629) and the v1 geometry
+  path (lines 649-650) so untextured frames never run the callback. The
+  no-texture v2 branch (lines 130-135) returns 0 without overwriting
+  `g_status`. The `T:` trace-ring line in `update_console()` (line 446) is
+  printed only when `g_tex_path_attempted` is set, so untextured/control frames
+  keep the original bottom-screen layout.
 - `arm11/shaders/twlhd_clip_tex_vshader.v.pica`: clip shader variant that
   passes a separate `(u,v)` attribute to `texcoord0`; existing shaders untouched.
 - `tools/check_tex_shot.py` / `tools/test_check_tex_shot.py`: stdlib-only
@@ -479,8 +494,8 @@ What changed:
   tolerances, root-cause diagnosis, and the real checker output from the
   regenerated screenshots.
 - `docs/reports/5b2e2-mutation-report.md`: rerun with the final module.
-- `arm11/Makefile`: added `-Wextra -Werror` to the ARM11 warning flags; fixed
-  the resulting `-Wmaybe-uninitialized` warning in `common/twlhd_v2_parse.c`.
+- `tools/test_gen_tex_frames.py`: unit tests for the deterministic textured
+  frame generator, including the new over-budget option.
 
 Compile-time/runtime switch:
 
@@ -506,16 +521,33 @@ UNVERIFIED (build-only reasoning):
 - Attribute 2 with `BufInfo_Add` permutation `0x2` on real hardware.
 - Peak memory budget (≈ 20.5 MiB transient) on arm11 heap/FCRAM.
 
+OPEN ITEMS:
+
+- `common/twlhd_v2_parse.c:372-379` triggers a `-Wmaybe-uninitialized`
+  warning for `texel_bytes`/`index_bytes` under the project's existing ARM11
+  flags (`-g -Wall -O2`). The warning is pre-existing in main-tree code: loop 1
+  at lines 342-353 already rejects every `teximage_param` for which
+  `twlhd_v2_tex_sizes()` fails, so by loop 3 the call can never fail, but GCC
+  does not propagate that fact across the loop. The stage's earlier hunk that
+  added `TWLHD_V2_ERR_TXDS_SIZE` on the ignored result was out of scope
+  (it changed the v2 parser path), so it was reverted. The only permitted fix
+  is a parser edit, which is forbidden by the task scope, or adding flags,
+  which is also forbidden. The warning is therefore recorded here and does not
+  block the stage; it should be fixed upstream or accepted as a known
+  main-tree warning.
+
 Rollback:
 
 1. Delete `arm11/shaders/twlhd_clip_tex_vshader.v.pica`,
    `common/twlhd_tex_draw_plan.c`, `common/twlhd_tex_draw_plan.h`,
    `tests/host/test_tex_draw_plan.c`, `tools/gen_tex_frames.py`,
    `tools/check_tex_shot.py`, `tools/test_check_tex_shot.py`,
+   `tools/test_gen_tex_frames.py`,
    `docs/reports/5b2e2_mutate_tex_draw_plan.py`,
    `docs/reports/5b2e2-mutation-report.md`.
 2. Revert `arm11/source/renderer.c`, `arm11/include/renderer.h`,
-   `arm11/source/main.c`, root `Makefile`, `docs/DS_GX_RESEARCH.md` and
+   `arm11/source/main.c`, `tests/host/test_diag_config.c`, root `Makefile`,
+   `docs/DS_GX_RESEARCH.md`, `docs/EMULATOR_VALIDATION.md` and
    `docs/PHASE5B_PLAN.md` to the pre-5B-2e-2 versions.
 3. Because the feature is opt-in per loaded frame, setting
    `TWLHD_DISABLE_TEXTURE_PATH` or loading untextured frames gives the old path
@@ -737,10 +769,14 @@ texcoord attribute buffer, and that untextured/failed entries still draw.
 4. **Expected picture.** At least one 8x8 or 16x16 two-colour checker texture
    should be visible, one non-square texture should be visible, and a texture
    reused by two draw entries should look identical in both places.
-5. **Fallback probe.** Load a frame whose texture budget exceeds the practical
-   cap (or a deliberately misaligned arena if one can be produced). The renderer
-   should fall back to the untextured clip path with a `tex fallback` trace
-   marker, not crash.
+5. **Fallback probe.** Generate an over-budget frame with
+   `python3 tools/gen_tex_frames.py <outdir> --over-budget 3`, copy
+   `<outdir>/twlhd_frame_v2_tex_over.bin` to `sdmc:/twlhd_frame.bin`, and press
+   A to load it. Each of the three distinct 1024x1024 I2 keys decodes to a 4 MiB
+   RGBA8 texture, so `twlhd_pica_frame_arena_needed()` reports 12 MiB, which is
+   above the 8 MiB practical cap. The renderer should fall back to the
+   untextured clip path with a `tex budget fallback` trace marker, drawing solid
+   colours and not crashing.
 6. **B-key recovery.** If the screen hangs or shows garbage, press B to cycle
    the diagnostic mode and observe whether the picture changes; if still hung,
    press Y to return to the built-in triangle, or START to exit.
