@@ -47,38 +47,42 @@ The compiler is the default `HOST_CC = cc`; the detected host flags are
 
 A mutant is **KILLED** when at least one of those steps fails: a `-Werror`
 build failure counts, because `make test` fails on it. The unmutated baseline
-is built and both steps must pass before the run starts (16/16 C labels and 1
+is built and both steps must pass before the run starts (17/17 C labels and 1
 golden test with 10 subTests). Identical mutant texts are deduplicated. The
 script restores the original source in a `finally:` block, keeps its scratch
 copy of each mutant in a temporary directory, and ends with
 `git diff --exit-code common/`, which must be clean.
 
-Run commit: `4a8e1118d484c1043a8eb4f2a152e1cc9183be67` (the run was made from
-this checkout with a clean `common/`).
+Run commit: `f4cf556` (the round-6 fix on top of `d38e6e4`, applied in a
+throwaway copy of this checkout because the runner's final
+`git diff --exit-code common/` needs the fixed `common/` to be committed; the
+delivered worktree keeps the same fix uncommitted and the file contents are
+identical).
 
 The mutant set is regenerated from the reworked source, so the round-3 sizing
 pass (the shared no-decode predicate, `frame_fixed_palette_entries()`,
-`frame_mode_palette_bytes()` and the format-5 block loop) is part of it.
+`frame_mode_palette_bytes()` and the format-5 block loop) and the round-6
+zero-vertex early return are part of it.
 
 ## Results
 
 | metric | count |
 | --- | --- |
-| unique mutants | 233 |
-| killed by `tests/host/build/test_pica_frame` | 175 |
+| unique mutants | 238 |
+| killed by `tests/host/build/test_pica_frame` | 180 |
 | killed by golden suite | 2 |
 | killed by `-Werror` build | 29 |
 | equivalent survivors | 27 |
-| total | 233 |
+| total | 238 |
 
 Kill distribution:
 
 | step | count | share |
 | --- | --- | --- |
-| C test | 175 | 75.1 % |
-| golden | 2 | 0.9 % |
-| build | 29 | 12.4 % |
-| survived (equivalent) | 27 | 11.6 % |
+| C test | 180 | 75.6 % |
+| golden | 2 | 0.8 % |
+| build | 29 | 12.2 % |
+| survived (equivalent) | 27 | 11.3 % |
 
 The two golden kills are palette-entry miscounts (`frame_fixed_palette_entries`
 constant mutations at line 80/81) that change the decoded colour of the 8x8 I4
@@ -135,13 +139,63 @@ The full rerun on the final code, from the repository root:
 
     python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4
 
-It reports "baseline: build OK, test OK, golden OK", "mutants: 233 unique",
-`killed by test: 175`, `killed by golden: 2`, `killed by build: 29`,
-`survived: 27`, `total: 233`, "common/ restored: YES". The totals and the
+It reports "baseline: build OK, test OK, golden OK", "mutants: 238 unique",
+`killed by test: 180`, `killed by golden: 2`, `killed by build: 29`,
+`survived: 27`, `total: 238`, "common/ restored: YES". The totals and the
 survivor list are unchanged from the table above; all 27 survivors remain
 equivalent, and the parity argument for the `frame_mode_palette_bytes`
 constants (lines 93-95; item 4 below) is unchanged and still correct. The
 manual `>> -> <<` kill is not counted in those totals.
+
+## Round 6: zero-vertex write-pass out-of-bounds
+
+An independent review found a real bug, confirmed against the source: the
+write pass walked `for (i = 0; i <= vertex_count; i += 3u)` and treated
+`i == vertex_count` as a run boundary. With `vertex_count == 0` the very
+first iteration (`i == j == 0`) took that branch: `frame_classify_run(tex,
+view, 0, &run)` read `tex[0]` past an empty vertex array, and the pass wrote
+`entry_status[0]`/`entry_texture[0]` (and, with a matching TXDS record,
+decoded and wrote `textures[0]` and the arena) although `runs == 0` had
+passed every capacity check with `entry_capacity`, `texture_capacity` and
+`arena_capacity` all 0. That broke the explicit-capacity contract.
+
+Fix (`common/twlhd_pica_frame.c:243-254`): after the NULL and `% 3` checks,
+`vertex_count == 0u` returns `TWLHD_PICA_FRAME_OK` with all three counts 0.
+`runs == 0` already passed every capacity check and `arena_used == 0` the
+arena check, so the result is behaviour-identical for correct code, and
+`vertex_count > 0` is untouched (only this insertion was added; no other line
+changed). The other run walkers were checked and needed no change:
+`frame_count_runs()` (:217), the validation pass (:270) and
+`twlhd_pica_frame_arena_needed()` (:403) all walk `i < vertex_count`, which
+is empty when `vertex_count == 0`.
+
+New test `pica-frame/zero-vertex-guards` (the 17th C label): `vertex_count ==
+0` with `plan_capacity`, `texture_capacity`, `arena_capacity`,
+`texcoord_capacity` and `entry_capacity` all 0, `tex[0]` a valid textured key
+(`PARAM_A`, pltt 0) matching the parsed one-record TXDS frame (so the old
+code really decodes and swizzles), and a one-element vertex array inside
+guard bytes whose tail is 0x00 in pass A and 0xFF in pass B. The call
+returns `OK` with all three counts 0, every guard around plan, textures,
+arena, texcoords, entry_texture and entry_status is untouched, and the two
+passes agree byte for byte. The same frame goes through
+`twlhd_pica_frame_arena_needed()` (returns `OK`, `*out_arena_bytes == 0`, the
+vertex array and the parsed view byte-identical afterwards), and `tex ==
+NULL` still returns `ERR_NULL` with untouched out-words from both functions
+(the documented NULL rule is unchanged). On the unfixed code the test fails:
+`FAIL pica-frame/zero-vertex-guards (4 failed checks)` from
+`guard_intact(g_oob_et, 0u, OOB_FILL)` and `guard_intact(g_oob_es, 0u,
+OOB_FILL)`.
+
+The full rerun on the final code, from the repository root:
+
+    python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4
+
+It reports "baseline: build OK, test OK, golden OK", "mutants: 238 unique",
+`killed by test: 180`, `killed by golden: 2`, `killed by build: 29`,
+`survived: 27`, `total: 238`, "common/ restored: YES". The five new mutants
+generated from the early return (`==`/`!=` on line 249 and `0u -> 1u` on
+lines 250-252) are all killed by the C suite; there are no new survivors and
+the 27 survivors are the same equivalence classes as items 1-9 below.
 
 ## Pin table
 
@@ -155,8 +209,10 @@ Lines refer to `common/twlhd_pica_frame.c` as of the run.
 | 78-87 | `frame_fixed_palette_entries` | copied from `twlhd_tex_decode.c:54-63` |
 | 91-97 | `frame_mode_palette_bytes` | copied from `twlhd_tex_decode.c:88-95` |
 | 114-202 | `frame_classify_run` | shared no-decode predicate |
-| 215-373 | `twlhd_pica_frame_prepare` | validation + write pass |
-| 375-414 | `twlhd_pica_frame_arena_needed` | pure sizing pass |
+| 217-226 | `frame_count_runs` | run count (walks `i < vertex_count`) |
+| 228-386 | `twlhd_pica_frame_prepare` | validation + write pass |
+| 243-254 | zero-vertex early return | empty frame: OK with three 0 counts |
+| 388-427 | `twlhd_pica_frame_arena_needed` | pure sizing pass |
 
 ## Equivalent survivors
 
@@ -210,18 +266,18 @@ only tested for truthiness.
      keeps the check active on the same values or disables a guard that is
      redundant with the palette-size-ok check.
 
-7. **Array initialisers (lines 227-228, 378-379)**
+7. **Array initialisers (lines 227-228, 391-392)**
    - `{0}` -> `{1}`: C zero-initialises all remaining elements of an array
      partial initialiser, so only the first element changes and the dedupe
      comparisons still see zeroes for unpopulated slots.
 
-8. **Write-pass dedupe loop bound (line 307)**
+8. **Write-pass dedupe loop bound (line 320)**
    - `t < tex_count` -> `t <= tex_count`: the `key_param`/`key_pltt` arrays are
      already populated by the validation pass that ran before the write pass,
      so even with the extra iteration the lookup finds the correct existing
      texture or correctly treats the run as new.
 
-9. **Unreachable texcoord-zeroing branch (lines 353-355)**
+9. **Unreachable texcoord-zeroing branch (lines 366-368)**
    - `v < i` -> `v <= i` and `0.0f` -> `1.0f`: this branch is the error path
      taken only if `twlhd_pica_texcoords_from_gx()` fails. The predicate and
      the earlier capacity checks guarantee that the call succeeds for every
@@ -354,94 +410,99 @@ are the ones triaged above.
 | 241 | const 3 -> 2 | KILLED(test) |
 | 241 | const 3 -> 4 | KILLED(test) |
 | 241 | op != -> == | KILLED(test) |
-| 244 | op > -> >= | KILLED(test) |
-| 244 | op > -> >= | KILLED(test) |
-| 244 | op \|\| -> && | KILLED(build) |
-| 244 | op \|\| -> && | KILLED(build) |
-| 245 | op > -> >= | KILLED(test) |
-| 257 | const 0 -> 1 | KILLED(test) |
-| 257 | const 3 -> 2 | KILLED(test) |
-| 257 | const 3 -> 4 | KILLED(test) |
-| 257 | op < -> <= | KILLED(test) |
-| 260 | const 0 -> 1 | KILLED(test) |
-| 260 | const 3 -> 2 | KILLED(test) |
-| 260 | const 3 -> 4 | KILLED(test) |
-| 260 | op != -> == | KILLED(test) |
-| 260 | op && -> \|\| | KILLED(test) |
-| 263 | op != -> == | KILLED(test) |
-| 263 | op \|\| -> && | KILLED(test) |
-| 264 | op > -> >= | KILLED(test) |
-| 266 | const 0 -> 1 | KILLED(test) |
-| 266 | op < -> <= | KILLED(test) |
-| 267 | op && -> \|\| | KILLED(test) |
-| 267 | op == -> != | KILLED(test) |
-| 267 | op == -> != | KILLED(test) |
-| 269 | op != -> == | KILLED(test) |
-| 271 | op >= -> > | KILLED(test) |
-| 271 | op \|\| -> && | KILLED(test) |
-| 272 | op >= -> > | KILLED(test) |
-| 281 | op > -> >= | KILLED(test) |
-| 285 | op != -> == | KILLED(test) |
-| 289 | const 0 -> 1 | KILLED(test) |
-| 290 | const 0 -> 1 | KILLED(test) |
-| 291 | const 0 -> 1 | KILLED(test) |
-| 292 | const 0 -> 1 | KILLED(test) |
-| 292 | const 3 -> 2 | KILLED(test) |
-| 292 | const 3 -> 4 | KILLED(test) |
-| 292 | op <= -> < | KILLED(test) |
-| 293 | op == -> != | KILLED(test) |
-| 293 | op \|\| -> && | KILLED(test) |
-| 294 | const 0 -> 1 | KILLED(test) |
-| 294 | const 3 -> 2 | KILLED(test) |
-| 294 | const 3 -> 4 | KILLED(test) |
-| 294 | op != -> == | KILLED(test) |
-| 294 | op && -> \|\| | KILLED(test) |
-| 297 | const 1 -> 0 | KILLED(test) |
-| 297 | const 1 -> 2 | KILLED(test) |
-| 304 | op && -> \|\| | KILLED(test) |
-| 304 | op == -> != | KILLED(test) |
+| 249 | const 0 -> 1 | KILLED(test) |
+| 249 | op == -> != | KILLED(test) |
+| 250 | const 0 -> 1 | KILLED(test) |
+| 251 | const 0 -> 1 | KILLED(test) |
+| 252 | const 0 -> 1 | KILLED(test) |
+| 257 | op > -> >= | KILLED(test) |
+| 257 | op > -> >= | KILLED(test) |
+| 257 | op \|\| -> && | KILLED(build) |
+| 257 | op \|\| -> && | KILLED(build) |
+| 258 | op > -> >= | KILLED(test) |
+| 270 | const 0 -> 1 | KILLED(test) |
+| 270 | const 3 -> 2 | KILLED(test) |
+| 270 | const 3 -> 4 | KILLED(test) |
+| 270 | op < -> <= | KILLED(test) |
+| 273 | const 0 -> 1 | KILLED(test) |
+| 273 | const 3 -> 2 | KILLED(test) |
+| 273 | const 3 -> 4 | KILLED(test) |
+| 273 | op != -> == | KILLED(test) |
+| 273 | op && -> \|\| | KILLED(test) |
+| 276 | op != -> == | KILLED(test) |
+| 276 | op \|\| -> && | KILLED(test) |
+| 277 | op > -> >= | KILLED(test) |
+| 279 | const 0 -> 1 | KILLED(test) |
+| 279 | op < -> <= | KILLED(test) |
+| 280 | op && -> \|\| | KILLED(test) |
+| 280 | op == -> != | KILLED(test) |
+| 280 | op == -> != | KILLED(test) |
+| 282 | op != -> == | KILLED(test) |
+| 284 | op >= -> > | KILLED(test) |
+| 284 | op \|\| -> && | KILLED(test) |
+| 285 | op >= -> > | KILLED(test) |
+| 294 | op > -> >= | KILLED(test) |
+| 298 | op != -> == | KILLED(test) |
+| 302 | const 0 -> 1 | KILLED(test) |
+| 303 | const 0 -> 1 | KILLED(test) |
+| 304 | const 0 -> 1 | KILLED(test) |
+| 305 | const 0 -> 1 | KILLED(test) |
+| 305 | const 3 -> 2 | KILLED(test) |
+| 305 | const 3 -> 4 | KILLED(test) |
+| 305 | op <= -> < | KILLED(test) |
+| 306 | op == -> != | KILLED(test) |
+| 306 | op \|\| -> && | KILLED(test) |
 | 307 | const 0 -> 1 | KILLED(test) |
-| 308 | op && -> \|\| | KILLED(test) |
-| 308 | op == -> != | KILLED(test) |
-| 308 | op == -> != | KILLED(test) |
-| 310 | op == -> != | KILLED(test) |
-| 319 | op != -> == | KILLED(test) |
-| 324 | op != -> == | KILLED(test) |
-| 347 | op && -> \|\| | KILLED(build) |
-| 347 | op && -> \|\| | KILLED(build) |
-| 347 | op == -> != | KILLED(test) |
-| 348 | const 0 -> 1 | KILLED(test) |
-| 348 | op >= -> > | KILLED(test) |
-| 350 | op != -> == | KILLED(test) |
-| 360 | op < -> <= | KILLED(test) |
+| 307 | const 3 -> 2 | KILLED(test) |
+| 307 | const 3 -> 4 | KILLED(test) |
+| 307 | op != -> == | KILLED(test) |
+| 307 | op && -> \|\| | KILLED(test) |
+| 310 | const 1 -> 0 | KILLED(test) |
+| 310 | const 1 -> 2 | KILLED(test) |
+| 317 | op && -> \|\| | KILLED(test) |
+| 317 | op == -> != | KILLED(test) |
+| 320 | const 0 -> 1 | KILLED(test) |
+| 321 | op && -> \|\| | KILLED(test) |
+| 321 | op == -> != | KILLED(test) |
+| 321 | op == -> != | KILLED(test) |
+| 323 | op == -> != | KILLED(test) |
+| 332 | op != -> == | KILLED(test) |
+| 337 | op != -> == | KILLED(test) |
+| 360 | op && -> \|\| | KILLED(build) |
+| 360 | op && -> \|\| | KILLED(build) |
+| 360 | op == -> != | KILLED(test) |
 | 361 | const 0 -> 1 | KILLED(test) |
-| 362 | const 0 -> 1 | KILLED(test) |
-| 380 | const 0 -> 1 | KILLED(test) |
-| 381 | const 0 -> 1 | KILLED(test) |
-| 385 | op \|\| -> && | KILLED(build) |
-| 385 | op \|\| -> && | KILLED(build) |
-| 388 | const 0 -> 1 | KILLED(test) |
-| 388 | const 3 -> 2 | KILLED(test) |
-| 388 | const 3 -> 4 | KILLED(test) |
-| 388 | op != -> == | KILLED(test) |
-| 390 | const 0 -> 1 | KILLED(test) |
-| 390 | const 3 -> 2 | KILLED(test) |
-| 390 | const 3 -> 4 | KILLED(test) |
-| 390 | op < -> <= | KILLED(test) |
+| 361 | op >= -> > | KILLED(test) |
+| 363 | op != -> == | KILLED(test) |
+| 373 | op < -> <= | KILLED(test) |
+| 374 | const 0 -> 1 | KILLED(test) |
+| 375 | const 0 -> 1 | KILLED(test) |
 | 393 | const 0 -> 1 | KILLED(test) |
-| 393 | const 3 -> 2 | KILLED(test) |
-| 393 | const 3 -> 4 | KILLED(test) |
-| 393 | op != -> == | KILLED(test) |
-| 393 | op && -> \|\| | KILLED(test) |
-| 396 | op != -> == | KILLED(test) |
-| 396 | op \|\| -> && | KILLED(test) |
-| 398 | const 0 -> 1 | KILLED(test) |
-| 398 | op < -> <= | KILLED(test) |
-| 399 | op && -> \|\| | KILLED(test) |
-| 399 | op == -> != | KILLED(test) |
-| 399 | op == -> != | KILLED(test) |
+| 394 | const 0 -> 1 | KILLED(test) |
+| 398 | op \|\| -> && | KILLED(build) |
+| 398 | op \|\| -> && | KILLED(build) |
+| 401 | const 0 -> 1 | KILLED(test) |
+| 401 | const 3 -> 2 | KILLED(test) |
+| 401 | const 3 -> 4 | KILLED(test) |
 | 401 | op != -> == | KILLED(test) |
-| 403 | op >= -> > | KILLED(test) |
+| 403 | const 0 -> 1 | KILLED(test) |
+| 403 | const 3 -> 2 | KILLED(test) |
+| 403 | const 3 -> 4 | KILLED(test) |
+| 403 | op < -> <= | KILLED(test) |
+| 406 | const 0 -> 1 | KILLED(test) |
+| 406 | const 3 -> 2 | KILLED(test) |
+| 406 | const 3 -> 4 | KILLED(test) |
+| 406 | op != -> == | KILLED(test) |
+| 406 | op && -> \|\| | KILLED(test) |
+| 409 | op != -> == | KILLED(test) |
+| 409 | op \|\| -> && | KILLED(test) |
+| 411 | const 0 -> 1 | KILLED(test) |
+| 411 | op < -> <= | KILLED(test) |
+| 412 | op && -> \|\| | KILLED(test) |
+| 412 | op == -> != | KILLED(test) |
+| 412 | op == -> != | KILLED(test) |
+| 414 | op != -> == | KILLED(test) |
+| 416 | op >= -> > | KILLED(test) |
 | 39 | const 1 -> 2 | SURVIVED (equivalent) |
 | 39 | const 1024 -> 1025 | SURVIVED (equivalent) |
 | 39 | const 8 -> 7 | SURVIVED (equivalent) |
@@ -463,9 +524,9 @@ are the ones triaged above.
 | 177 | const 2 -> 1 | SURVIVED (equivalent) |
 | 227 | const 0 -> 1 | SURVIVED (equivalent) |
 | 228 | const 0 -> 1 | SURVIVED (equivalent) |
-| 307 | op < -> <= | SURVIVED (equivalent) |
-| 353 | op < -> <= | SURVIVED (equivalent) |
-| 354 | const 0 -> 1 | SURVIVED (equivalent) |
-| 355 | const 0 -> 1 | SURVIVED (equivalent) |
-| 378 | const 0 -> 1 | SURVIVED (equivalent) |
-| 379 | const 0 -> 1 | SURVIVED (equivalent) |
+| 320 | op < -> <= | SURVIVED (equivalent) |
+| 366 | op < -> <= | SURVIVED (equivalent) |
+| 367 | const 0 -> 1 | SURVIVED (equivalent) |
+| 368 | const 0 -> 1 | SURVIVED (equivalent) |
+| 391 | const 0 -> 1 | SURVIVED (equivalent) |
+| 392 | const 0 -> 1 | SURVIVED (equivalent) |
