@@ -77,6 +77,7 @@ typedef struct {
     DVLB_s *clip_tex_dvlb;
     shaderProgram_s clip_tex_program;
     int clip_tex_program_inited;
+    int u_loc_clipfix_tex;
 } RendererState;
 
 typedef enum {
@@ -112,6 +113,7 @@ typedef struct {
 static TextureSet g_tex_active;
 static TextureSet g_tex_pending;
 static int g_textured_mode;
+static int g_tex_release_active_on_commit;
 
 static void release_texture_set(TextureSet *set);
 static void clear_textured_mode(void);
@@ -640,6 +642,7 @@ void renderer_shutdown(void) {
 
     twlhd_geometry_slots_release_active(&g_renderer.slots);
     release_texture_set(&g_tex_active);
+    g_tex_release_active_on_commit = 0;
 
     if (g_official_buf) {
         linearFree(g_official_buf);
@@ -696,8 +699,10 @@ int renderer_init(void) {
     g_renderer.u_loc_projection = -1;
     g_renderer.u_loc_modelview = -1;
     g_renderer.u_loc_clipfix = -1;
+    g_renderer.u_loc_clipfix_tex = -1;
     /* Textured-mode state survives the RendererState wipe. */
     g_textured_mode = 0;
+    g_tex_release_active_on_commit = 0;
     /* Refresh the debug flags after the RendererState wipe. This also keeps
      * the debug-flag API reachable in the normal (non-diag) ELF so that nm
      * reports it; the call is a no-op when the flags are zero. */
@@ -807,6 +812,17 @@ int renderer_init(void) {
     renderer_trace("clip tex SetVsh");
     if (R_FAILED(shaderProgramSetVsh(&g_renderer.clip_tex_program,
                                      &g_renderer.clip_tex_dvlb->DVLE[0]))) {
+        result = TWLHD_RENDER_ERR_SHADER;
+        goto fail;
+    }
+
+    renderer_trace("clip tex uniform loc");
+    /* The textured shader declares only "clipfix" (lines 8, 16); there is no
+     * projection/modelview uniform to look up. The task mandates ERR_SHADER
+     * (not ERR_UNIFORM) here; do not "fix" the asymmetry. */
+    g_renderer.u_loc_clipfix_tex = shaderInstanceGetUniformLocation(
+        g_renderer.clip_tex_program.vertexShader, "clipfix");
+    if (g_renderer.u_loc_clipfix_tex < 0) {
         result = TWLHD_RENDER_ERR_SHADER;
         goto fail;
     }
@@ -1160,10 +1176,19 @@ static void commit_pending_textures(void) {
 }
 
 /* Drop the whole textured path and force the next draw to use the untextured
- * clip path. */
+ * clip path.  Called from staging (between frames), so the active texture set
+ * may still be read by the GPU for the previously submitted frame.  We
+ * therefore release only the pending set here and schedule the active set for
+ * release at the next commit, after C3D_FrameBegin has drained the in-flight
+ * frame.  The shutdown path in renderer_shutdown() releases the active set only
+ * after C3D_RenderTargetDelete(), which drains the GPU queue.  See upstream
+ * citro3d renderqueue.c/base.c, read from the devkitPro/citro3d repository;
+ * HARDWARE UNVERIFIED. */
 static void clear_textured_mode(void) {
     release_texture_set(&g_tex_pending);
-    release_texture_set(&g_tex_active);
+    if (g_tex_active.ready) {
+        g_tex_release_active_on_commit = 1;
+    }
     g_textured_mode = 0;
 }
 
@@ -1293,11 +1318,13 @@ static int upload_textures(TextureSet *set, const TwlhdPicaFrameTexture *src,
 /* Per-entry textured draw loop, called from draw_clip_internal() after the
  * frame state has already been set. Kept outside draw_clip_internal() so the
  * structural tests that extract the clip body are not affected by the textured
- * TexEnv / program-bind calls. */
-static void draw_clip_textured_entries(const TwlhdDiagConfig *diag) {
+ * TexEnv / program-bind calls.  Looks up the diagnostic config itself so the
+ * untextured fallback inside a textured frame matches the current clip mode. */
+static void draw_clip_textured_entries(void) {
     uint32_t i;
     int current_textured = -1; /* -1 = none, 0 = untextured, 1 = textured */
     int32_t current_slot = -1;
+    const TwlhdDiagConfig *diag = twlhd_diag_config(g_diag_mode);
 
     for (i = 0; i < g_tex_active.entry_count; i++) {
         const TwlhdTexDrawEntry *e = &g_tex_active.entries[i];
@@ -1313,11 +1340,25 @@ static void draw_clip_textured_entries(const TwlhdDiagConfig *diag) {
             }
         } else {
             if (current_textured != 1) {
+                C3D_Mtx m4;
+                int j;
+
                 renderer_trace("tex attr");
                 C3D_BindProgram(&g_renderer.clip_tex_program);
                 if (setup_clip_textured_attrs(g_tex_active.tc_buf) != 0) {
                     return;
                 }
+                renderer_trace("clip tex uniform");
+                /* C3D_Mtx rows are stored w,z,y,x; copy the row-major
+                 * float[4][4] by name. */
+                for (j = 0; j < 4; j++) {
+                    m4.r[j].x = g_renderer.clipfix_active[j][0];
+                    m4.r[j].y = g_renderer.clipfix_active[j][1];
+                    m4.r[j].z = g_renderer.clipfix_active[j][2];
+                    m4.r[j].w = g_renderer.clipfix_active[j][3];
+                }
+                C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER,
+                                 g_renderer.u_loc_clipfix_tex, &m4);
                 current_textured = 1;
                 current_slot = -1;
             }
@@ -1363,6 +1404,12 @@ static void draw_clip_internal(int committed) {
                               (u32)g_renderer.slots.active_size);
         memcpy(g_renderer.clipfix_active, g_renderer.clipfix_pending,
                sizeof g_renderer.clipfix_active);
+    }
+
+    if (g_tex_release_active_on_commit) {
+        renderer_trace("tex release on commit");
+        release_texture_set(&g_tex_active);
+        g_tex_release_active_on_commit = 0;
     }
 
     if (g_tex_pending.ready) {
@@ -1424,26 +1471,26 @@ static void draw_clip_internal(int committed) {
              * alpha is bits 24-31 (citro3d C3D_TexEnvColor convention). */
             C3D_TexEnvColor(env, diag->constant_color);
         }
+    }
 
-        renderer_trace("clip program");
-        C3D_BindProgram(&g_renderer.clip_program);
+    renderer_trace("clip program");
+    C3D_BindProgram(&g_renderer.clip_program);
 
-        renderer_trace("clip uniform");
-        /* C3D_Mtx rows are stored w,z,y,x; copy the row-major float[4][4] by name. */
-        for (i = 0; i < 4; i++) {
-            m4.r[i].x = g_renderer.clipfix_active[i][0];
-            m4.r[i].y = g_renderer.clipfix_active[i][1];
-            m4.r[i].z = g_renderer.clipfix_active[i][2];
-            m4.r[i].w = g_renderer.clipfix_active[i][3];
-        }
-        C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_clipfix, &m4);
+    renderer_trace("clip uniform");
+    /* C3D_Mtx rows are stored w,z,y,x; copy the row-major float[4][4] by name. */
+    for (i = 0; i < 4; i++) {
+        m4.r[i].x = g_renderer.clipfix_active[i][0];
+        m4.r[i].y = g_renderer.clipfix_active[i][1];
+        m4.r[i].z = g_renderer.clipfix_active[i][2];
+        m4.r[i].w = g_renderer.clipfix_active[i][3];
+    }
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_clipfix, &m4);
 
-        renderer_trace("clip DrawArrays");
-        if (g_textured_mode && g_tex_active.ready) {
-            draw_clip_textured_entries(diag);
-        } else if (g_renderer.slots.active && g_renderer.vertex_count) {
-            C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
-        }
+    renderer_trace("clip DrawArrays");
+    if (g_textured_mode && g_tex_active.ready) {
+        draw_clip_textured_entries();
+    } else if (g_renderer.slots.active && g_renderer.vertex_count) {
+        C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);
     }
 
     /* This path clobbered the DEBUG AttrInfo/BufInfo; force the next DEBUG

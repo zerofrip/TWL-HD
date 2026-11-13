@@ -33,6 +33,27 @@ typedef enum {
     TWLHD_TEX_DRAW_FALLBACK_ALIGN,
 } TwlhdTexDrawVerdict;
 
+/* Lifecycle actions returned by the pure state machine in
+ * twlhd_tex_lifecycle_*.  They are bit-flags so a single transition can
+ * request both pending and active release. */
+typedef enum {
+    TWLHD_TEX_LIFECYCLE_NONE = 0,
+    TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW = 1,
+    TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW = 2,
+    TWLHD_TEX_LIFECYCLE_FREE_ALL = 3,
+} TwlhdTexLifecycleAction;
+
+/* Pure state for the pending/active texture-set lifecycle.  It mirrors the
+ * ownership rule used by arm11/source/renderer.c: pending is always owned by
+ * the CPU, active may still be read by the GPU until the next commit or until
+ * the render target has been deleted. */
+typedef struct {
+    int pending_ready;
+    int active_ready;
+    int textured_mode;
+    int drop_active_on_commit;
+} TwlhdTexLifecycleState;
+
 /*
  * PICA200 wrap/filter codes exported by this module. They are intentionally
  * bit-identical to libctru GPU_TEXTURE_WRAP_PARAM / GPU_TEXTURE_FILTER_PARAM
@@ -99,6 +120,15 @@ TwlhdTexDrawVerdict twlhd_tex_draw_plan_build(
     TwlhdTexDrawPlanResult *out_result);
 
 const char *twlhd_tex_draw_verdict_string(TwlhdTexDrawVerdict verdict);
+
+/* Pure lifecycle state machine.  init/clear/stage/commit/shutdown update the
+ * state and return the action(s) the caller must perform on the real GPU
+ * resources.  The helper itself never touches pointers or memory. */
+void twlhd_tex_lifecycle_init(TwlhdTexLifecycleState *s);
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_stage(TwlhdTexLifecycleState *s);
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_clear(TwlhdTexLifecycleState *s);
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_commit(TwlhdTexLifecycleState *s);
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_shutdown(TwlhdTexLifecycleState *s);
 
 #ifdef __cplusplus
 }
