@@ -60,7 +60,9 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_pica_tex.h \
 	common/twlhd_pica_frame.h \
 	common/twlhd_attr_pad.h \
-	common/twlhd_clipfix.h common/twlhd_seq.h tests/host/tests_host.h \
+	common/twlhd_clipfix.h common/twlhd_seq.h \
+	common/twlhd_tex_draw_plan.h \
+	tests/host/tests_host.h \
 	tools/azahar_host/azahar_host_util.h
 HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_converter \
@@ -75,6 +77,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_tex_decode \
 	tests/host/build/test_pica_tex \
 	tests/host/build/test_pica_frame \
+	tests/host/build/test_tex_draw_plan \
 	tests/host/build/test_clipfix \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
@@ -155,6 +158,11 @@ tests/host/build/test_pica_frame: tests/host/test_pica_frame.c \
 		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_frame.c \
 		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_tex_draw_plan: tests/host/test_tex_draw_plan.c \
+		common/twlhd_tex_draw_plan.c $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_draw_plan.c \
+		$(HOST_LDFLAGS)
 
 tests/host/build/test_seq: tests/host/test_seq.c $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)

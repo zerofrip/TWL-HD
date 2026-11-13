@@ -182,6 +182,208 @@ Follow-up (open): explain why the ROM-side parse fails only for AF=120 despite a
 
 Default builds (CUBES unset) are unaffected: make emu-validate PASS 124 GXCM + 4 RSTA at angle 61440. EMULATOR evidence only; not HARDWARE VERIFIED.
 
+## 5B-2e-2 textured renderer path (Azahar libretro host)
+
+**EMULATOR evidence only; not HARDWARE VERIFIED.** This is a PICA200 renderer
+validation, separate from the DeSmuME ARM9 capture chain above. It uses the
+external Azahar libretro core loaded at run time by
+`tools/azahar_host/build/azahar_host`.
+
+### Generator
+
+`tools/gen_tex_frames.py` writes deterministic v2 frames into an output
+directory:
+
+  twlhd_frame_v2_tex.bin     four quads with:
+                               - 8x8 red/white checker
+                               - 16x16 blue/white checker
+                               - 16x8 green/white checker (non-square)
+                               - 8x8 red/white checker reused from the first run
+  twlhd_frame_v2_tex_ctl.bin same geometry, no texture state (untextured control)
+  twlhd_frame_v2_tex_over.bin three distinct 1024x1024 I2 keys sharing the
+                               same TXDT/PLDT bytes; intentionally over the
+                               8 MiB practical arena budget
+
+The first two frames are used for the screenshot comparison below. The
+over-budget frame is used for the hardware fallback probe described in
+`docs/PHASE5B_PLAN.md`.
+
+All frames end with SWAP_BUFFERS and set `FLAG_FRAME_COMPLETE`. The texture
+frame uses DS 16bpp (format 7) TXDS/TXDT chunks and no palette, so the
+`common/twlhd_pica_frame_prepare()` path decodes and swizzles them into RGBA8.
+The over-budget frame uses DS I2 (format 2) with a PLDT palette chunk.
+The texture frame emits `CMD_COLOR RGB555_WHITE` (0x8FFF) before every textured
+run; `tests/host/build/gx_interp_cli` on the generated frame confirms all 24
+vertices have RGBA `(1, 1, 1, 1)`, so the chosen MODULATE TexEnv shows the
+texels unchanged.
+
+### Procedure
+
+Build the host (needed once):
+
+    make azahar-host
+
+Generate the frames:
+
+    python3 tools/gen_tex_frames.py /tmp/tex_frames
+
+Run the textured frame. The ARM11 app looks for `sdmc:/twlhd_frame.bin`, so
+copy the chosen frame under that name inside `--sd-root`:
+
+    mkdir -p /tmp/tex_sd
+    cp /tmp/tex_frames/twlhd_frame_v2_tex.bin /tmp/tex_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/tex_shot --sd-root /tmp/tex_sd
+
+Repeat with the control frame:
+
+    cp /tmp/tex_frames/twlhd_frame_v2_tex_ctl.bin /tmp/tex_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/tex_ctl_shot --sd-root /tmp/tex_sd
+
+### Prediction and comparison
+
+The host preparation path was verified separately: `twlhd_pica_frame_prepare()`
+on the generated texture frame returns `OK` with 4 plan entries, 3 unique
+textures and 1792 arena bytes; entry 3 shares texture index 0 with entry 0.
+
+The repeatable, scripted check is `tools/check_tex_shot.py` (stdlib only). It
+reads the P6 PPM, samples four fixed rectangles on the top screen, and performs
+two independent checks:
+
+1. **Colour check:** counts the distinct colours in each rectangle and checks
+them against the expected checker (textured frame: base colour + white) or
+solid colour (control frame: one colour) within a per-channel tolerance.
+
+2. **Structure check (textured frames only):** measures the checker cell period
+along x and y inside each quad, compares it with the period predicted from the
+measured quad size and the known texture size, checks that the non-square
+16x8 region has a clearly different x/y cell ratio from the square regions,
+and checks that the two 8x8 regions (UR and LL, which share a texture) have
+the same cell pattern.
+
+Sample rectangles (top screen 400x240, x left-to-right, y top-to-bottom):
+
+| region | x range | y range | textured expectation | control expectation | texture size |
+|---|---|---|---|---|---|
+| UL | 70-170 | 75-110 | green + white | solid green | 16x8 |
+| UR | 270-340 | 75-110 | red + white | solid grey | 8x8 |
+| LL | 70-170 | 150-185 | red + white | solid red | 8x8 |
+| LR | 270-340 | 150-185 | blue + white | solid blue | 16x16 |
+
+Tolerances:
+- per-channel RGB distance `<= 40` for colour checks;
+- measured cell period within `25 %` (or `1 px`, whichever is larger) of the
+  period predicted from the quad size / texture size;
+- non-square region ratio must differ from the average square-region ratio by
+  more than `0.15`;
+- reused-texture phase must match within the RGB tolerance.
+
+Run the checker after generating both screenshots:
+
+    python3 tools/check_tex_shot.py /tmp/tex_shot_199.ppm --frame tex
+    python3 tools/check_tex_shot.py /tmp/tex_ctl_shot_199.ppm --frame ctl
+
+A matching textured frame prints `colour OK`, `structure OK`, `ratio OK` and
+`reuse OK` and exits 0; a mismatch exits non-zero. Synthetic match/mismatch
+cases are in `tools/test_check_tex_shot.py` and run as part of `make test`.
+
+### Over-budget fallback probe
+
+Generate a frame that exceeds the practical arena budget:
+
+    python3 tools/gen_tex_frames.py /tmp/tex_frames --over-budget 3
+
+The resulting `twlhd_frame_v2_tex_over.bin` has three distinct
+`(teximage_param, pltt_base)` keys, each describing a 1024x1024 I2 texture.
+`twlhd_pica_frame_arena_needed()` reports 12 MiB, which is above the 8 MiB
+practical cap. On hardware this frame should trigger the budget fallback in
+`arm11/source/main.c` and render as solid colours without crashing. The probe
+is not exercised in the Azahar screenshot comparison above.
+
+### Root cause of the identical-screenshot symptom
+
+The earlier reference run showed `tex_shot_199.ppm` byte-identical to
+`tex_ctl_shot_199.ppm`. The trace readout added for this round shows the ARM11
+code *did* reach the textured path: the bottom screen records
+`tex staged OK: 4 entries, 3 textures` and the trace ring at frame 199 includes
+`tex commit`, `tex bind`, and `clip tex DrawArrays`. The path was therefore
+being exercised, but the textured screenshot still matched the untextured
+control.
+
+The real cause is in `arm11/source/renderer.c`: `commit_pending_textures()`
+swaps the active texture set back into the pending slot and frees it on the
+next commit. In the old code the set was freed while Citro3d unit 0 still held
+the pointer from the previous `C3D_TexBind(0, tex)`. From that frame onward the
+bound texture memory was invalid, so the MODULATE TexEnv sampled effectively
+white texels and the output collapsed to the per-vertex base colour — exactly
+the same solid colours produced by the untextured control frame.
+
+The fix is `C3D_TexBind(0, NULL)` before every free of a possibly-bound set
+(`commit_pending_textures()`, the commit block in `draw_clip_internal()`,
+`renderer_set_clip_scene_textured()` pending replacement, `renderer_shutdown()`,
+and at the end of `draw_clip_textured_entries()`), plus the same lifecycle
+clear/commit in `renderer_set_geometry()` and the DEBUG draw branch. After the
+fix the texture set stays valid while bound, the screenshots differ, and
+the checker passes. This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
+
+### Reference run (EMULATOR)
+
+Reproduced in this sandbox, 2026-11-14, with the external core
+`/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+(Azahar `9c38437`) and the commands above.
+
+- `make azahar-host`: clean build, no warnings.
+- Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
+- Textured frame `tex_shot_199.ppm` sha256:
+  `58003d653e8d8c18b08af47ffcf3f6316460735e57a440fdeb9bc1f4a22f896a`.
+- Control frame `tex_ctl_shot_199.ppm` sha256:
+  `b1be377150b726bff4b43a7f85f407988ff3d310301c67c6d693693a37f4fa7c`.
+- The two screenshots differ; the texture path is exercised.
+- Bottom-screen readout at frame 199 shows the staging verdict
+  `tex staged OK: 4 entries, 3 textures` and the trace ring includes
+  `tex commit`, `tex bind`, and `clip tex DrawArrays`, confirming the
+  textured shader path ran. The control screenshot still prints no `T:`
+  trace-ring line because the renderer trace hook is only installed while a
+  textured frame is staged. The sha256s differ from the previous reference
+  run because the screenshots were regenerated with the repair-round-5
+  binary; the checker output and the control console layout are unchanged.
+- `check_tex_shot.py` output for the textured screenshot:
+
+      UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
+      UR colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LL colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LR colour OK: 2 distinct colours: (0, 0, 255) (255, 255, 255)
+      UL structure OK: quad=125x66 cells=4x2 predicted_period=31.2x33.0 measured_period=31.0x32.5
+      UR structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+      LL structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+      LR structure OK: quad=125x66 cells=4x4 predicted_period=31.2x16.5 measured_period=31.0x16.2
+      UL ratio OK: UL=0.95 square_avg=1.91 diff=0.95
+      UR==LL reuse OK: period=True phase=True
+
+- `check_tex_shot.py` output for the control screenshot:
+
+      UL colour OK: 1 distinct colours: (0, 255, 0)
+      UR colour OK: 1 distinct colours: (132, 132, 132)
+      LL colour OK: 1 distinct colours: (255, 0, 0)
+      LR colour OK: 1 distinct colours: (0, 0, 255)
+
+### Limits
+
+- Azahar's software renderer is not the real PICA200; it validates that the
+  ARM11 code path produces coherent GPU commands, not that hardware will accept
+  the texture layout or attribute permutation.
+- The exact screen positions of the quads are not predicted here; the test
+  only verifies that textures are bound and sampled.
+- No depth, blending or wrap-mode behaviour is verified beyond the chosen
+  MODULATE + NEAREST path.
+
 ## Licensing posture (not legal advice)
 
 DeSmuME (GPL-2.0-or-later) is used only as an external program. TWL-HD (Apache-2.0) neither links nor vendors it. Separate repositories alone are

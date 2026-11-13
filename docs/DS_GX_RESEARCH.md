@@ -676,6 +676,140 @@ diagram read bottom-up) and the independent oracle
 - **UNVERIFIED** sampler defaults: mag/min filter (nearest vs linear) and
   mipmap behaviour for DS textures.
 
+## ARM11 texture upload (5B-2e-2)
+
+Status: **BUILD only**; the arm11 renderer changes compile with devkitARM but
+are not run in the sandbox. The section documents the upload path chosen for
+stage 5B-2e-2 and every point that cannot be settled from the installed headers
+alone.
+
+### Header facts read from `/opt/devkitpro/libctru/include`
+
+- `C3D_Tex` exposes `void* data`, `GPU_TEXCOLOR fmt : 4`, `size_t size : 28`,
+  dimensions in a `dim` union (`u16 height; u16 width;`), plus `param`,
+  `border`, `lodParam` (`c3d/texture.h:20-41`). The `data` pointer is what the
+  CPU writes and the GPU samples.
+- `C3D_TexInitWithParams` takes `C3D_TexInitParams{width, height, maxLevel,
+  format, type, onVram}` (`c3d/texture.h:43-50`). `C3D_TexInit(tex, w, h,
+  fmt)` is the inline convenience path that sets `maxLevel=0`, `type=GPU_TEX_2D`,
+  `onVram=false` (`c3d/texture.h:78-81`). `onVram=false` means the texture
+  object is backed by linear (heap) memory, not VRAM.
+- `C3D_TexLoadImage(tex, data, face, level)` is declared but not implemented in
+  the installed tree (`c3d/texture.h:55`). Only the prebuilt `libcitro3d.a` and
+  the header are present, so whether it re-swizzles, flips, or copies the bytes
+  verbatim is **UNVERIFIED**.
+- `GPU_RGBA8 = 0x0` (`3ds/gpu/enums.h:65`).
+- Wrap register values are bit-identical to DS/PICA values:
+  `GPU_CLAMP_TO_EDGE=0`, `GPU_CLAMP_TO_BORDER=1`, `GPU_REPEAT=2`,
+  `GPU_MIRRORED_REPEAT=3` (`3ds/gpu/enums.h:35-41`), packed into `param` by
+  `GPU_TEXTURE_WRAP_S/T` (`3ds/gpu/enums.h:14-16`).
+- Filter register values: `GPU_NEAREST=0x0`, `GPU_LINEAR=0x1`
+  (`3ds/gpu/enums.h:62-63`), packed by `GPU_TEXTURE_MAG/MIN_FILTER`
+  (`3ds/gpu/enums.h:18-20`).
+
+### Chosen upload path
+
+**Decision:** `C3D_TexInit(tex, w, h, GPU_RGBA8)` allocates the texture, then a
+plain `memcpy` of the already-Mortonised RGBA8 bytes prepared by
+`twlhd_pica_frame_prepare()` into `tex->data`, followed by
+`GSPGPU_FlushDataCache(tex->data, bytes)`.
+
+**Justification:** The prepared bytes are already in the PICA200 RGBA8 layout
+(8x8 tiles, Morton order inside a tile, A,B,G,R component order, tile rows
+bottom-up — section "PICA texture upload (5B-2d)"). A raw copy keeps that
+layout exactly. Because `C3D_TexLoadImage`'s internal behaviour is **UNVERIFIED**
+(only the header is installed), feeding prepared bytes through an API that may
+swizzle again risks a double-swizzle corruption. The raw-copy path is fully
+under our control and matches the existing buffer-flush pattern documented in
+`arm11/source/renderer.c` (linearAlloc memory is CPU-cached; the GPU DMA path
+does not snoop the CPU cache).
+
+**What the header cannot settle (all UNVERIFIED):**
+
+- Whether `C3D_TexInit` zero-fills `tex->data` and what alignment `tex->data`
+  has.
+- Whether the linear allocator used by `onVram=false` satisfies the 128-byte
+  arena-start alignment assumed by `twlhd_pica_frame_prepare()`
+  (`common/twlhd_pica_frame.h:99`, `docs/DS_GX_RESEARCH.md` "Textured frame
+  preparation" budget table).
+- Whether the internal level layout expected by `C3D_Tex` for level 0 is exactly
+  the `width*height*4` byte layout produced by the offline swizzle.
+- VRAM limits and whether a future VRAM-backed path would need different
+  alignment or a transfer engine call.
+
+### Sampler state
+
+- **Filter:** `GPU_NEAREST` for both min and mag. This is a deliberate DS
+  fidelity decision: DS textures are sampled point-wise unless the game enables
+  smoothing (POLYGON_ATTR bit 8, `docs/DS_GX_RESEARCH.md` "Texture application").
+  The first textured renderer stage defaults to the DS point-sampled look.
+  Whether real PICA sampler defaults are nearest or linear remains **UNVERIFIED**.
+- **Wrap:** mapped directly from `TwlhdPicaWrap` 0..3 to
+  `GPU_TEXTURE_WRAP_PARAM` 0..3 with no re-mapping. The enum values are
+  bit-identical (Azahar `regs_texturing.h:27-31`, libctru `3ds/gpu/enums.h:35-41`).
+- **Mipmaps:** none. `C3D_TexInit` is called with the default `maxLevel=0`;
+  mipmap generation and trilinear filtering are out of scope for 5B-2e-2.
+
+### TexEnv (mode 1 = MODULATE)
+
+Textured plan entries use TexEnv stage 0 = `GPU_TEXTURE0` MODULATE
+`GPU_PRIMARY_COLOR`, on both RGB and alpha:
+
+    C3D_TexEnvSrc(env, C3D_Both, GPU_TEXTURE0, GPU_PRIMARY_COLOR, 0);
+    C3D_TexEnvFunc(env, C3D_Both, GPU_MODULATE);
+
+This is the chosen realisation of the DS default polygon mode MODULATE
+(`docs/DS_GX_RESEARCH.md` "Texture application": `rgb = tex_rgb * vtx_rgb / 63`,
+`a = tex_a * vtx_a / 31` from DeSmuME `rasterize.cpp:578-586`). DECAL,
+TOONHIGHLIGHT and SHADOW are not implemented in 5B-2e-2. Untextured entries keep
+the existing REPLACE/primary-colour path.
+
+### Attribute and buffer layout
+
+- The main vertex buffer stays 32 bytes per `TwlhdGxVertex` (`arm11/source/main.c`
+  static assert; `_Static_assert` at `arm11/source/renderer.c:36-37`).
+- Texcoords live in a second, separate buffer: 8 bytes per vertex,
+  `TwlhdPicaTexCoord{u,v}` (`common/twlhd_pica_tex.h:47-50`).
+- The textured clip shader adds attribute slot 2 = `(u,v)`
+  (`arm11/shaders/twlhd_clip_tex_vshader.v.pica:20,24,32`).
+- `BufInfo_Add` permutation `0x2` maps the second buffer to attribute 2, by the
+  same reasoning that `0x0` maps to attribute 0 and `0x1` to attribute 1
+  (`arm11/source/renderer.c:469-473`). The renderer refuses to draw if the
+  padding check (`twlhd_attr_pad_perm`) does not produce exactly that mapping
+  (`arm11/source/renderer.c:1186-1190`). Whether permutation `0x2` is correct on
+  real hardware is **UNVERIFIED** (build-only reasoning from the 0x0/0x1
+  precedent).
+
+### Budget and fallback
+
+The renderer uses the practical arena cap
+`TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES = 8 MiB`
+(`common/twlhd_pica_frame.h:99`). A single loaded frame may temporarily need:
+
+- the caller's arena (≤ 8 MiB practical);
+- an equal amount of `C3D_Tex` backing storage after upload (≈ 8 MiB);
+- a transient texcoord buffer (≤ 512 KiB for 65,536 vertices);
+- renderer scratch is avoided by preparing in the caller arena before upload.
+
+Peak steady-state ≈ 16.5 MiB, transient peak while copying could approach
+≈ 20.5 MiB if both the caller arena and the GPU copies coexist during upload.
+Whether this fits the arm11 heap / FCRAM budget is **UNVERIFIED**. Any
+allocation, prepare, or alignment failure forces a whole-frame fallback to the
+untextured clip path; the failure is traced and never a crash.
+
+### UNVERIFIED (need hardware or citro3d source)
+
+- **UNVERIFIED** whether `C3D_TexLoadImage` swizzles; only the header is
+  installed, so the raw-copy decision is build-reasoned, not proven.
+- **UNVERIFIED** whether `C3D_TexInit(..., onVram=false)` returns memory that
+  accepts the prepared layout byte-for-byte.
+- **UNVERIFIED** 128-byte alignment of `tex->data` and the arena base.
+- **UNVERIFIED** VRAM vs linear trade-offs and limits.
+- **UNVERIFIED** PICA sampler defaults (nearest/linear/mipmap).
+- **UNVERIFIED** whether attribute 2 with `BufInfo_Add` permutation `0x2` is the
+  correct mapping on hardware.
+- **UNVERIFIED** arm11 heap budget for the peak copy described above.
+
 ## Textured frame preparation (5B-2e-1)
 
 Status: **BUILD/UNIT only**, host-side C. Nothing EMULATOR or HARDWARE

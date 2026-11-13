@@ -21,6 +21,9 @@
 #include "twlhd_frame_parse.h"
 #include "twlhd_v2_parse.h"
 #include "twlhd_gx_interp.h"
+#include "twlhd_pica_frame.h"
+#include "twlhd_pica_tex.h"
+#include "twlhd_tex_draw_plan.h"
 #include "twlhd_vertex_convert.h"
 #include "twlhd_seq.h"
 #include "twlhd_diag_config.h"
@@ -32,6 +35,7 @@
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
 #define CLIP_VERTEX_CAPACITY 6144u
+#define CLIP_PLAN_CAPACITY (CLIP_VERTEX_CAPACITY / 3u)
 
 typedef struct {
     const char *mode;
@@ -53,12 +57,56 @@ static TwlhdParsedFrame g_parsed;
 static TwlhdVertex g_vertices[MAX_VERTICES];
 static TwlhdV2View g_v2view;
 static TwlhdGxVertex g_clip_vertices[CLIP_VERTEX_CAPACITY];
+static TwlhdGxTexVertex g_tex_vertices[CLIP_VERTEX_CAPACITY];
+static TwlhdPicaBindPlan g_plan[CLIP_PLAN_CAPACITY];
+static TwlhdPicaFrameTexture g_textures[TWLHD_PICA_FRAME_MAX_TEXTURES];
+static int32_t g_entry_texture[CLIP_PLAN_CAPACITY];
+static TwlhdPicaFrameEntryStatus g_entry_status[CLIP_PLAN_CAPACITY];
+static TwlhdPicaTexCoord g_texcoords[CLIP_VERTEX_CAPACITY];
+static _Alignas(128) uint8_t g_arena[TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES];
+static uint8_t g_scratch[TWLHD_PICA_FRAME_SCRATCH_BYTES];
 _Static_assert(sizeof(TwlhdGxVertex) == 32, "TwlhdGxVertex must be 32 bytes for the clip vertex layout");
 
 static SceneInfo g_scene;
 static char g_status[96];
 static char g_transport_status[64];
 static int g_fs_ready;
+
+/* Set to 1 while a textured v2 frame is staged/active; controls the trace-ring
+ * console line.  g_tex_hook tracks trace-hook ownership separately. */
+static int g_tex_path_attempted;
+static TwlhdTexHookState g_tex_hook;
+
+#define TRACE_RING_LEN 5
+static const char *g_trace_ring[TRACE_RING_LEN];
+static unsigned g_trace_head;
+
+static void trace_cb(const char *step) {
+    g_trace_ring[g_trace_head % TRACE_RING_LEN] = step;
+    g_trace_head++;
+}
+
+static const char *trace_latest(unsigned n) {
+    if (n >= TRACE_RING_LEN || n >= g_trace_head) return "";
+    return g_trace_ring[(g_trace_head - 1 - n) % TRACE_RING_LEN];
+}
+
+/* Apply the hook action decided by twlhd_tex_hook_*.  This is the only place
+ * in this file that calls renderer_set_trace(). */
+static void tex_hook_apply(TwlhdTexHookAction action) {
+    switch (action) {
+    case TWLHD_TEX_HOOK_TAKE:
+    case TWLHD_TEX_HOOK_REINSTALL:
+        renderer_set_trace(trace_cb);
+        break;
+    case TWLHD_TEX_HOOK_RESTORE:
+        renderer_set_trace(g_tex_hook.saved);
+        break;
+    case TWLHD_TEX_HOOK_NONE:
+    default:
+        break;
+    }
+}
 
 static int g_seq_on;
 static uint32_t g_seq_counter;
@@ -79,6 +127,81 @@ static void set_builtin_scene(void) {
 
 static uint32_t clamp_max(uint32_t v) { return v > 999999u ? 999999u : v; }
 static uint32_t clamp_4digit(uint32_t v) { return v > 9999u ? 9999u : v; }
+
+/*
+ * Try to stage the loaded v2 frame as a textured clip scene. Returns 1 if the
+ * renderer accepted the textured path, 0 if the caller should fall back to the
+ * existing untextured clip path. The texture feature can be disabled at compile
+ * time with TWLHD_DISABLE_TEXTURE_PATH.
+ */
+static int try_textured_clip_scene(uint32_t vertex_count,
+                                   const TwlhdGxViewport *viewport) {
+#ifdef TWLHD_DISABLE_TEXTURE_PATH
+    (void)vertex_count;
+    (void)viewport;
+    return 0;
+#else
+    TwlhdPicaFrameResult prep_result;
+    uint32_t arena_needed = 0;
+    uint32_t entry_count = 0;
+    uint32_t texture_count = 0;
+    uint32_t arena_used = 0;
+
+    prep_result = twlhd_pica_frame_arena_needed(
+        g_tex_vertices, vertex_count, &g_v2view, &arena_needed);
+    if (prep_result != TWLHD_PICA_FRAME_OK || arena_needed == 0u) {
+        /* Frames without texture chunks must be invisible to the trace stream,
+         * hook state and g_status compared with the untextured main path. */
+        g_tex_path_attempted = 0;
+        tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
+        return 0;
+    }
+
+    if (arena_needed > TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES) {
+        renderer_trace("tex budget fallback");
+        g_tex_path_attempted = 0;
+        tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
+        return 0;
+    }
+
+    g_tex_path_attempted = 1;
+    tex_hook_apply(twlhd_tex_hook_take(&g_tex_hook,
+                                       renderer_get_trace(), trace_cb));
+
+    prep_result = twlhd_pica_frame_prepare(
+        g_tex_vertices, vertex_count, &g_v2view,
+        g_plan, CLIP_PLAN_CAPACITY,
+        g_textures, TWLHD_PICA_FRAME_MAX_TEXTURES,
+        g_arena, sizeof(g_arena),
+        g_texcoords, CLIP_VERTEX_CAPACITY,
+        g_entry_texture, g_entry_status, CLIP_PLAN_CAPACITY,
+        g_scratch, sizeof(g_scratch),
+        &entry_count, &texture_count, &arena_used);
+
+    if (prep_result != TWLHD_PICA_FRAME_OK) {
+        renderer_trace("tex prepare fallback");
+        g_tex_path_attempted = 0;
+        tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
+        return 0;
+    }
+
+    if (renderer_set_clip_scene_textured(
+            g_clip_vertices, vertex_count, viewport,
+            g_plan, entry_count, g_entry_texture, g_entry_status,
+            g_textures, texture_count, g_arena, arena_used, g_texcoords,
+            CLIP_VERTEX_CAPACITY,
+            TWLHD_PICA_FRAME_MAX_TEXTURES,
+            TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES,
+            TWLHD_PICA_FRAME_MAX_TEXTURE_BYTES) == TWLHD_RENDER_OK) {
+        return 1;
+    }
+
+    renderer_trace("tex staging fallback");
+    g_tex_path_attempted = 0;
+    tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
+    return 0;
+#endif
+}
 
 static void status_line(const char *s) {
     char line[40]; size_t i;
@@ -199,10 +322,10 @@ static int load_sd_frame(const char *path,
             return -1;
         }
 
-        gx_result = twlhd_gx_interpret(&g_v2view, g_clip_vertices,
-                                       CLIP_VERTEX_CAPACITY,
-                                       &vertex_count, out_viewport,
-                                       out_gx_stats);
+        gx_result = twlhd_gx_interpret_ex(&g_v2view, g_clip_vertices,
+                                          CLIP_VERTEX_CAPACITY,
+                                          &vertex_count, out_viewport,
+                                          out_gx_stats, g_tex_vertices);
         if (gx_result != TWLHD_GX_OK) {
             snprintf(g_status, sizeof g_status,
                      "gx:%s s%lu c%lu i%lu",
@@ -273,6 +396,7 @@ static int load_sd_frame(const char *path,
  * | ignored (v1)          | "ignored: %lu outside-begin\n"            | ignored: 999999 outside-begin             | 29   |
  * | dropped (v1)          | "dropped: %lu incomplete\n\n"             | dropped: 999999 incomplete                | 26   |
  * | gx counters (v2)      | "stk%lu cap%lu inc%lu uns%lu vd%lu\n"    | stk9999 cap9999 inc9999 uns9999 vd9999    | 38   |
+ * | trace ring            | "T:%.8s|%.8s|%.8s|%.8s\n"                | T:tex comm|tex bind|clip tex|tex staged  | 38   |
  * | key legend            | "A=load SD  Y=builtin  X=seq  START=exit\n" | A=load SD  Y=builtin  X=seq  START=exit  | 39   |
  */
 static void update_console(void) {
@@ -344,6 +468,11 @@ static void update_console(void) {
                (unsigned long)clamp_4digit(g_scene.gx_stats.geometry_incomplete));
     }
 
+    if (g_tex_path_attempted) {
+        printf("T:%.8s|%.8s|%.8s|%.8s\n",
+               trace_latest(3), trace_latest(2), trace_latest(1),
+               trace_latest(0));
+    }
     printf("A=load SD  Y=builtin  X=seq  START=exit\n");
     status_line(g_transport_status);
     status_line(g_status);
@@ -369,6 +498,7 @@ int main(void) {
     memset(&pending_stats, 0, sizeof pending_stats);
     memset(&pending_viewport, 0, sizeof pending_viewport);
     memset(&pending_gx_stats, 0, sizeof pending_gx_stats);
+    twlhd_tex_hook_init(&g_tex_hook);
 
     gfxInitDefault();
     gfxSet3D(false);
@@ -521,6 +651,7 @@ int main(void) {
                 snprintf(g_status, sizeof g_status, "builtin: %s",
                          renderer_result_string(result));
             }
+            g_tex_path_attempted = 0;
             pending_builtin = 0;
             update_console();
         } else if (pending_load) {
@@ -529,10 +660,18 @@ int main(void) {
 
             seq_pending = 0;
             if (pending_is_v2) {
-                result = renderer_set_clip_scene(g_clip_vertices,
-                                                 pending_vertex_count,
-                                                 &pending_viewport);
+                if (!try_textured_clip_scene(pending_vertex_count,
+                                             &pending_viewport)) {
+                    result = renderer_set_clip_scene(g_clip_vertices,
+                                                     pending_vertex_count,
+                                                     &pending_viewport);
+                } else {
+                    result = TWLHD_RENDER_OK;
+                    snprintf(g_status, sizeof g_status, "tex: %s",
+                             renderer_get_tex_staging_status());
+                }
             } else {
+                g_tex_path_attempted = 0;
                 result = renderer_set_geometry(g_vertices, pending_vertex_count);
             }
 

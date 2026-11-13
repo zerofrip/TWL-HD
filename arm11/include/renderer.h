@@ -11,6 +11,8 @@
 #include <stdint.h>
 
 #include "twlhd_gx_interp.h"
+#include "twlhd_pica_frame.h"
+#include "twlhd_pica_tex.h"
 #include "twlhd_vertex_convert.h"
 
 typedef enum {
@@ -55,6 +57,22 @@ int renderer_set_clip_scene(const TwlhdGxVertex *vertices,
                             uint32_t vertex_count,
                             const TwlhdGxViewport *viewport);
 
+/* Stage a textured clip scene produced by twlhd_pica_frame_prepare(). On any
+ * failure the renderer falls back to the untextured clip path (the caller may
+ * also fall back by using renderer_set_clip_scene() instead). */
+int renderer_set_clip_scene_textured(
+    const TwlhdGxVertex *vertices, uint32_t vertex_count,
+    const TwlhdGxViewport *viewport,
+    const TwlhdPicaBindPlan *plan, uint32_t entry_count,
+    const int32_t *entry_texture,
+    const TwlhdPicaFrameEntryStatus *entry_status,
+    const TwlhdPicaFrameTexture *textures, uint32_t texture_count,
+    const uint8_t *arena, uint32_t arena_used,
+    const TwlhdPicaTexCoord *texcoords,
+    uint32_t texcoord_capacity,
+    uint32_t max_textures, uint32_t max_arena_bytes,
+    uint32_t max_texture_bytes);
+
 /* Records clear + uniforms + draw into the current C3D frame. Must be called
  * between C3D_FrameBegin()/C3D_FrameEnd(). */
 void renderer_draw(void);
@@ -62,6 +80,10 @@ void renderer_draw(void);
 int renderer_is_ready(void);
 uint32_t renderer_vertex_count(void);
 const char *renderer_result_string(int result);
+
+/* Last textured staging status from renderer_set_clip_scene_textured(),
+ * or an empty string if no textured staging has happened. */
+const char *renderer_get_tex_staging_status(void);
 
 /* Per-frame runtime debug toggles. All default to zero. Vertex buffer padding
  * is declared by default so that the declared bytes match the stride; NO_PAD
@@ -112,4 +134,5 @@ void renderer_set_debug_pad(uint32_t bytes);
 typedef void (*TwlhdRendererTraceFn)(const char *step);
 
 void renderer_set_trace(TwlhdRendererTraceFn cb);
+TwlhdRendererTraceFn renderer_get_trace(void);
 void renderer_trace(const char *step);
