@@ -67,19 +67,31 @@ TwlhdTexDrawVerdict twlhd_tex_draw_plan_build(
     for (i = 0; i < texture_count; i++) {
         uint32_t w = textures[i].width;
         uint32_t h = textures[i].height;
+        uint64_t bytes = (uint64_t)w * (uint64_t)h * 4u;
         if (w < 8u || h < 8u || w > 1024u || h > 1024u ||
             (w & (w - 1u)) != 0u || (h & (h - 1u)) != 0u ||
-            (w * h * 4u) > max_texture_bytes) {
+            bytes > max_texture_bytes) {
             return TWLHD_TEX_DRAW_FALLBACK_BUDGET;
+        }
+        if ((textures[i].offset & TEX_DRAW_ALIGN_MASK) != 0u ||
+            (uint64_t)textures[i].offset + bytes > arena_used) {
+            return TWLHD_TEX_DRAW_FALLBACK_ALIGN;
         }
     }
 
     for (i = 0; i < entry_count; i++) {
         TwlhdTexDrawEntry *out = &out_entries[i];
         int32_t slot = entry_texture[i];
+        uint64_t range_end = (uint64_t)plan[i].first_vertex +
+                             (uint64_t)plan[i].vertex_count;
         int is_untextured = (slot < 0 || slot >= (int32_t)texture_count ||
                              plan[i].untextured ||
                              entry_status[i] != TWLHD_PICA_FRAME_ENTRY_OK);
+
+        if (plan[i].vertex_count % 3u != 0u || range_end > vertex_count ||
+            range_end > UINT32_MAX) {
+            return TWLHD_TEX_DRAW_FALLBACK_RANGE;
+        }
 
         out->first_vertex = plan[i].first_vertex;
         out->vertex_count = plan[i].vertex_count;
@@ -114,6 +126,7 @@ const char *twlhd_tex_draw_verdict_string(TwlhdTexDrawVerdict verdict) {
     case TWLHD_TEX_DRAW_FALLBACK_BUDGET:  return "FALLBACK_BUDGET";
     case TWLHD_TEX_DRAW_FALLBACK_CAPACITY:return "FALLBACK_CAPACITY";
     case TWLHD_TEX_DRAW_FALLBACK_ALIGN:   return "FALLBACK_ALIGN";
+    case TWLHD_TEX_DRAW_FALLBACK_RANGE:   return "FALLBACK_RANGE";
     default:                              return "UNKNOWN";
     }
 }

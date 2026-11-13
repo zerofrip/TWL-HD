@@ -112,11 +112,9 @@ typedef struct {
 
 static TextureSet g_tex_active;
 static TextureSet g_tex_pending;
-static int g_textured_mode;
-static int g_tex_release_active_on_commit;
+static TwlhdTexLifecycleState g_tex_lifecycle;
 
 static void release_texture_set(TextureSet *set);
-static void clear_textured_mode(void);
 static int upload_textures(TextureSet *set, const TwlhdPicaFrameTexture *src,
                            uint32_t count, const uint8_t *arena);
 
@@ -628,9 +626,6 @@ void renderer_shutdown(void) {
         g_renderer.clip_tex_dvlb = NULL;
     }
 
-    /* Pending textures were never bound to a submitted frame; free them now. */
-    release_texture_set(&g_tex_pending);
-
     /* C3D_RenderTargetDelete drains the GPU queue, so the active buffer and
      * active texture set are safe to free only after it returns. See upstream
      * citro3d renderqueue.c/base.c, read from the devkitPro/citro3d
@@ -641,8 +636,19 @@ void renderer_shutdown(void) {
     }
 
     twlhd_geometry_slots_release_active(&g_renderer.slots);
-    release_texture_set(&g_tex_active);
-    g_tex_release_active_on_commit = 0;
+
+    /* Let the pure lifecycle state machine decide which texture sets are safe
+     * to release now that the GPU queue has drained. */
+    {
+        TwlhdTexLifecycleAction action =
+            twlhd_tex_lifecycle_shutdown(&g_tex_lifecycle);
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW) {
+            release_texture_set(&g_tex_pending);
+        }
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW) {
+            release_texture_set(&g_tex_active);
+        }
+    }
 
     if (g_official_buf) {
         linearFree(g_official_buf);
@@ -701,8 +707,7 @@ int renderer_init(void) {
     g_renderer.u_loc_clipfix = -1;
     g_renderer.u_loc_clipfix_tex = -1;
     /* Textured-mode state survives the RendererState wipe. */
-    g_textured_mode = 0;
-    g_tex_release_active_on_commit = 0;
+    twlhd_tex_lifecycle_init(&g_tex_lifecycle);
     /* Refresh the debug flags after the RendererState wipe. This also keeps
      * the debug-flag API reachable in the normal (non-diag) ELF so that nm
      * reports it; the call is a no-op when the flags are zero. */
@@ -927,7 +932,12 @@ int renderer_set_clip_scene(const TwlhdGxVertex *vertices,
     }
 
     /* A newly loaded untextured frame must not keep old texture state around. */
-    clear_textured_mode();
+    {
+        TwlhdTexLifecycleAction action = twlhd_tex_lifecycle_clear(&g_tex_lifecycle);
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW) {
+            release_texture_set(&g_tex_pending);
+        }
+    }
 
     g_renderer.vertex_count = vertex_count;
     g_renderer.pending_mode = RENDER_MODE_CLIP;
@@ -948,6 +958,7 @@ int renderer_set_clip_scene_textured(
     const TwlhdPicaFrameTexture *textures, uint32_t texture_count,
     const uint8_t *arena, uint32_t arena_used,
     const TwlhdPicaTexCoord *texcoords,
+    uint32_t texcoord_capacity,
     uint32_t max_textures, uint32_t max_arena_bytes,
     uint32_t max_texture_bytes) {
 
@@ -963,10 +974,6 @@ int renderer_set_clip_scene_textured(
         return TWLHD_RENDER_ERR_NULL;
     }
 
-    if (twlhd_geometry_slots_stage(&g_renderer.slots, vertices, bytes) != 0) {
-        return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
-    }
-
     memset(&set, 0, sizeof set);
 
     set.entries = (TwlhdTexDrawEntry *)linearAlloc(
@@ -976,7 +983,7 @@ int renderer_set_clip_scene_textured(
     verdict = twlhd_tex_draw_plan_build(
         plan, entry_count, entry_texture, entry_status, textures,
         texture_count, arena, arena_used, max_textures, max_arena_bytes,
-        max_texture_bytes, vertex_count, vertex_count, set.entries,
+        max_texture_bytes, texcoord_capacity, vertex_count, set.entries,
         entry_count, &plan_result);
 
     if (verdict != TWLHD_TEX_DRAW_OK) {
@@ -997,13 +1004,26 @@ int renderer_set_clip_scene_textured(
         goto fail;
     }
 
+    /* Geometry is staged last so a earlier failure leaves pending/active
+     * geometry state exactly as before the call. */
+    if (twlhd_geometry_slots_stage(&g_renderer.slots, vertices, bytes) != 0) {
+        release_texture_set(&set);
+        return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
+    }
+
     set.entry_count = entry_count;
     set.ready = 1;
 
-    /* Release any previous pending set and install the new one. */
-    release_texture_set(&g_tex_pending);
+    /* Let the lifecycle state machine decide whether the old pending set can
+     * be released now, then install the new one. */
+    {
+        TwlhdTexLifecycleAction action =
+            twlhd_tex_lifecycle_stage(&g_tex_lifecycle);
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW) {
+            release_texture_set(&g_tex_pending);
+        }
+    }
     g_tex_pending = set;
-    g_textured_mode = 1;
 
     g_renderer.vertex_count = vertex_count;
     g_renderer.pending_mode = RENDER_MODE_CLIP_TEXTURED;
@@ -1012,7 +1032,6 @@ int renderer_set_clip_scene_textured(
 
 fail:
     release_texture_set(&set);
-    clear_textured_mode();
     return TWLHD_RENDER_ERR_GEOMETRY_ALLOC;
 }
 
@@ -1166,30 +1185,15 @@ static void release_texture_set(TextureSet *set) {
     memset(set, 0, sizeof *set);
 }
 
-/* Promote the pending texture set to active. The old active set is released;
- * this must run after C3D_FrameBegin has drained the prior frame's queue. */
+/* Promote the pending texture set to active. The caller must already have
+ * handled any active-set release requested by twlhd_tex_lifecycle_commit(). */
 static void commit_pending_textures(void) {
     TextureSet tmp = g_tex_active;
     g_tex_active = g_tex_pending;
     g_tex_pending = tmp;
-    release_texture_set(&g_tex_pending);
-}
-
-/* Drop the whole textured path and force the next draw to use the untextured
- * clip path.  Called from staging (between frames), so the active texture set
- * may still be read by the GPU for the previously submitted frame.  We
- * therefore release only the pending set here and schedule the active set for
- * release at the next commit, after C3D_FrameBegin has drained the in-flight
- * frame.  The shutdown path in renderer_shutdown() releases the active set only
- * after C3D_RenderTargetDelete(), which drains the GPU queue.  See upstream
- * citro3d renderqueue.c/base.c, read from the devkitPro/citro3d repository;
- * HARDWARE UNVERIFIED. */
-static void clear_textured_mode(void) {
-    release_texture_set(&g_tex_pending);
-    if (g_tex_active.ready) {
-        g_tex_release_active_on_commit = 1;
+    if (g_tex_pending.ready) {
+        release_texture_set(&g_tex_pending);
     }
-    g_textured_mode = 0;
 }
 
 /* PICA200 attribute/buffer setup for the textured clip shader: two float4
@@ -1346,7 +1350,13 @@ static void draw_clip_textured_entries(void) {
                 renderer_trace("tex attr");
                 C3D_BindProgram(&g_renderer.clip_tex_program);
                 if (setup_clip_textured_attrs(g_tex_active.tc_buf) != 0) {
-                    return;
+                    renderer_trace("clip tex attr fail");
+                    C3D_BindProgram(&g_renderer.clip_program);
+                    setup_clip_untextured_attrs();
+                    setup_clip_untextured_texenv(diag);
+                    current_textured = 0;
+                    current_slot = -1;
+                    goto draw_arrays;
                 }
                 renderer_trace("clip tex uniform");
                 /* C3D_Mtx rows are stored w,z,y,x; copy the row-major
@@ -1375,6 +1385,7 @@ static void draw_clip_textured_entries(void) {
             setup_clip_textured_texenv();
         }
 
+draw_arrays:
         renderer_trace("clip tex DrawArrays");
         C3D_DrawArrays(GPU_TRIANGLES, (int)e->first_vertex,
                        (int)e->vertex_count);
@@ -1406,10 +1417,13 @@ static void draw_clip_internal(int committed) {
                sizeof g_renderer.clipfix_active);
     }
 
-    if (g_tex_release_active_on_commit) {
-        renderer_trace("tex release on commit");
-        release_texture_set(&g_tex_active);
-        g_tex_release_active_on_commit = 0;
+    {
+        TwlhdTexLifecycleAction action =
+            twlhd_tex_lifecycle_commit(&g_tex_lifecycle);
+        if (action & TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW) {
+            renderer_trace("tex release on commit");
+            release_texture_set(&g_tex_active);
+        }
     }
 
     if (g_tex_pending.ready) {
@@ -1487,7 +1501,7 @@ static void draw_clip_internal(int committed) {
     C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, g_renderer.u_loc_clipfix, &m4);
 
     renderer_trace("clip DrawArrays");
-    if (g_textured_mode && g_tex_active.ready) {
+    if (g_tex_lifecycle.textured_mode && g_tex_active.ready) {
         draw_clip_textured_entries();
     } else if (g_renderer.slots.active && g_renderer.vertex_count) {
         C3D_DrawArrays(GPU_TRIANGLES, 0, (int)g_renderer.vertex_count);

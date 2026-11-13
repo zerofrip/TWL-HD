@@ -137,6 +137,7 @@ static int try_textured_clip_scene(uint32_t vertex_count,
             g_clip_vertices, vertex_count, viewport,
             g_plan, entry_count, g_entry_texture, g_entry_status,
             g_textures, texture_count, g_arena, arena_used, g_texcoords,
+            CLIP_VERTEX_CAPACITY,
             TWLHD_PICA_FRAME_MAX_TEXTURES,
             TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES,
             TWLHD_PICA_FRAME_MAX_TEXTURE_BYTES) == TWLHD_RENDER_OK) {

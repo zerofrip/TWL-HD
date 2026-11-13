@@ -69,6 +69,7 @@ int renderer_set_clip_scene_textured(
     const TwlhdPicaFrameTexture *textures, uint32_t texture_count,
     const uint8_t *arena, uint32_t arena_used,
     const TwlhdPicaTexCoord *texcoords,
+    uint32_t texcoord_capacity,
     uint32_t max_textures, uint32_t max_arena_bytes,
     uint32_t max_texture_bytes);
 
