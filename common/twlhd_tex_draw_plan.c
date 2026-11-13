@@ -194,3 +194,30 @@ TwlhdTexLifecycleAction twlhd_tex_lifecycle_shutdown(TwlhdTexLifecycleState *s) 
     s->drop_active_on_commit = 0;
     return a;
 }
+
+void twlhd_tex_hook_init(TwlhdTexHookState *s) {
+    s->installed = 0;
+    s->saved = NULL;
+}
+
+TwlhdTexHookAction twlhd_tex_hook_take(TwlhdTexHookState *s,
+                                       TwlhdTexHookFn current,
+                                       TwlhdTexHookFn ours) {
+    (void)ours;
+    if (s->installed) {
+        /* Already own the hook: keep the original saved hook and reinstall
+         * ours so a textured->textured sequence never saves trace_cb itself. */
+        return TWLHD_TEX_HOOK_REINSTALL;
+    }
+    s->installed = 1;
+    s->saved = current;
+    return TWLHD_TEX_HOOK_TAKE;
+}
+
+TwlhdTexHookAction twlhd_tex_hook_leave(TwlhdTexHookState *s) {
+    if (!s->installed) {
+        return TWLHD_TEX_HOOK_NONE;
+    }
+    s->installed = 0;
+    return TWLHD_TEX_HOOK_RESTORE;
+}

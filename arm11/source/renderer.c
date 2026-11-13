@@ -170,6 +170,10 @@ void renderer_set_trace(TwlhdRendererTraceFn cb) {
     g_trace = cb;
 }
 
+TwlhdRendererTraceFn renderer_get_trace(void) {
+    return g_trace;
+}
+
 void renderer_trace(const char *step) {
     if (g_trace) g_trace(step);
 }

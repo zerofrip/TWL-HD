@@ -134,4 +134,5 @@ void renderer_set_debug_pad(uint32_t bytes);
 typedef void (*TwlhdRendererTraceFn)(const char *step);
 
 void renderer_set_trace(TwlhdRendererTraceFn cb);
+TwlhdRendererTraceFn renderer_get_trace(void);
 void renderer_trace(const char *step);

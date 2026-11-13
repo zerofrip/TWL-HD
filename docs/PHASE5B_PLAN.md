@@ -416,7 +416,7 @@ Status labels:
   `test_diag_config.c:231-234, 248-251`. `tests/host/test_blend_config.c` was
   not changed. No assertion was loosened. Mutation report
   `docs/reports/5b2e2-mutation-report.md` covers
-  `common/twlhd_tex_draw_plan.c` (105 unique mutants, 78 killed by tests,
+  `common/twlhd_tex_draw_plan.c` (109 unique mutants, 82 killed by tests,
   20 killed by `-Werror` build, 7 equivalent survivors).
 - **EMULATOR:** generator script `tools/gen_tex_frames.py` and checker
   `tools/check_tex_shot.py` committed with a documented procedure; see
@@ -424,11 +424,12 @@ Status labels:
   sandbox with `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
   (Azahar `9c38437`). The regenerated screenshots differ:
   `tex_shot_199.ppm` sha256
-  `7c74e132cf5e269b775ad607633cf34a5a8ba4f31a13b468906f46dd6d6500df`,
+  `58003d653e8d8c18b08af47ffcf3f6316460735e57a440fdeb9bc1f4a22f896a`,
   `tex_ctl_shot_199.ppm` sha256
-  `5eb9a7b00858dae3eb48a03eae4c78a8e08102add0e22d3ac2fb206db5d58211`.
-  The control screenshot sha256 changed because the `T:` trace-ring console
-  line is now printed only when the texture path is active.
+  `b1be377150b726bff4b43a7f85f407988ff3d310301c67c6d693693a37f4fa7c`.
+  The screenshots were regenerated with the repair-round-5 binary; the
+  control console layout is unchanged (no `T:` trace-ring line on untextured
+  frames) and the checker output matches the previous reference run.
   The bottom-screen readout shows `tex staged OK: 4 entries, 3 textures` and
   the trace ring includes `tex commit`, `tex bind`, and `clip tex DrawArrays`,
   confirming the texture path is exercised. `check_tex_shot.py --frame tex`
@@ -450,6 +451,13 @@ Status labels:
   `> 0.15`. This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
 - **HARDWARE:** NOT RUN. A draft procedure is below; needs owner approval
   before any console action.
+
+Requirement 2 verification: the silent no-texture path in
+`arm11/source/main.c:152-157` contains no `renderer_trace()` call, no write to
+`g_status`, and the only `renderer_set_trace()` action is the guarded restore
+from `tex_hook_apply()` at line 156, which is a no-op when no textured frame
+owns the hook; the builtin path (`main.c:654-655`) and v1 path
+(`main.c:674-675`) contain no renderer trace-function calls at all.
 
 What changed:
 
@@ -473,17 +481,21 @@ What changed:
 - `arm11/include/renderer.h`: new staged API alongside the existing untextured
   functions; existing signatures unchanged.
 - `arm11/source/main.c`: switched to `twlhd_gx_interpret_ex()` so per-vertex
-  texture latches are filled; at v2 load it calls `arena_needed` and, only when
-  the frame actually carries texture data and fits the budget, installs the
-  renderer trace hook (`renderer_set_trace(trace_cb)` at line 145) and calls
-  `prepare()` + the new renderer API; otherwise it clears the hook and the
-  existing `renderer_set_clip_scene()` path runs unchanged. The hook is also
-  cleared on the built-in triangle path (lines 628-629) and the v1 geometry
-  path (lines 649-650) so untextured frames never run the callback. The
-  no-texture v2 branch (lines 130-135) returns 0 without overwriting
-  `g_status`. The `T:` trace-ring line in `update_console()` (line 446) is
-  printed only when `g_tex_path_attempted` is set, so untextured/control frames
-  keep the original bottom-screen layout.
+  texture latches are filled; the texture path now saves the renderer trace
+  hook before installing `trace_cb` and restores the saved hook (never `NULL`)
+  on fallbacks or when the textured frame ends. `tex_hook_apply()` at
+  `main.c:95-105` is the only place in the file that calls
+  `renderer_set_trace()`. The hook is installed at `main.c:168-169` only after
+  the frame carries texture data and fits the budget; budget/prepare/staging
+  fallbacks (`main.c:160-164`, `main.c:181-185`, `main.c:199-202`) call the
+  guarded restore. The builtin path (`main.c:654-655`) and v1 geometry path
+  (`main.c:674-675`) never touch the trace hook. The silent no-texture v2
+  branch (`main.c:152-157`) performs a guarded restore, emits no trace marker,
+  writes no `g_status`, and is otherwise identical to the untextured path.
+  `TWLHD_DISABLE_TEXTURE_PATH` now compiles to a zero-side-effect early return.
+  The `T:` trace-ring line in `update_console()` (`main.c:471`) is printed only
+  when `g_tex_path_attempted` is set, so untextured/control frames keep the
+  original bottom-screen layout.
 - `arm11/shaders/twlhd_clip_tex_vshader.v.pica`: clip shader variant that
   passes a separate `(u,v)` attribute to `texcoord0`; existing shaders untouched.
 - `tools/check_tex_shot.py` / `tools/test_check_tex_shot.py`: stdlib-only

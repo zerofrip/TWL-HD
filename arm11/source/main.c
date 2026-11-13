@@ -73,8 +73,9 @@ static char g_transport_status[64];
 static int g_fs_ready;
 
 /* Set to 1 while a textured v2 frame is staged/active; controls the trace-ring
- * console line and the renderer_trace() callback lifetime. */
+ * console line.  g_tex_hook tracks trace-hook ownership separately. */
 static int g_tex_path_attempted;
+static TwlhdTexHookState g_tex_hook;
 
 #define TRACE_RING_LEN 5
 static const char *g_trace_ring[TRACE_RING_LEN];
@@ -88,6 +89,23 @@ static void trace_cb(const char *step) {
 static const char *trace_latest(unsigned n) {
     if (n >= TRACE_RING_LEN || n >= g_trace_head) return "";
     return g_trace_ring[(g_trace_head - 1 - n) % TRACE_RING_LEN];
+}
+
+/* Apply the hook action decided by twlhd_tex_hook_*.  This is the only place
+ * in this file that calls renderer_set_trace(). */
+static void tex_hook_apply(TwlhdTexHookAction action) {
+    switch (action) {
+    case TWLHD_TEX_HOOK_TAKE:
+    case TWLHD_TEX_HOOK_REINSTALL:
+        renderer_set_trace(trace_cb);
+        break;
+    case TWLHD_TEX_HOOK_RESTORE:
+        renderer_set_trace(g_tex_hook.saved);
+        break;
+    case TWLHD_TEX_HOOK_NONE:
+    default:
+        break;
+    }
 }
 
 static int g_seq_on;
@@ -118,7 +136,11 @@ static uint32_t clamp_4digit(uint32_t v) { return v > 9999u ? 9999u : v; }
  */
 static int try_textured_clip_scene(uint32_t vertex_count,
                                    const TwlhdGxViewport *viewport) {
-#ifndef TWLHD_DISABLE_TEXTURE_PATH
+#ifdef TWLHD_DISABLE_TEXTURE_PATH
+    (void)vertex_count;
+    (void)viewport;
+    return 0;
+#else
     TwlhdPicaFrameResult prep_result;
     uint32_t arena_needed = 0;
     uint32_t entry_count = 0;
@@ -128,21 +150,23 @@ static int try_textured_clip_scene(uint32_t vertex_count,
     prep_result = twlhd_pica_frame_arena_needed(
         g_tex_vertices, vertex_count, &g_v2view, &arena_needed);
     if (prep_result != TWLHD_PICA_FRAME_OK || arena_needed == 0u) {
-        renderer_trace("tex arena silent fallback");
+        /* Frames without texture chunks must be invisible to the trace stream,
+         * hook state and g_status compared with the untextured main path. */
         g_tex_path_attempted = 0;
-        renderer_set_trace(NULL);
+        tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
         return 0;
     }
 
     if (arena_needed > TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES) {
         renderer_trace("tex budget fallback");
         g_tex_path_attempted = 0;
-        renderer_set_trace(NULL);
+        tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
         return 0;
     }
 
     g_tex_path_attempted = 1;
-    renderer_set_trace(trace_cb);
+    tex_hook_apply(twlhd_tex_hook_take(&g_tex_hook,
+                                       renderer_get_trace(), trace_cb));
 
     prep_result = twlhd_pica_frame_prepare(
         g_tex_vertices, vertex_count, &g_v2view,
@@ -157,7 +181,7 @@ static int try_textured_clip_scene(uint32_t vertex_count,
     if (prep_result != TWLHD_PICA_FRAME_OK) {
         renderer_trace("tex prepare fallback");
         g_tex_path_attempted = 0;
-        renderer_set_trace(NULL);
+        tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
         return 0;
     }
 
@@ -171,11 +195,12 @@ static int try_textured_clip_scene(uint32_t vertex_count,
             TWLHD_PICA_FRAME_MAX_TEXTURE_BYTES) == TWLHD_RENDER_OK) {
         return 1;
     }
-#endif
+
     renderer_trace("tex staging fallback");
     g_tex_path_attempted = 0;
-    renderer_set_trace(NULL);
+    tex_hook_apply(twlhd_tex_hook_leave(&g_tex_hook));
     return 0;
+#endif
 }
 
 static void status_line(const char *s) {
@@ -473,6 +498,7 @@ int main(void) {
     memset(&pending_stats, 0, sizeof pending_stats);
     memset(&pending_viewport, 0, sizeof pending_viewport);
     memset(&pending_gx_stats, 0, sizeof pending_gx_stats);
+    twlhd_tex_hook_init(&g_tex_hook);
 
     gfxInitDefault();
     gfxSet3D(false);
@@ -626,7 +652,6 @@ int main(void) {
                          renderer_result_string(result));
             }
             g_tex_path_attempted = 0;
-            renderer_set_trace(NULL);
             pending_builtin = 0;
             update_console();
         } else if (pending_load) {
@@ -647,7 +672,6 @@ int main(void) {
                 }
             } else {
                 g_tex_path_attempted = 0;
-                renderer_set_trace(NULL);
                 result = renderer_set_geometry(g_vertices, pending_vertex_count);
             }
 
