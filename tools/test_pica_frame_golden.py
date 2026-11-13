@@ -173,6 +173,7 @@ def _frame_specs():
     h = _param(7, ss=3, st=1)        # 64x8 16bpp
     i = _param(4, st=3)              # 8x64 I8
     missing = _param(7)              # no record with pltt 0 in this frame
+    m2 = _param(7, st=1)             # 8x16 key that no record carries
     big_w = _param(7, ss=7)          # 1024x8, the largest width
     big_h = _param(7, st=7)          # 8x1024, the largest height
 
@@ -187,6 +188,11 @@ def _frame_specs():
         [(a, 0), (b, 0), (a, 3), None, (a, 0)],
         # Largest DS width/height keep the defensive PICA size check honest.
         [(big_w, 11), (big_h, 12), (big_w, 11)],
+        # An untextured run before any textured run: it must not consume a
+        # texture slot (the CLI sizes the texture buffer to the entry count).
+        [None, (a, 0), (b, 1)],
+        # A NO_DATA run before any textured run, untextured last.
+        [("missing", m2, 0), (c, 2), None],
     ]
 
 
