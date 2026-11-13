@@ -405,21 +405,23 @@ Status labels:
   `arm11/shaders/twlhd_clip_tex_vshader.v.pica` assembles via picasso in both
   builds.
 - **UNIT:** `make test` green, including the new
-  `tests/host/test_tex_draw_plan`; existing structural tests
-  (`test_blend_config`, `test_diag_config`) unchanged. Mutation report
-  `docs/reports/5b2e2-mutation-report.md` covers the new pure module
-  `common/twlhd_tex_draw_plan.c`.
-- **EMULATOR:** generator script `tools/gen_tex_frames.py` committed with a
-  documented procedure; see `docs/EMULATOR_VALIDATION.md` and
-  `tools/azahar_host/README.md` for the exact command. Ran with
-  `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+  `tests/host/test_tex_draw_plan` and `tools/test_check_tex_shot.py`; existing
+  structural tests (`test_blend_config`, `test_diag_config`) re-pinned where
+  the new code shifted counts. Mutation report
+  `docs/reports/5b2e2-mutation-report.md` covers
+  `common/twlhd_tex_draw_plan.c` (93 unique mutants, 68 killed by tests,
+  18 killed by `-Werror` build, 7 equivalent survivors).
+- **EMULATOR:** generator script `tools/gen_tex_frames.py` and checker
+  `tools/check_tex_shot.py` committed with a documented procedure; see
+  `docs/EMULATOR_VALIDATION.md` for the exact commands. Reproduced in this
+  sandbox with `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
   (Azahar `9c38437`): the textured frame produced red/green/blue checker
   patterns in the same regions where the untextured control frame produced
-  solid red/green/blue quads, confirming texture binding and sampling. The
-  textured screenshot `tex_shot_199.ppm` has sha256
-  `cf036bb71ffc61bdde0efd5e072e1e7e44faf66583bcba8bd779565dd3ff5a18`
-  (deterministic across two runs); the control screenshot has sha256
-  `10aaaaeeea48d6a601d17b1b0da8b1fed719f543b1f8ae0d3d802bb50e2f492e`.
+  solid red/green/blue/grey quads, confirming texture binding and sampling.
+  The textured screenshot `tex_shot_199.ppm` has sha256
+  `1745dd48a973c082b7d52d2c5144fa8ac1a03d987844088f26a1906d7765a7be`;
+  the control screenshot has sha256
+  `a4873584f750eba6b3653e84d49aa31faeb2df6141aad42c91f42afdb4cfd25b`.
   This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
 - **HARDWARE:** NOT RUN. A draft procedure is below; needs owner approval
   before any console action.
@@ -428,14 +430,17 @@ What changed:
 
 - `common/twlhd_tex_draw_plan.[ch]`: allocation-free pure C module that maps a
   prepared frame (`plan[]`, `entry_texture[]`, `entry_status[]`, texture table,
-  arena) to per-entry draw descriptors and a whole-frame verdict. Wrap/filter
-  codes are exported as constants bit-identical to libctru.
+  arena) to per-entry draw descriptors and a whole-frame verdict. Texture sizes
+  are guarded to PICA200 power-of-two limits (8..1024). A new pure lifecycle
+  state machine mirrors the pending/active release rule used by the renderer.
+  Wrap/filter codes are exported as constants bit-identical to libctru.
 - `arm11/source/renderer.c`: textured clip-scene staging API
   `renderer_set_clip_scene_textured()`; per-entry draw loop with texture bind,
   wrap/filter, separate texcoord buffer, and untextured fallback for
   `NO_DATA`/`UNSUPPORTED`/failed entries; whole-frame fallback on any allocation
-  or prepare failure; resource lifecycle in `renderer_shutdown()` and on frame
-  reload using pending/active texture sets.
+  or prepare failure; resource lifecycle fixed so the active texture set is
+  released only at commit or after `C3D_RenderTargetDelete()`; separate textured
+  shader uniform lookup for `clipfix`.
 - `arm11/include/renderer.h`: new staged API alongside the existing untextured
   functions; existing signatures unchanged.
 - `arm11/source/main.c`: switched to `twlhd_gx_interpret_ex()` so per-vertex
@@ -444,9 +449,13 @@ What changed:
   otherwise the existing `renderer_set_clip_scene()` path runs unchanged.
 - `arm11/shaders/twlhd_clip_tex_vshader.v.pica`: clip shader variant that
   passes a separate `(u,v)` attribute to `texcoord0`; existing shaders untouched.
-- `docs/DS_GX_RESEARCH.md`: new "ARM11 texture upload (5B-2e-2)" section with
-  the upload decision, header citations, filter decision, TexEnv rule, and
-  UNVERIFIED list.
+- `tools/check_tex_shot.py` / `tools/test_check_tex_shot.py`: stdlib-only
+  screenshot checker and its synthetic PPM unit tests.
+- `docs/EMULATOR_VALIDATION.md`: documented checker command, rectangles,
+  tolerance, and real checker output.
+- `docs/reports/5b2e2-mutation-report.md`: rerun with the final module.
+- Structural tests `tests/host/test_diag_config.c` re-pinned for the new
+  `draw_clip_textured_entries()` diagnostic-config lookup.
 
 Compile-time/runtime switch:
 

@@ -177,10 +177,12 @@ static void test_source_files(const char *path) {
     FILE *f = fopen(path, "rb");
     size_t n;
     const char *clip;
+    const char *clip_tex;
     const char *debug;
     const char *console;
     const char *setter;
     static char clip_body[65536];
+    static char clip_tex_body[65536];
     static char debug_body[65536];
     static char console_body[65536];
     static char set_body[65536];
@@ -209,7 +211,7 @@ static void test_source_files(const char *path) {
             CHECK_EQ_INT(count_substr(console, "twlhd_diag_config("), 1);
         }
     } else if (strstr(path, "renderer.c") != NULL) {
-        CHECK_EQ_INT(count_substr(buf, "twlhd_diag_config("), 1);
+        CHECK_EQ_INT(count_substr(buf, "twlhd_diag_config("), 2);
 
         CHECK_EQ_INT(count_substr(buf, "g_diag_mode ="), 1);
         CHECK_EQ_INT(count_substr(buf, "g_diag_mode = mode;"), 1);
@@ -221,11 +223,15 @@ static void test_source_files(const char *path) {
         if (setter != NULL) {
             CHECK_EQ_INT(count_substr(setter, "g_diag_mode"), 1);
         }
-        CHECK_EQ_INT(count_substr(buf, "g_diag_mode"), 4);
+        CHECK_EQ_INT(count_substr(buf, "g_diag_mode"), 5);
 
         clip = extract_function(buf, "static void draw_clip_internal(",
                                 "draw_clip_internal", clip_body,
                                 sizeof(clip_body));
+        clip_tex = extract_function(buf,
+                                    "static void draw_clip_textured_entries(",
+                                    "draw_clip_textured_entries",
+                                    clip_tex_body, sizeof(clip_tex_body));
         debug = extract_function(buf, "static void draw_debug_internal(",
                                  "draw_debug_internal", debug_body,
                                  sizeof(debug_body));
@@ -237,6 +243,11 @@ static void test_source_files(const char *path) {
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaBlend("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaTest("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_TexEnvColor("), 1);
+        }
+
+        if (clip_tex != NULL) {
+            CHECK_EQ_INT(count_substr(clip_tex, "twlhd_diag_config("), 1);
+            CHECK_EQ_INT(count_substr(clip_tex, "twlhd_diag_config(g_diag_mode)"), 1);
         }
 
         if (debug != NULL) {

@@ -8,6 +8,7 @@
 #include "twlhd_tex_draw_plan.h"
 
 #include <stddef.h>
+#include <string.h>
 
 #define TEX_DRAW_ALIGN_MASK 127u
 
@@ -67,6 +68,7 @@ TwlhdTexDrawVerdict twlhd_tex_draw_plan_build(
         uint32_t w = textures[i].width;
         uint32_t h = textures[i].height;
         if (w < 8u || h < 8u || w > 1024u || h > 1024u ||
+            (w & (w - 1u)) != 0u || (h & (h - 1u)) != 0u ||
             (w * h * 4u) > max_texture_bytes) {
             return TWLHD_TEX_DRAW_FALLBACK_BUDGET;
         }
@@ -114,4 +116,68 @@ const char *twlhd_tex_draw_verdict_string(TwlhdTexDrawVerdict verdict) {
     case TWLHD_TEX_DRAW_FALLBACK_ALIGN:   return "FALLBACK_ALIGN";
     default:                              return "UNKNOWN";
     }
+}
+
+void twlhd_tex_lifecycle_init(TwlhdTexLifecycleState *s) {
+    memset(s, 0, sizeof(*s));
+}
+
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_stage(TwlhdTexLifecycleState *s) {
+    TwlhdTexLifecycleAction a = s->pending_ready
+                                    ? TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW
+                                    : TWLHD_TEX_LIFECYCLE_NONE;
+    s->pending_ready = 1;
+    s->textured_mode = 1;
+    return a;
+}
+
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_clear(TwlhdTexLifecycleState *s) {
+    TwlhdTexLifecycleAction a = s->pending_ready
+                                    ? TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW
+                                    : TWLHD_TEX_LIFECYCLE_NONE;
+    s->pending_ready = 0;
+    s->textured_mode = 0;
+    if (s->active_ready) {
+        s->drop_active_on_commit = 1;
+    }
+    return a;
+}
+
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_commit(TwlhdTexLifecycleState *s) {
+    TwlhdTexLifecycleAction a = TWLHD_TEX_LIFECYCLE_NONE;
+
+    if (s->drop_active_on_commit) {
+        if (s->active_ready) {
+            a |= TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW;
+        }
+        s->active_ready = 0;
+        s->drop_active_on_commit = 0;
+    }
+
+    if (s->pending_ready) {
+        if (s->active_ready) {
+            a |= TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW;
+            s->active_ready = 0;
+        }
+        s->active_ready = 1;
+        s->pending_ready = 0;
+        s->textured_mode = 1;
+    }
+
+    return a;
+}
+
+TwlhdTexLifecycleAction twlhd_tex_lifecycle_shutdown(TwlhdTexLifecycleState *s) {
+    TwlhdTexLifecycleAction a = TWLHD_TEX_LIFECYCLE_NONE;
+    if (s->pending_ready) {
+        a |= TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW;
+    }
+    if (s->active_ready) {
+        a |= TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW;
+    }
+    s->pending_ready = 0;
+    s->active_ready = 0;
+    s->textured_mode = 0;
+    s->drop_active_on_commit = 0;
+    return a;
 }

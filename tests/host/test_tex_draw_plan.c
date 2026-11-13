@@ -2,8 +2,8 @@
 /*
  * Host tests for common/twlhd_tex_draw_plan.c (stage 5B-2e-2).
  *
- * Pure C11, no GPU. Hand-computed expectations; every fallback path and a
- * guard-byte harness are exercised.
+ * Pure C11, no GPU. Hand-computed expectations; every fallback path, a
+ * guard-byte harness, and the lifecycle state machine are exercised.
  */
 #include <stddef.h>
 #include <stdint.h>
@@ -112,6 +112,8 @@ static void test_no_texture(void) {
                      MAX_VERTICES, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_NO_TEXTURE);
     CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 1);
+    CHECK_EQ_INT(g_result.texture_count, 0);
     CHECK_EQ_INT(g_out[0].texture_slot, -1);
     CHECK_EQ_INT(g_out[0].untextured, 1);
 
@@ -144,6 +146,8 @@ static void test_failed_entries_untextured(void) {
                      MAX_VERTICES, 6u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_NO_TEXTURE);
     CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 2);
+    CHECK_EQ_INT(g_result.texture_count, 1);
     CHECK_EQ_INT(g_out[0].texture_slot, -1);
     CHECK_EQ_INT(g_out[0].untextured, 1);
     CHECK_EQ_INT(g_out[1].texture_slot, -1);
@@ -171,6 +175,9 @@ static void test_budget_fallback(void) {
                      1u, g_arena, 513u, 1u, 512u, 1024u * 1024u * 4u,
                      MAX_VERTICES, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
 
     /* texture_count exceeds max_textures. */
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
@@ -178,6 +185,7 @@ static void test_budget_fallback(void) {
                      2u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
                      MAX_VERTICES, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
 
     /* vertex_count exceeds max_texcoords. */
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
@@ -185,6 +193,7 @@ static void test_budget_fallback(void) {
                      1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
                      2u, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
 
     /* entry_count exceeds out_capacity. */
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
@@ -192,6 +201,7 @@ static void test_budget_fallback(void) {
                      1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
                      MAX_VERTICES, 3u, g_out, 1u, &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
 
     test_report("tex-draw-plan/budget-fallback");
 }
@@ -218,6 +228,9 @@ static void test_alignment_fallback(void) {
                      1u, misaligned, 256u, 1u, 1024u, 1024u * 1024u * 4u,
                      MAX_VERTICES, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_ALIGN);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
 
     test_report("tex-draw-plan/alignment-fallback");
 }
@@ -350,6 +363,429 @@ static void test_strings(void) {
     test_report("tex-draw-plan/strings");
 }
 
+/* D(1): entry_texture[i] == texture_count must be treated as untextured and
+ * must not read textures[texture_count].  The line-78 mutant
+ * `slot >= texture_count` -> `slot > texture_count` would accept the equality
+ * case and read out of the texture array; the guard-byte harness detects that
+ * the mutant is not equivalent. */
+static void test_slot_equals_count(void) {
+    TwlhdPicaBindPlan *plan = (TwlhdPicaBindPlan *)(g_oob_plan + OOB_GUARD);
+    TwlhdPicaFrameTexture *textures =
+        (TwlhdPicaFrameTexture *)(g_oob_textures + OOB_GUARD);
+    int32_t *et = (int32_t *)(g_oob_et + OOB_GUARD);
+    TwlhdPicaFrameEntryStatus *es =
+        (TwlhdPicaFrameEntryStatus *)(g_oob_es + OOB_GUARD);
+    TwlhdTexDrawEntry *out = (TwlhdTexDrawEntry *)(g_oob_out + OOB_GUARD);
+    TwlhdTexDrawPlanResult result;
+
+    memset(g_oob_plan, OOB_FILL, sizeof(g_oob_plan));
+    memset(g_oob_textures, OOB_FILL, sizeof(g_oob_textures));
+    memset(g_oob_et, OOB_FILL, sizeof(g_oob_et));
+    memset(g_oob_es, OOB_FILL, sizeof(g_oob_es));
+    memset(g_oob_out, OOB_FILL, sizeof(g_oob_out));
+
+    plan[0].first_vertex = 0u;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+
+    textures[0].wrap_s = TWLHD_PICA_WRAP_REPEAT;
+    textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    textures[0].width = 8u;
+    textures[0].height = 8u;
+
+    et[0] = 1;   /* equal to texture_count */
+    es[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 0u, 1u,
+                     1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_NO_TEXTURE);
+    CHECK_EQ_INT(result.all_untextured, 1);
+    CHECK_EQ_INT(result.entry_count, 1);
+    CHECK_EQ_INT(result.texture_count, 1);
+    CHECK_EQ_INT(out[0].texture_slot, -1);
+    CHECK_EQ_INT(out[0].untextured, 1);
+
+    CHECK(guard_intact(g_oob_textures,
+                       1u * sizeof(TwlhdPicaFrameTexture), OOB_FILL));
+
+    test_report("tex-draw-plan/slot-equals-count");
+}
+
+/* D(2): power-of-two guard and per-texture byte cap boundaries. */
+static void test_texture_size_guard(void) {
+    reset_all();
+
+    g_plan[0].first_vertex = 0u;
+    g_plan[0].vertex_count = 3u;
+    g_plan[0].untextured = 0;
+    g_entry_texture[0] = 0;
+    g_entry_status[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    /* 1024x1024 accepted at the exact byte cap. */
+    g_textures[0].wrap_s = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].width = 1024u;
+    g_textures[0].height = 1024u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* 2048 rejected for exceeding the 1024 maximum. */
+    g_textures[0].width = 2048u;
+    g_textures[0].height = 1024u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
+
+    /* 4 rejected for being below the 8 minimum. */
+    g_textures[0].width = 4u;
+    g_textures[0].height = 4u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+
+    /* 24 rejected for not being a power of two. */
+    g_textures[0].width = 24u;
+    g_textures[0].height = 24u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+
+    /* Exactly the per-texture byte cap (8x8x4 = 256) accepted. */
+    g_textures[0].width = 8u;
+    g_textures[0].height = 8u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 0u, 1u, 1024u, 256u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* One byte over the cap rejected. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 0u, 1u, 1024u, 255u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
+
+    test_report("tex-draw-plan/texture-size-guard");
+}
+
+/* D(3): budget boundaries: equality -> OK, equality+1 -> FALLBACK_BUDGET. */
+static void test_budget_boundaries(void) {
+    reset_all();
+
+    g_plan[0].first_vertex = 0u;
+    g_plan[0].vertex_count = 3u;
+    g_plan[0].untextured = 0;
+    g_entry_texture[0] = 0;
+    g_entry_status[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+    g_textures[0].wrap_s = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].width = 8u;
+    g_textures[0].height = 8u;
+
+    /* arena_used == max_arena_bytes -> OK. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 512u, 1u, 512u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+    CHECK_EQ_INT(g_result.all_untextured, 0);
+
+    /* arena_used == max_arena_bytes + 1 -> FALLBACK_BUDGET. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 513u, 1u, 512u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
+
+    /* texture_count == max_textures -> OK. */
+    g_entry_texture[0] = 0;
+    g_textures[1] = g_textures[0];
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* texture_count == max_textures + 1 -> FALLBACK_BUDGET. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     2u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+
+    /* vertex_count == max_texcoords -> OK. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* vertex_count == max_texcoords + 1 -> FALLBACK_BUDGET. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 4u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+
+    /* entry_count == out_capacity -> OK. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, 1u, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* entry_count == out_capacity + 1 -> FALLBACK_BUDGET. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 2u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, 1u, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+
+    test_report("tex-draw-plan/budget-boundaries");
+}
+
+/* D(4): all_untextured flag in a mixed frame and after fallback returns. */
+static void test_all_untextured_flag(void) {
+    reset_all();
+
+    /* Mixed frame: one textured, one forced untextured. */
+    g_plan[0].first_vertex = 0u;
+    g_plan[0].vertex_count = 3u;
+    g_plan[0].untextured = 0;
+    g_plan[1].first_vertex = 3u;
+    g_plan[1].vertex_count = 3u;
+    g_plan[1].untextured = 0;
+
+    g_textures[0].wrap_s = TWLHD_PICA_WRAP_REPEAT;
+    g_textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].width = 8u;
+    g_textures[0].height = 8u;
+
+    g_entry_texture[0] = 0;
+    g_entry_texture[1] = -1;
+    g_entry_status[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+    g_entry_status[1] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 2u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     6u, 6u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_OK);
+    CHECK_EQ_INT(g_result.all_untextured, 0);
+
+    /* All-untextured frame. */
+    g_entry_texture[0] = -1;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 2u, g_entry_texture, g_entry_status, g_textures,
+                     1u, g_arena, 256u, 1u, 1024u, 1024u * 1024u * 4u,
+                     6u, 6u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_NO_TEXTURE);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+
+    test_report("tex-draw-plan/all-untextured-flag");
+}
+
+/* D(5): line 60 survivor (arena_used == 1 with misaligned arena). */
+static void test_misaligned_single_byte(void) {
+    static uint8_t misaligned_arena[256];
+    uint8_t *misaligned = misaligned_arena + 1;
+
+    reset_all();
+    g_plan[0].first_vertex = 0u;
+    g_plan[0].vertex_count = 3u;
+    g_plan[0].untextured = 0;
+    g_entry_texture[0] = 0;
+    g_entry_status[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+    g_textures[0].wrap_s = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].width = 8u;
+    g_textures[0].height = 8u;
+
+    CHECK(((uintptr_t)misaligned & 127u) != 0u);
+
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     1u, misaligned, 1u, 1u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_ALIGN);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
+
+    test_report("tex-draw-plan/misaligned-single-byte");
+}
+
+/* D(5): line 66 survivor (invalid texture 0, valid texture 1 referenced). */
+static void test_skip_first_texture(void) {
+    reset_all();
+
+    g_plan[0].first_vertex = 0u;
+    g_plan[0].vertex_count = 3u;
+    g_plan[0].untextured = 0;
+    g_entry_texture[0] = 1;  /* references the second texture */
+    g_entry_status[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    g_textures[0].wrap_s = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    g_textures[0].width = 4u;  /* invalid: below minimum */
+    g_textures[0].height = 8u;
+
+    g_textures[1].wrap_s = TWLHD_PICA_WRAP_REPEAT;
+    g_textures[1].wrap_t = TWLHD_PICA_WRAP_REPEAT;
+    g_textures[1].width = 8u;
+    g_textures[1].height = 8u;
+
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     2u, g_arena, 256u, 2u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_BUDGET);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
+
+    test_report("tex-draw-plan/skip-first-texture");
+}
+
+/* Lifecycle helper tests (A): stage->draw->stage->draw, stage-then-fail,
+ * shutdown, clear-then-commit, and flag+swap no double-free. */
+static void test_lifecycle_stage_draw_twice(void) {
+    TwlhdTexLifecycleState s;
+
+    twlhd_tex_lifecycle_init(&s);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.pending_ready, 1);
+    CHECK_EQ_INT(s.active_ready, 0);
+    CHECK_EQ_INT(s.textured_mode, 1);
+
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.pending_ready, 0);
+    CHECK_EQ_INT(s.active_ready, 1);
+    CHECK_EQ_INT(s.textured_mode, 1);
+
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.pending_ready, 1);
+
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s),
+                 TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW);
+    CHECK_EQ_INT(s.active_ready, 1);
+    CHECK_EQ_INT(s.pending_ready, 0);
+
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.active_ready, 1);
+
+    test_report("tex-draw-plan/lifecycle-stage-draw-twice");
+}
+
+static void test_lifecycle_stage_then_fail(void) {
+    TwlhdTexLifecycleState s;
+
+    twlhd_tex_lifecycle_init(&s);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_clear(&s),
+                 TWLHD_TEX_LIFECYCLE_FREE_PENDING_NOW);
+    CHECK_EQ_INT(s.pending_ready, 0);
+    CHECK_EQ_INT(s.active_ready, 0);
+    CHECK_EQ_INT(s.drop_active_on_commit, 0);
+
+    test_report("tex-draw-plan/lifecycle-stage-then-fail");
+}
+
+static void test_lifecycle_clear_then_commit(void) {
+    TwlhdTexLifecycleState s;
+
+    twlhd_tex_lifecycle_init(&s);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.active_ready, 1);
+
+    /* Untextured reload while a textured active set is still in flight. */
+    CHECK_EQ_INT(twlhd_tex_lifecycle_clear(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.textured_mode, 0);
+    CHECK_EQ_INT(s.drop_active_on_commit, 1);
+
+    /* Commit frees the old active and promotes the new (empty) pending. */
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s),
+                 TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW);
+    CHECK_EQ_INT(s.active_ready, 0);
+    CHECK_EQ_INT(s.drop_active_on_commit, 0);
+    CHECK_EQ_INT(s.textured_mode, 0);
+
+    test_report("tex-draw-plan/lifecycle-clear-then-commit");
+}
+
+static void test_lifecycle_flag_then_swap(void) {
+    TwlhdTexLifecycleState s;
+
+    twlhd_tex_lifecycle_init(&s);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.active_ready, 1);
+
+    /* Force a clear, then stage a new textured frame before the next commit.
+     * The flag says the old active must drop; the new pending must promote.
+     * commit() must not report the same pointer twice. */
+    CHECK_EQ_INT(twlhd_tex_lifecycle_clear(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(s.drop_active_on_commit, 1);
+    CHECK_EQ_INT(s.pending_ready, 1);
+
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s),
+                 TWLHD_TEX_LIFECYCLE_FREE_ACTIVE_NOW);
+    CHECK_EQ_INT(s.active_ready, 1);
+    CHECK_EQ_INT(s.pending_ready, 0);
+    CHECK_EQ_INT(s.drop_active_on_commit, 0);
+    CHECK_EQ_INT(s.textured_mode, 1);
+
+    test_report("tex-draw-plan/lifecycle-flag-then-swap");
+}
+
+static void test_lifecycle_shutdown(void) {
+    TwlhdTexLifecycleState s;
+
+    twlhd_tex_lifecycle_init(&s);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_commit(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_stage(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_shutdown(&s),
+                 TWLHD_TEX_LIFECYCLE_FREE_ALL);
+    CHECK_EQ_INT(s.pending_ready, 0);
+    CHECK_EQ_INT(s.active_ready, 0);
+    CHECK_EQ_INT(s.textured_mode, 0);
+    CHECK_EQ_INT(s.drop_active_on_commit, 0);
+
+    /* Shutdown from an already-cleared state. */
+    twlhd_tex_lifecycle_init(&s);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_clear(&s), TWLHD_TEX_LIFECYCLE_NONE);
+    CHECK_EQ_INT(twlhd_tex_lifecycle_shutdown(&s),
+                 TWLHD_TEX_LIFECYCLE_NONE);
+
+    test_report("tex-draw-plan/lifecycle-shutdown");
+}
+
 int main(void) {
     test_basic_mapping();
     test_no_texture();
@@ -359,5 +795,16 @@ int main(void) {
     test_null_inputs();
     test_out_of_bounds();
     test_strings();
+    test_slot_equals_count();
+    test_texture_size_guard();
+    test_budget_boundaries();
+    test_all_untextured_flag();
+    test_misaligned_single_byte();
+    test_skip_first_texture();
+    test_lifecycle_stage_draw_twice();
+    test_lifecycle_stage_then_fail();
+    test_lifecycle_clear_then_commit();
+    test_lifecycle_flag_then_swap();
+    test_lifecycle_shutdown();
     return test_exit_code();
 }

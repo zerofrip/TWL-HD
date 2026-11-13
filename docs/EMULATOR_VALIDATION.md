@@ -241,50 +241,59 @@ The host preparation path was verified separately: `twlhd_pica_frame_prepare()`
 on the generated texture frame returns `OK` with 4 plan entries, 3 unique
 textures and 1792 arena bytes; entry 3 shares texture index 0 with entry 0.
 
-For the emulator comparison, sample the top screen (upper 400x240 of the
-400x480 output) at the quad centres. The exact clip-space to screen mapping is
-governed by `common/twlhd_clipfix.c` and the Azahar software renderer; the
-prediction used here is therefore colour-in-region rather than per-texel:
+The repeatable, scripted check is `tools/check_tex_shot.py` (stdlib only). It
+reads the P6 PPM, samples four fixed rectangles on the top screen, prints the
+distinct colours found in each rectangle, and checks them against the expected
+checker or solid colours within a per-channel tolerance.
 
-| region (approx.) | textured frame | control frame | expected base colour |
-|---|---|---|---|
-| upper-left | green/white checker | solid green | green |
-| upper-right | red/white checker | solid grey (reuse/control mismatch) | red (reuse) |
-| lower-left | red/white checker | solid red | red |
-| lower-right | blue/white checker | solid blue | blue |
+Sample rectangles (top screen 400x240, x left-to-right, y top-to-bottom):
 
-The control frame uses solid red/blue/green/grey for the four quads; the
-textured frame shows the same base colours in the same regions but with an
-alternating checker pattern, which confirms that the texture data is being
-sampled and MODULATEd with the white vertex colour. The checker alternation is
-visible because the NEAREST filter preserves the 4x4-texel checker squares.
+| region | x range | y range | textured expectation | control expectation |
+|---|---|---|---|---|
+| UL | 70-170 | 75-110 | green + white | solid green |
+| UR | 270-340 | 75-110 | red + white | solid grey |
+| LL | 70-170 | 150-185 | red + white | solid red |
+| LR | 270-340 | 150-185 | blue + white | solid blue |
+
+Tolerance: per-channel RGB distance `<= 40`. The software renderer's
+clip-space to screen mapping is not verified down to the sub-pixel level, so
+the comparison is colour-in-region and checker-vs-solid rather than a
+per-texel byte match.
+
+Run the checker after generating both screenshots:
+
+    python3 tools/check_tex_shot.py /tmp/tex_shot_199.ppm --frame tex
+    python3 tools/check_tex_shot.py /tmp/tex_ctl_shot_199.ppm --frame ctl
+
+A matching frame prints `OK` for all four regions and exits 0; a mismatch
+exits non-zero. Synthetic match/mismatch cases are in
+`tools/test_check_tex_shot.py` and run as part of `make test`.
 
 ### Reference run (EMULATOR)
 
-Machine-local run, 2026-11-13, with the external core
+Reproduced in this sandbox, 2026-11-13, with the external core
 `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
 (Azahar `9c38437`) and the commands above.
 
 - `make azahar-host`: clean build, no warnings.
 - Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
-- The textured screenshot shows red, green and blue checker patterns in the
-  same screen regions where the control screenshot shows solid red, green and
-  blue quads. No texture frame region shows the background clear colour
-  `(16,16,24)` inside a quad boundary.
-- Determinism: two consecutive textured runs produced identical sha256 for
-  `tex_shot_199.ppm`:
-  `cf036bb71ffc61bdde0efd5e072e1e7e44faf66583bcba8bd779565dd3ff5a18`.
-- Control frame sha256: `tex_ctl_shot_199.ppm` =
-  `10aaaaeeea48d6a601d17b1b0da8b1fed719f543b1f8ae0d3d802bb50e2f492e`.
-- Top-screen colour diversity at the four quad centres: textured frame has
-  exactly 2 distinct RGB values per region (checker pattern); control frame has
-  exactly 1 distinct RGB value per region (solid quad).
+- Textured frame `tex_shot_199.ppm` sha256:
+  `1745dd48a973c082b7d52d2c5144fa8ac1a03d987844088f26a1906d7765a7be`.
+- Control frame `tex_ctl_shot_199.ppm` sha256:
+  `a4873584f750eba6b3653e84d49aa31faeb2df6141aad42c91f42afdb4cfd25b`.
+- `check_tex_shot.py` output for the textured screenshot:
 
-Tolerance: because the software renderer's clip-space to screen mapping is not
-verified down to the sub-pixel level, the comparison is qualitative
-(colour-in-region and checker-vs-solid) rather than a per-texel byte match.
-The tolerance is therefore stated as "per-quad colour and pattern correct";
-any swapped, missing or solid-colour textured quad would be a failure.
+      UL OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
+      UR OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LL OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LR OK: 2 distinct colours: (0, 0, 255) (255, 255, 255)
+
+- `check_tex_shot.py` output for the control screenshot:
+
+      UL OK: 1 distinct colours: (0, 255, 0)
+      UR OK: 1 distinct colours: (132, 132, 132)
+      LL OK: 1 distinct colours: (255, 0, 0)
+      LR OK: 1 distinct colours: (0, 0, 255)
 
 ### Limits
 
