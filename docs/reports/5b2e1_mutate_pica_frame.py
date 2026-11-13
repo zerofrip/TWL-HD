@@ -3,8 +3,8 @@
 """
 Mutation runner for common/twlhd_pica_frame.c (5B-2e-1).
 
-Standalone: `python3 tools/mutate_pica_frame.py` from the repository root. It
-is not part of `make test`.
+Standalone: `python3 docs/reports/5b2e1_mutate_pica_frame.py` from the
+repository root. It is not part of `make test`.
 
 Mutant set (one edit per mutant, code only):
 
@@ -39,10 +39,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
-import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
+# This file lives in docs/reports/, so the repository root is two levels up.
+ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "common" / "twlhd_pica_frame.c"
 TEST_BIN = ROOT / "tests" / "host" / "build" / "test_pica_frame"
 CLI_BIN = ROOT / "tests" / "host" / "build" / "pica_frame_cli"
@@ -210,7 +210,7 @@ def run_one_mutant(root, original, line_no, desc, new_text):
 
 def worker(args):
     """Process one chunk of mutants in a private repository copy."""
-    worker_index, chunk, original, source_root, timeout_per_mutant = args
+    worker_index, chunk, original, source_root = args
     temp_root = Path(tempfile.mkdtemp(prefix=f"mutate_pica_frame_w{worker_index}_"))
     try:
         # Copy the working tree (including uncommitted changes and build
@@ -231,14 +231,8 @@ def worker(args):
         survivors = []
         killed = []
         for line_no, desc, new_text in chunk:
-            start = time.monotonic()
             step, m_line, m_desc = run_one_mutant(
                 temp_root, original, line_no, desc, new_text)
-            elapsed = time.monotonic() - start
-            if timeout_per_mutant and elapsed > timeout_per_mutant:
-                # Treat excessive mutants as killed by test (they are not
-                # survivors and do not change the kill/survive decision).
-                step = "test"
             write_target(temp_root, original)
             if step is None:
                 counts["survived"] += 1
@@ -304,9 +298,6 @@ def main():
     parser.add_argument(
         "--jobs", type=int, default=1,
         help="number of parallel workers (each gets a temp repo copy)")
-    parser.add_argument(
-        "--timeout-per-mutant", type=float, default=None,
-        help="per-mutant wall-clock timeout in seconds (default: none)")
     args = parser.parse_args()
 
     original = TARGET.read_text(encoding="utf-8")
@@ -340,7 +331,7 @@ def main():
             # Filter empty chunks when jobs > mutants.
             chunks = [c for c in chunks if c]
             worker_args = [
-                (i, chunk, original, ROOT, args.timeout_per_mutant)
+                (i, chunk, original, ROOT)
                 for i, chunk in enumerate(chunks)
             ]
             pool = multiprocessing.Pool(processes=len(chunks))

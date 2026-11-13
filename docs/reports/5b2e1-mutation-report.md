@@ -6,10 +6,10 @@ only numbers and results produced by the run described below.
 
 ## Method
 
-The mutant set is generated and run by `tools/mutate_pica_frame.py`, invoked
-from the repository root as:
+The mutant set is generated and run by
+`docs/reports/5b2e1_mutate_pica_frame.py`, invoked from the repository root as:
 
-    python3 tools/mutate_pica_frame.py --jobs 4
+    python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4
 
 The script is standalone and is not referenced by the `Makefile` (it is not
 part of `make test`). It edits only `common/twlhd_pica_frame.c`, one edit per
@@ -53,7 +53,8 @@ script restores the original source in a `finally:` block, keeps its scratch
 copy of each mutant in a temporary directory, and ends with
 `git diff --exit-code common/`, which must be clean.
 
-Run commit: `e224b1fe545aeff52a47bac3887f13ea28f192d7`.
+Run commit: `df2630897ff6bf939d633caeab8fa4b94b655b81` (the run was made from
+this checkout with a clean `common/`).
 
 The mutant set is regenerated from the reworked source, so the round-3 sizing
 pass (the shared no-decode predicate, `frame_fixed_palette_entries()`,
@@ -318,7 +319,7 @@ are the ones triaged above.
 | 267 | op == -> != | KILLED(test) |
 | 269 | op != -> == | KILLED(test) |
 | 271 | op >= -> > | KILLED(test) |
-| 271 | op \|\| -> && | KILLED(build) |
+| 271 | op \|\| -> && | KILLED(test) |
 | 272 | op >= -> > | KILLED(test) |
 | 281 | op > -> >= | KILLED(test) |
 | 285 | op != -> == | KILLED(test) |
