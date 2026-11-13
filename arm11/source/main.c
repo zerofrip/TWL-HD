@@ -21,6 +21,9 @@
 #include "twlhd_frame_parse.h"
 #include "twlhd_v2_parse.h"
 #include "twlhd_gx_interp.h"
+#include "twlhd_pica_frame.h"
+#include "twlhd_pica_tex.h"
+#include "twlhd_tex_draw_plan.h"
 #include "twlhd_vertex_convert.h"
 #include "twlhd_seq.h"
 #include "twlhd_diag_config.h"
@@ -32,6 +35,7 @@
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
 #define CLIP_VERTEX_CAPACITY 6144u
+#define CLIP_PLAN_CAPACITY (CLIP_VERTEX_CAPACITY / 3u)
 
 typedef struct {
     const char *mode;
@@ -53,6 +57,14 @@ static TwlhdParsedFrame g_parsed;
 static TwlhdVertex g_vertices[MAX_VERTICES];
 static TwlhdV2View g_v2view;
 static TwlhdGxVertex g_clip_vertices[CLIP_VERTEX_CAPACITY];
+static TwlhdGxTexVertex g_tex_vertices[CLIP_VERTEX_CAPACITY];
+static TwlhdPicaBindPlan g_plan[CLIP_PLAN_CAPACITY];
+static TwlhdPicaFrameTexture g_textures[TWLHD_PICA_FRAME_MAX_TEXTURES];
+static int32_t g_entry_texture[CLIP_PLAN_CAPACITY];
+static TwlhdPicaFrameEntryStatus g_entry_status[CLIP_PLAN_CAPACITY];
+static TwlhdPicaTexCoord g_texcoords[CLIP_VERTEX_CAPACITY];
+static _Alignas(128) uint8_t g_arena[TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES];
+static uint8_t g_scratch[TWLHD_PICA_FRAME_SCRATCH_BYTES];
 _Static_assert(sizeof(TwlhdGxVertex) == 32, "TwlhdGxVertex must be 32 bytes for the clip vertex layout");
 
 static SceneInfo g_scene;
@@ -79,6 +91,61 @@ static void set_builtin_scene(void) {
 
 static uint32_t clamp_max(uint32_t v) { return v > 999999u ? 999999u : v; }
 static uint32_t clamp_4digit(uint32_t v) { return v > 9999u ? 9999u : v; }
+
+/*
+ * Try to stage the loaded v2 frame as a textured clip scene. Returns 1 if the
+ * renderer accepted the textured path, 0 if the caller should fall back to the
+ * existing untextured clip path. The texture feature can be disabled at compile
+ * time with TWLHD_DISABLE_TEXTURE_PATH.
+ */
+static int try_textured_clip_scene(uint32_t vertex_count,
+                                   const TwlhdGxViewport *viewport) {
+#ifndef TWLHD_DISABLE_TEXTURE_PATH
+    TwlhdPicaFrameResult prep_result;
+    uint32_t arena_needed = 0;
+    uint32_t entry_count = 0;
+    uint32_t texture_count = 0;
+    uint32_t arena_used = 0;
+
+    prep_result = twlhd_pica_frame_arena_needed(
+        g_tex_vertices, vertex_count, &g_v2view, &arena_needed);
+    if (prep_result != TWLHD_PICA_FRAME_OK || arena_needed == 0u) {
+        return 0;
+    }
+
+    if (arena_needed > TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES) {
+        renderer_trace("tex budget fallback");
+        return 0;
+    }
+
+    prep_result = twlhd_pica_frame_prepare(
+        g_tex_vertices, vertex_count, &g_v2view,
+        g_plan, CLIP_PLAN_CAPACITY,
+        g_textures, TWLHD_PICA_FRAME_MAX_TEXTURES,
+        g_arena, sizeof(g_arena),
+        g_texcoords, CLIP_VERTEX_CAPACITY,
+        g_entry_texture, g_entry_status, CLIP_PLAN_CAPACITY,
+        g_scratch, sizeof(g_scratch),
+        &entry_count, &texture_count, &arena_used);
+
+    if (prep_result != TWLHD_PICA_FRAME_OK) {
+        renderer_trace("tex prepare fallback");
+        return 0;
+    }
+
+    if (renderer_set_clip_scene_textured(
+            g_clip_vertices, vertex_count, viewport,
+            g_plan, entry_count, g_entry_texture, g_entry_status,
+            g_textures, texture_count, g_arena, arena_used, g_texcoords,
+            TWLHD_PICA_FRAME_MAX_TEXTURES,
+            TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES,
+            TWLHD_PICA_FRAME_MAX_TEXTURE_BYTES) == TWLHD_RENDER_OK) {
+        return 1;
+    }
+#endif
+    renderer_trace("tex staging fallback");
+    return 0;
+}
 
 static void status_line(const char *s) {
     char line[40]; size_t i;
@@ -199,10 +266,10 @@ static int load_sd_frame(const char *path,
             return -1;
         }
 
-        gx_result = twlhd_gx_interpret(&g_v2view, g_clip_vertices,
-                                       CLIP_VERTEX_CAPACITY,
-                                       &vertex_count, out_viewport,
-                                       out_gx_stats);
+        gx_result = twlhd_gx_interpret_ex(&g_v2view, g_clip_vertices,
+                                          CLIP_VERTEX_CAPACITY,
+                                          &vertex_count, out_viewport,
+                                          out_gx_stats, g_tex_vertices);
         if (gx_result != TWLHD_GX_OK) {
             snprintf(g_status, sizeof g_status,
                      "gx:%s s%lu c%lu i%lu",
@@ -529,9 +596,14 @@ int main(void) {
 
             seq_pending = 0;
             if (pending_is_v2) {
-                result = renderer_set_clip_scene(g_clip_vertices,
-                                                 pending_vertex_count,
-                                                 &pending_viewport);
+                if (!try_textured_clip_scene(pending_vertex_count,
+                                             &pending_viewport)) {
+                    result = renderer_set_clip_scene(g_clip_vertices,
+                                                     pending_vertex_count,
+                                                     &pending_viewport);
+                } else {
+                    result = TWLHD_RENDER_OK;
+                }
             } else {
                 result = renderer_set_geometry(g_vertices, pending_vertex_count);
             }

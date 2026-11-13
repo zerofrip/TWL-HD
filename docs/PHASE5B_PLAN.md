@@ -396,15 +396,95 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 - Not done: no renderer/arm11 consumer, no GPU or citro3d calls, no recorder
   change, no v2-format/decoder/interpreter change.
 
-5B-2e-2 (outline, **not implemented**): teach the arm11/citro3d renderer to
-consume the prepared frame. After `twlhd_pica_frame_prepare()` fills the plan,
-the texture table and the arena, the renderer would upload each prepared RGBA8
-image once (choosing VRAM vs linear memory and the matching PICA address/align
-class), bind the per-entry texture+sampler, submit the run's vertices with the
-separate 8-byte texcoord attribute buffer, and skip `-1`-index (untextured/
-failed) entries or draw them with the untextured path. That step is the first
-one that needs GPU calls, so it must stay a separate emulator/hardware-verified
-stage; nothing in 5B-2e-1 assumes it exists.
+### Status 5B-2e-2 — ARM11 renderer texture path
+
+Status labels:
+
+- **BUILD:** `make -C arm11` and `make -C arm11 DIAG=1` compile clean with
+  `-Wall -Wextra -Werror`; the new shader
+  `arm11/shaders/twlhd_clip_tex_vshader.v.pica` assembles via picasso in both
+  builds.
+- **UNIT:** `make test` green, including the new
+  `tests/host/test_tex_draw_plan`; existing structural tests
+  (`test_blend_config`, `test_diag_config`) unchanged. Mutation report
+  `docs/reports/5b2e2-mutation-report.md` covers the new pure module
+  `common/twlhd_tex_draw_plan.c`.
+- **EMULATOR:** generator script `tools/gen_tex_frames.py` committed with a
+  documented procedure; see `docs/EMULATOR_VALIDATION.md` and
+  `tools/azahar_host/README.md` for the exact command. Ran with
+  `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+  (Azahar `9c38437`): the textured frame produced red/green/blue checker
+  patterns in the same regions where the untextured control frame produced
+  solid red/green/blue quads, confirming texture binding and sampling. The
+  textured screenshot `tex_shot_199.ppm` has sha256
+  `cf036bb71ffc61bdde0efd5e072e1e7e44faf66583bcba8bd779565dd3ff5a18`
+  (deterministic across two runs); the control screenshot has sha256
+  `10aaaaeeea48d6a601d17b1b0da8b1fed719f543b1f8ae0d3d802bb50e2f492e`.
+  This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
+- **HARDWARE:** NOT RUN. A draft procedure is below; needs owner approval
+  before any console action.
+
+What changed:
+
+- `common/twlhd_tex_draw_plan.[ch]`: allocation-free pure C module that maps a
+  prepared frame (`plan[]`, `entry_texture[]`, `entry_status[]`, texture table,
+  arena) to per-entry draw descriptors and a whole-frame verdict. Wrap/filter
+  codes are exported as constants bit-identical to libctru.
+- `arm11/source/renderer.c`: textured clip-scene staging API
+  `renderer_set_clip_scene_textured()`; per-entry draw loop with texture bind,
+  wrap/filter, separate texcoord buffer, and untextured fallback for
+  `NO_DATA`/`UNSUPPORTED`/failed entries; whole-frame fallback on any allocation
+  or prepare failure; resource lifecycle in `renderer_shutdown()` and on frame
+  reload using pending/active texture sets.
+- `arm11/include/renderer.h`: new staged API alongside the existing untextured
+  functions; existing signatures unchanged.
+- `arm11/source/main.c`: switched to `twlhd_gx_interpret_ex()` so per-vertex
+  texture latches are filled; at v2 load it calls `arena_needed` and, only when
+  the frame actually carries texture data, `prepare()` + the new renderer API;
+  otherwise the existing `renderer_set_clip_scene()` path runs unchanged.
+- `arm11/shaders/twlhd_clip_tex_vshader.v.pica`: clip shader variant that
+  passes a separate `(u,v)` attribute to `texcoord0`; existing shaders untouched.
+- `docs/DS_GX_RESEARCH.md`: new "ARM11 texture upload (5B-2e-2)" section with
+  the upload decision, header citations, filter decision, TexEnv rule, and
+  UNVERIFIED list.
+
+Compile-time/runtime switch:
+
+- The texture path is engaged only when the loaded v2 frame carries texture
+  chunks (`twlhd_pica_frame_arena_needed()` returns `> 0` arena bytes, prepare
+  succeeds, and the renderer staging succeeds). Frames without textures use the
+  exact existing `renderer_set_clip_scene()` → `draw_clip_internal()` path.
+- Define `TWLHD_DISABLE_TEXTURE_PATH` at compile time to force the untextured
+  path regardless of the frame content (useful for a quick bisection). The
+  switch is documented here; no build-time default is changed.
+
+UNVERIFIED (build-only reasoning):
+
+- Whether `C3D_TexLoadImage` swizzles; only the header is installed, so the
+  renderer uses raw `memcpy` into `tex->data` and marks this point
+  UNVERIFIED.
+- Whether `C3D_TexInit(..., onVram=false)` accepts the prepared Mortonised
+  layout byte-for-byte.
+- 128-byte alignment of `tex->data` and the arena base.
+- VRAM vs linear trade-offs and heap budget.
+- PICA sampler defaults (nearest/linear/mipmap); the renderer explicitly sets
+  `GPU_NEAREST` as a DS-fidelity decision.
+- Attribute 2 with `BufInfo_Add` permutation `0x2` on real hardware.
+- Peak memory budget (≈ 20.5 MiB transient) on arm11 heap/FCRAM.
+
+Rollback:
+
+1. Delete `arm11/shaders/twlhd_clip_tex_vshader.v.pica`,
+   `common/twlhd_tex_draw_plan.c`, `common/twlhd_tex_draw_plan.h`,
+   `tests/host/test_tex_draw_plan.c`, `tools/gen_tex_frames.py`,
+   `docs/reports/5b2e2_mutate_tex_draw_plan.py`,
+   `docs/reports/5b2e2-mutation-report.md`.
+2. Revert `arm11/source/renderer.c`, `arm11/include/renderer.h`,
+   `arm11/source/main.c`, root `Makefile`, `docs/DS_GX_RESEARCH.md` and
+   `docs/PHASE5B_PLAN.md` to the pre-5B-2e-2 versions.
+3. Because the feature is opt-in per loaded frame, setting
+   `TWLHD_DISABLE_TEXTURE_PATH` or loading untextured frames gives the old path
+   without reverting code.
 
 ## 4. Where the DS GX equations must come from
 
@@ -589,3 +669,84 @@ the photographic evidence. This is the Run 16 "open" item: the photo evidence
 is relative, and a numeric in-console readout would settle whether the blend
 is truly ineffective or only appears so in photos. Requires its own approval
 before any code (section 6).
+
+## 5B-2e-2 hardware run (DRAFT, needs owner approval)
+
+This section is a **DRAFT** only. No SD/console/network scripts are created by
+this stage. The owner must review and approve the procedure before any real
+hardware is touched.
+
+### Goal
+
+Confirm that the arm11 renderer can upload, bind and draw the already-prepared
+RGBA8 textures from a v2 frame with texture chunks, with the separate 8-byte
+texcoord attribute buffer, and that untextured/failed entries still draw.
+
+### Prerequisites
+
+- A New 3DS with the usual homebrew entry point and SD access.
+- The approved 5B-2e-2 `.3dsx` built from a known commit hash
+  (`TWLHD_BUILD_ID` shown on the bottom screen).
+- A generated test frame from `tools/gen_tex_frames.py` placed on SD as
+  `sdmc:/twlhd_frame.bin`.
+- The existing `renderer_trace` hook available via RTCom or a debug build.
+
+### Procedure
+
+1. **Build hash check.** Start the `.3dsx` and verify the bottom screen shows
+   the expected `build: <hash> blend=explicit` line.
+2. **Baseline.** Load an untextured v2 frame (or press Y for the built-in
+   triangle) and confirm the top screen draws the expected picture.
+3. **Textured frame.** Copy the generated textured frame to
+   `sdmc:/twlhd_frame.bin`, press A to load it, and observe the top screen.
+4. **Expected picture.** At least one 8x8 or 16x16 two-colour checker texture
+   should be visible, one non-square texture should be visible, and a texture
+   reused by two draw entries should look identical in both places.
+5. **Fallback probe.** Load a frame whose texture budget exceeds the practical
+   cap (or a deliberately misaligned arena if one can be produced). The renderer
+   should fall back to the untextured clip path with a `tex fallback` trace
+   marker, not crash.
+6. **B-key recovery.** If the screen hangs or shows garbage, press B to cycle
+   the diagnostic mode and observe whether the picture changes; if still hung,
+   press Y to return to the built-in triangle, or START to exit.
+
+### Trace markers to watch
+
+The renderer emits the following markers on the texture path:
+
+- `tex plan fallback`, `tex upload fallback`, `tex staging fallback` — a
+  whole-frame fallback occurred.
+- `tex commit` — pending texture set promoted to active at frame start.
+- `tex attr` — switching to the textured shader/attribute layout.
+- `tex bind` — a new texture is bound.
+- `tex fallback entry` — an untextured/`NO_DATA`/`UNSUPPORTED` entry is drawn
+  with the untextured clip shader.
+- `clip tex DrawArrays` — each textured or fallback draw call.
+
+### Risks
+
+- **Texture memory exhaustion.** The renderer keeps both the caller arena and
+  the GPU copies during upload; peak use can approach ~20 MiB. If linear memory
+  is exhausted, `linearAlloc` returns NULL and the frame falls back, but the
+  exact arm11 heap budget is UNVERIFIED.
+- **Stride/attribute mismatch hang.** The Run 5 precedent showed that a missing
+  padding declaration can wedge the PICA200. The new texcoord buffer adds
+  attribute slot 2 and permutation `0x2`; if the reasoning from `0x0`/`0x1` is
+  wrong, the GPU may hang. The renderer refuses to draw if the padding check
+  fails, but that check itself is build-reasoned, not hardware-verified.
+- **Double swizzle.** If `C3D_TexInit`'s backing memory or `C3D_TexLoadImage`
+  expects a different layout than the prepared bytes, the texture will look
+  garbage. The raw-copy path was chosen to avoid this, but the internal layout
+  expectation is UNVERIFIED.
+- **State leak between textured and untextured entries.** Mid-frame shader/
+  TexEnv/AttrInfo switches are a known 3DS failure mode (Run 14 blend-state
+  precedent). The code rebuilds state per entry class, but persistence bugs
+  could still hang or misrender.
+- **Recovery.** If a hang occurs, the non-blocking completion probe and B-key
+  cycle are the first recovery step; Y returns to the built-in triangle; START
+  exits. No network or SD writes are required during the run.
+
+### Approval gate
+
+Do not run this on hardware until the owner explicitly approves the procedure,
+the test frame, and the build hash. The assistant never executes hardware runs.

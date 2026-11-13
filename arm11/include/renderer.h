@@ -11,6 +11,8 @@
 #include <stdint.h>
 
 #include "twlhd_gx_interp.h"
+#include "twlhd_pica_frame.h"
+#include "twlhd_pica_tex.h"
 #include "twlhd_vertex_convert.h"
 
 typedef enum {
@@ -54,6 +56,21 @@ int renderer_use_builtin_triangle(void);
 int renderer_set_clip_scene(const TwlhdGxVertex *vertices,
                             uint32_t vertex_count,
                             const TwlhdGxViewport *viewport);
+
+/* Stage a textured clip scene produced by twlhd_pica_frame_prepare(). On any
+ * failure the renderer falls back to the untextured clip path (the caller may
+ * also fall back by using renderer_set_clip_scene() instead). */
+int renderer_set_clip_scene_textured(
+    const TwlhdGxVertex *vertices, uint32_t vertex_count,
+    const TwlhdGxViewport *viewport,
+    const TwlhdPicaBindPlan *plan, uint32_t entry_count,
+    const int32_t *entry_texture,
+    const TwlhdPicaFrameEntryStatus *entry_status,
+    const TwlhdPicaFrameTexture *textures, uint32_t texture_count,
+    const uint8_t *arena, uint32_t arena_used,
+    const TwlhdPicaTexCoord *texcoords,
+    uint32_t max_textures, uint32_t max_arena_bytes,
+    uint32_t max_texture_bytes);
 
 /* Records clear + uniforms + draw into the current C3D frame. Must be called
  * between C3D_FrameBegin()/C3D_FrameEnd(). */

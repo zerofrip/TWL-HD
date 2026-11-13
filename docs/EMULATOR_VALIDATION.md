@@ -182,6 +182,120 @@ Follow-up (open): explain why the ROM-side parse fails only for AF=120 despite a
 
 Default builds (CUBES unset) are unaffected: make emu-validate PASS 124 GXCM + 4 RSTA at angle 61440. EMULATOR evidence only; not HARDWARE VERIFIED.
 
+## 5B-2e-2 textured renderer path (Azahar libretro host)
+
+**EMULATOR evidence only; not HARDWARE VERIFIED.** This is a PICA200 renderer
+validation, separate from the DeSmuME ARM9 capture chain above. It uses the
+external Azahar libretro core loaded at run time by
+`tools/azahar_host/build/azahar_host`.
+
+### Generator
+
+`tools/gen_tex_frames.py` writes one or two deterministic v2 frames into an
+output directory:
+
+  twlhd_frame_v2_tex.bin     four quads with:
+                               - 8x8 red/white checker
+                               - 16x16 blue/white checker
+                               - 16x8 green/white checker (non-square)
+                               - 8x8 red/white checker reused from the first run
+  twlhd_frame_v2_tex_ctl.bin same geometry, no texture state (untextured control)
+
+Both frames end with SWAP_BUFFERS and set `FLAG_FRAME_COMPLETE`. The texture
+frame uses DS 16bpp (format 7) TXDS/TXDT chunks and no palette, so the
+`common/twlhd_pica_frame_prepare()` path decodes and swizzles them into RGBA8.
+
+### Procedure
+
+Build the host (needed once):
+
+    make azahar-host
+
+Generate the frames:
+
+    python3 tools/gen_tex_frames.py /tmp/tex_frames
+
+Run the textured frame. The ARM11 app looks for `sdmc:/twlhd_frame.bin`, so
+copy the chosen frame under that name inside `--sd-root`:
+
+    mkdir -p /tmp/tex_sd
+    cp /tmp/tex_frames/twlhd_frame_v2_tex.bin /tmp/tex_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/tex_shot --sd-root /tmp/tex_sd
+
+Repeat with the control frame:
+
+    cp /tmp/tex_frames/twlhd_frame_v2_tex_ctl.bin /tmp/tex_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/tex_ctl_shot --sd-root /tmp/tex_sd
+
+### Prediction and comparison
+
+The host preparation path was verified separately: `twlhd_pica_frame_prepare()`
+on the generated texture frame returns `OK` with 4 plan entries, 3 unique
+textures and 1792 arena bytes; entry 3 shares texture index 0 with entry 0.
+
+For the emulator comparison, sample the top screen (upper 400x240 of the
+400x480 output) at the quad centres. The exact clip-space to screen mapping is
+governed by `common/twlhd_clipfix.c` and the Azahar software renderer; the
+prediction used here is therefore colour-in-region rather than per-texel:
+
+| region (approx.) | textured frame | control frame | expected base colour |
+|---|---|---|---|
+| upper-left | green/white checker | solid green | green |
+| upper-right | red/white checker | solid grey (reuse/control mismatch) | red (reuse) |
+| lower-left | red/white checker | solid red | red |
+| lower-right | blue/white checker | solid blue | blue |
+
+The control frame uses solid red/blue/green/grey for the four quads; the
+textured frame shows the same base colours in the same regions but with an
+alternating checker pattern, which confirms that the texture data is being
+sampled and MODULATEd with the white vertex colour. The checker alternation is
+visible because the NEAREST filter preserves the 4x4-texel checker squares.
+
+### Reference run (EMULATOR)
+
+Machine-local run, 2026-11-13, with the external core
+`/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+(Azahar `9c38437`) and the commands above.
+
+- `make azahar-host`: clean build, no warnings.
+- Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
+- The textured screenshot shows red, green and blue checker patterns in the
+  same screen regions where the control screenshot shows solid red, green and
+  blue quads. No texture frame region shows the background clear colour
+  `(16,16,24)` inside a quad boundary.
+- Determinism: two consecutive textured runs produced identical sha256 for
+  `tex_shot_199.ppm`:
+  `cf036bb71ffc61bdde0efd5e072e1e7e44faf66583bcba8bd779565dd3ff5a18`.
+- Control frame sha256: `tex_ctl_shot_199.ppm` =
+  `10aaaaeeea48d6a601d17b1b0da8b1fed719f543b1f8ae0d3d802bb50e2f492e`.
+- Top-screen colour diversity at the four quad centres: textured frame has
+  exactly 2 distinct RGB values per region (checker pattern); control frame has
+  exactly 1 distinct RGB value per region (solid quad).
+
+Tolerance: because the software renderer's clip-space to screen mapping is not
+verified down to the sub-pixel level, the comparison is qualitative
+(colour-in-region and checker-vs-solid) rather than a per-texel byte match.
+The tolerance is therefore stated as "per-quad colour and pattern correct";
+any swapped, missing or solid-colour textured quad would be a failure.
+
+### Limits
+
+- Azahar's software renderer is not the real PICA200; it validates that the
+  ARM11 code path produces coherent GPU commands, not that hardware will accept
+  the texture layout or attribute permutation.
+- The exact screen positions of the quads are not predicted here; the test
+  only verifies that textures are bound and sampled.
+- No depth, blending or wrap-mode behaviour is verified beyond the chosen
+  MODULATE + NEAREST path.
+
 ## Licensing posture (not legal advice)
 
 DeSmuME (GPL-2.0-or-later) is used only as an external program. TWL-HD (Apache-2.0) neither links nor vendors it. Separate repositories alone are
