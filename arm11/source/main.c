@@ -72,6 +72,10 @@ static char g_status[96];
 static char g_transport_status[64];
 static int g_fs_ready;
 
+/* Set to 1 while a textured v2 frame is staged/active; controls the trace-ring
+ * console line and the renderer_trace() callback lifetime. */
+static int g_tex_path_attempted;
+
 #define TRACE_RING_LEN 5
 static const char *g_trace_ring[TRACE_RING_LEN];
 static unsigned g_trace_head;
@@ -125,16 +129,20 @@ static int try_textured_clip_scene(uint32_t vertex_count,
         g_tex_vertices, vertex_count, &g_v2view, &arena_needed);
     if (prep_result != TWLHD_PICA_FRAME_OK || arena_needed == 0u) {
         renderer_trace("tex arena silent fallback");
-        snprintf(g_status, sizeof g_status, "tex arena: %s need=%u",
-                 twlhd_pica_frame_result_string(prep_result),
-                 (unsigned)arena_needed);
+        g_tex_path_attempted = 0;
+        renderer_set_trace(NULL);
         return 0;
     }
 
     if (arena_needed > TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES) {
         renderer_trace("tex budget fallback");
+        g_tex_path_attempted = 0;
+        renderer_set_trace(NULL);
         return 0;
     }
+
+    g_tex_path_attempted = 1;
+    renderer_set_trace(trace_cb);
 
     prep_result = twlhd_pica_frame_prepare(
         g_tex_vertices, vertex_count, &g_v2view,
@@ -148,6 +156,8 @@ static int try_textured_clip_scene(uint32_t vertex_count,
 
     if (prep_result != TWLHD_PICA_FRAME_OK) {
         renderer_trace("tex prepare fallback");
+        g_tex_path_attempted = 0;
+        renderer_set_trace(NULL);
         return 0;
     }
 
@@ -163,6 +173,8 @@ static int try_textured_clip_scene(uint32_t vertex_count,
     }
 #endif
     renderer_trace("tex staging fallback");
+    g_tex_path_attempted = 0;
+    renderer_set_trace(NULL);
     return 0;
 }
 
@@ -431,9 +443,11 @@ static void update_console(void) {
                (unsigned long)clamp_4digit(g_scene.gx_stats.geometry_incomplete));
     }
 
-    printf("T:%.8s|%.8s|%.8s|%.8s\n",
-           trace_latest(3), trace_latest(2), trace_latest(1),
-           trace_latest(0));
+    if (g_tex_path_attempted) {
+        printf("T:%.8s|%.8s|%.8s|%.8s\n",
+               trace_latest(3), trace_latest(2), trace_latest(1),
+               trace_latest(0));
+    }
     printf("A=load SD  Y=builtin  X=seq  START=exit\n");
     status_line(g_transport_status);
     status_line(g_status);
@@ -466,7 +480,6 @@ int main(void) {
 
     g_fs_ready = R_SUCCEEDED(fsInit());
 
-    renderer_set_trace(trace_cb);
     renderer_status = renderer_init();
     if (renderer_status == TWLHD_RENDER_OK) {
         set_builtin_scene();
@@ -612,6 +625,8 @@ int main(void) {
                 snprintf(g_status, sizeof g_status, "builtin: %s",
                          renderer_result_string(result));
             }
+            g_tex_path_attempted = 0;
+            renderer_set_trace(NULL);
             pending_builtin = 0;
             update_console();
         } else if (pending_load) {
@@ -631,6 +646,8 @@ int main(void) {
                              renderer_get_tex_staging_status());
                 }
             } else {
+                g_tex_path_attempted = 0;
+                renderer_set_trace(NULL);
                 result = renderer_set_geometry(g_vertices, pending_vertex_count);
             }
 

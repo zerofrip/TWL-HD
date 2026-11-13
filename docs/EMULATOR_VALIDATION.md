@@ -191,8 +191,8 @@ external Azahar libretro core loaded at run time by
 
 ### Generator
 
-`tools/gen_tex_frames.py` writes one or two deterministic v2 frames into an
-output directory:
+`tools/gen_tex_frames.py` writes deterministic v2 frames into an output
+directory:
 
   twlhd_frame_v2_tex.bin     four quads with:
                                - 8x8 red/white checker
@@ -200,10 +200,18 @@ output directory:
                                - 16x8 green/white checker (non-square)
                                - 8x8 red/white checker reused from the first run
   twlhd_frame_v2_tex_ctl.bin same geometry, no texture state (untextured control)
+  twlhd_frame_v2_tex_over.bin three distinct 1024x1024 I2 keys sharing the
+                               same TXDT/PLDT bytes; intentionally over the
+                               8 MiB practical arena budget
 
-Both frames end with SWAP_BUFFERS and set `FLAG_FRAME_COMPLETE`. The texture
+The first two frames are used for the screenshot comparison below. The
+over-budget frame is used for the hardware fallback probe described in
+`docs/PHASE5B_PLAN.md`.
+
+All frames end with SWAP_BUFFERS and set `FLAG_FRAME_COMPLETE`. The texture
 frame uses DS 16bpp (format 7) TXDS/TXDT chunks and no palette, so the
 `common/twlhd_pica_frame_prepare()` path decodes and swizzles them into RGBA8.
+The over-budget frame uses DS I2 (format 2) with a PLDT palette chunk.
 The texture frame emits `CMD_COLOR RGB555_WHITE` (0x8FFF) before every textured
 run; `tests/host/build/gx_interp_cli` on the generated frame confirms all 24
 vertices have RGBA `(1, 1, 1, 1)`, so the chosen MODULATE TexEnv shows the
@@ -286,6 +294,19 @@ A matching textured frame prints `colour OK`, `structure OK`, `ratio OK` and
 `reuse OK` and exits 0; a mismatch exits non-zero. Synthetic match/mismatch
 cases are in `tools/test_check_tex_shot.py` and run as part of `make test`.
 
+### Over-budget fallback probe
+
+Generate a frame that exceeds the practical arena budget:
+
+    python3 tools/gen_tex_frames.py /tmp/tex_frames --over-budget 3
+
+The resulting `twlhd_frame_v2_tex_over.bin` has three distinct
+`(teximage_param, pltt_base)` keys, each describing a 1024x1024 I2 texture.
+`twlhd_pica_frame_arena_needed()` reports 12 MiB, which is above the 8 MiB
+practical cap. On hardware this frame should trigger the budget fallback in
+`arm11/source/main.c` and render as solid colours without crashing. The probe
+is not exercised in the Azahar screenshot comparison above.
+
 ### Root cause of the identical-screenshot symptom
 
 The earlier reference run showed `tex_shot_199.ppm` byte-identical to
@@ -314,21 +335,23 @@ the checker passes. This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
 
 ### Reference run (EMULATOR)
 
-Reproduced in this sandbox, 2026-11-13, with the external core
+Reproduced in this sandbox, 2026-11-14, with the external core
 `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
 (Azahar `9c38437`) and the commands above.
 
 - `make azahar-host`: clean build, no warnings.
 - Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
 - Textured frame `tex_shot_199.ppm` sha256:
-  `5010d58a11c858ad49c96f99c1f238a5822c535bb56bff79f8df13e358dee672`.
+  `7c74e132cf5e269b775ad607633cf34a5a8ba4f31a13b468906f46dd6d6500df`.
 - Control frame `tex_ctl_shot_199.ppm` sha256:
-  `91c8b18200ad7a37372b7c9edce70ccb5f754461c94c98901ba1086874b24710`.
+  `5eb9a7b00858dae3eb48a03eae4c78a8e08102add0e22d3ac2fb206db5d58211`.
 - The two screenshots differ; the texture path is exercised.
 - Bottom-screen readout at frame 199 shows the staging verdict
   `tex staged OK: 4 entries, 3 textures` and the trace ring includes
   `tex commit`, `tex bind`, and `clip tex DrawArrays`, confirming the
-  textured shader path ran.
+  textured shader path ran. The control screenshot no longer prints the `T:`
+  trace-ring line because the renderer trace hook is now installed only while
+  a textured frame is staged.
 - `check_tex_shot.py` output for the textured screenshot:
 
       UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)

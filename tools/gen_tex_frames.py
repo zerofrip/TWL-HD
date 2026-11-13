@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Generate a deterministic textured v2 frame for 5B-2e-2 emulator validation.
+"""Generate deterministic textured v2 frames for 5B-2e-2 validation.
 
-Two frames are written into the output directory:
+By default three frames are written into the output directory:
 
   twlhd_frame_v2_tex.bin     four quads exercising:
                                - 8x8 two-colour checker (red/white)
@@ -11,15 +11,20 @@ Two frames are written into the output directory:
                                - 8x8 checker reused from the first run
   twlhd_frame_v2_tex_ctl.bin the same four quads with no texture state
                                (untextured clip-path control)
+  twlhd_frame_v2_tex_over.bin three distinct 1024x1024 I2 keys sharing the
+                               same TXDT/PLDT bytes; intentionally over the
+                               8 MiB practical arena budget
+
+An over-budget frame with a custom number of keys can also be produced with
+`--over-budget N`.
 
 BUILD/UNIT/EMULATOR tooling only. Stdlib only. Nothing here contacts a console
 or a network address. The frame layout follows the scene4_alpha 2x2 quad grid
 (tools/hw/gen_lit_frames.py:53-61), scaled to use most of the DS screen.
 
-Texture format: DS 16bpp (format 7, TEXIMAGE_PARAM bits 26-28 = 7). Each texel
-is a little-endian RGB555 word; bit 15 = 1 means opaque, 0 means fully
-transparent. No palette is required, so the generated frame has TXDS and TXDT
-chunks but no PLDT chunk.
+The screenshot frames use DS 16bpp (format 7, TEXIMAGE_PARAM bits 26-28 = 7);
+each texel is a little-endian RGB555 word. The over-budget frame uses DS I2
+(format 2) and includes a PLDT palette chunk.
 """
 
 import argparse
@@ -46,6 +51,7 @@ CMD_END_VTXS = 0x41
 FRAME_NAMES = (
     "twlhd_frame_v2_tex.bin",
     "twlhd_frame_v2_tex_ctl.bin",
+    "twlhd_frame_v2_tex_over.bin",
 )
 
 # 2x2 quad grid scaled to fill most of the DS clip box. Values are raw clip
@@ -64,6 +70,9 @@ QUADS = (
 PARAM_RED_8 = (7 << 26) | (0 << 20) | (0 << 23)  # 8x8, format 7
 PARAM_BLUE_16 = (7 << 26) | (1 << 20) | (1 << 23)  # 16x16, format 7
 PARAM_GREEN_16_8 = (7 << 26) | (1 << 20) | (0 << 23)  # 16x8, format 7
+
+# DS format 2 = I2 (4 palette entries), size code 7 = 1024x1024.
+PARAM_I2_1024 = (2 << 26) | (7 << 20) | (7 << 23)
 
 TEXTURE_SPECS = (
     (PARAM_RED_8, 0),      # run 0
@@ -160,6 +169,27 @@ def _txds_payload(records):
     return bytes(out)
 
 
+def _chunk(ctype, payload, flags=0, reserved=0):
+    size = len(payload)
+    return struct.pack("<IIII", ctype, size, flags, reserved) + payload
+
+
+def _fourcc(text):
+    raw = text.encode("ascii")
+    return raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)
+
+
+GXCM = _fourcc("GXCM")
+META = _fourcc("META")
+TXDS = _fourcc("TXDS")
+TXDT = _fourcc("TXDT")
+PLDT = _fourcc("PLDT")
+
+
+# Chunk flag constants from the v2 format.
+CHUNK_FLAG_REQUIRED = 0x00000001
+
+
 def _quad_triangles(corners):
     """Two triangles covering the quad, counter-clockwise."""
     return [corners[0], corners[1], corners[2],
@@ -230,27 +260,72 @@ def _build_control():
     return entries(*out), None, None
 
 
-def _chunk(ctype, payload, flags=0, reserved=0):
-    size = len(payload)
-    return struct.pack("<IIII", ctype, size, flags, reserved) + payload
+# Practical arena cap from common/twlhd_pica_frame.h: the non-overlapping
+# worst case is 8 MiB; overlapping keys are summed, so N >= 3 distinct
+# 1024x1024 RGBA8 textures exceed it.
+TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES = 8 * 1024 * 1024
 
 
-def _fourcc(text):
-    raw = text.encode("ascii")
-    return raw[0] | (raw[1] << 8) | (raw[2] << 16) | (raw[3] << 24)
+def _build_over_budget(n):
+    """Return (gxcm, txds, txdt, pldt) for an over-budget texture frame.
+
+    Each of the N distinct (teximage_param, pltt_base) keys decodes a
+    1024x1024 I2 texture (4 MiB RGBA8) from the same 262144-byte TXDT
+    window; GXCM carries one textured run per key. The v2 parser accepts
+    overlapping offsets, so the file stays small while
+    twlhd_pica_frame_arena_needed() reports N * 4 MiB > 8 MiB.
+    """
+    if n < 3:
+        raise ValueError("over-budget frame needs n >= 3")
+
+    # 1024x1024 I2 = 2 bits/texel -> 262144 bytes of index data.
+    index_bytes = bytearray(1024 * 1024 // 4)
+    for i in range(len(index_bytes)):
+        index_bytes[i] = (i * 17) & 0xFF
+    txdt = bytes(index_bytes)
+
+    # One 8-byte palette per record (I2 = 4 entries x 2 bytes).
+    pldt = bytearray()
+    records = []
+    for rec_index in range(n):
+        palette_offset = len(pldt)
+        pldt += struct.pack("<HHHH",
+                            RGB555_RED, RGB555_GREEN,
+                            RGB555_BLUE, RGB555_WHITE)
+        records.append({
+            "teximage_param": PARAM_I2_1024,
+            "pltt_base": rec_index,
+            "texel_offset": 0,
+            "texel_size": len(txdt),
+            "palette_offset": palette_offset,
+            "palette_size": 8,
+            "index_offset": 0,
+            "index_size": 0,
+        })
+
+    # One small triangle per texture key.
+    out = []
+    base = ((-3840, -2560), (-640, -2560), (-640, -320))
+    for rec_index in range(n):
+        out.append((CMD_TEXIMAGE_PARAM, PARAM_I2_1024))
+        out.append((CMD_PLTT_BASE, rec_index))
+        out.append((CMD_COLOR, RGB555_WHITE))
+        out.append((CMD_BEGIN_VTXS, 0))
+        for corner, (u, v) in zip(base, [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0)]):
+            s = int(u * 1024 * 16.0) & 0xFFFF
+            t = int(v * 1024 * 16.0) & 0xFFFF
+            out.append(_tex_coord(s, t))
+            out.extend(_vtx16(corner[0] + rec_index * 128,
+                              corner[1] + rec_index * 64))
+        out.append((CMD_END_VTXS, 0))
+    out.append((CMD_SWAP_BUFFERS, 0))
+
+    gxcm = entries(*out)
+    txds = _txds_payload(records)
+    return gxcm, txds, txdt, bytes(pldt)
 
 
-GXCM = _fourcc("GXCM")
-META = _fourcc("META")
-TXDS = _fourcc("TXDS")
-TXDT = _fourcc("TXDT")
-
-
-# Chunk flag constants from the v2 format.
-CHUNK_FLAG_REQUIRED = 0x00000001
-
-
-def _build_frame(gxcm, txds, txdt):
+def _build_frame(gxcm, txds, txdt, pldt=None):
     meta_payload = struct.pack("<IIII", 2, 0x7, 0, 0)
     body = _chunk(GXCM, gxcm, flags=CHUNK_FLAG_REQUIRED)
     body += _chunk(META, meta_payload)
@@ -259,6 +334,9 @@ def _build_frame(gxcm, txds, txdt):
         body += _chunk(TXDS, txds)
         body += _chunk(TXDT, txdt)
         chunk_count += 2
+    if pldt is not None:
+        body += _chunk(PLDT, pldt)
+        chunk_count += 1
 
     total = 32 + len(body)
     header = struct.pack("<IIIIIIII", 2, 32, total, 1, 1, chunk_count,
@@ -273,6 +351,9 @@ def frame_bytes(name):
     if name == FRAME_NAMES[1]:
         gxcm, _txds, _txdt = _build_control()
         return _build_frame(gxcm, None, None)
+    if name == FRAME_NAMES[2]:
+        gxcm, txds, txdt, pldt = _build_over_budget(3)
+        return _build_frame(gxcm, txds, txdt, pldt)
     raise ValueError(f"unknown frame name: {name}")
 
 
@@ -294,7 +375,19 @@ def main(argv=None):
     parser.add_argument("outdir", help="output directory")
     parser.add_argument("--name", choices=FRAME_NAMES,
                         help="write only one frame")
+    parser.add_argument("--over-budget", type=int, metavar="N",
+                        help=("write an over-budget frame with N distinct "
+                              "1024x1024 I2 keys (N >= 3)"))
     args = parser.parse_args(argv)
+
+    if args.over_budget is not None:
+        gxcm, txds, txdt, pldt = _build_over_budget(args.over_budget)
+        path = os.path.join(args.outdir, "twlhd_frame_v2_tex_over.bin")
+        os.makedirs(args.outdir, exist_ok=True)
+        with open(path, "wb") as handle:
+            handle.write(_build_frame(gxcm, txds, txdt, pldt))
+        print(path)
+        return 0
 
     if args.name:
         path = os.path.join(args.outdir, args.name)
