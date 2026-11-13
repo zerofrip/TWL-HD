@@ -216,7 +216,8 @@ int main(void) {
         goto cleanup;
     }
 
-    /* Scratch must fit the largest single decoded texture. */
+    /* Scratch must fit the largest single decoded texture (prepare's write
+     * pass decodes into it; the sizing pass needs no scratch). */
     for (i = 0; i < twlhd_v2_txds_count(&view); i++) {
         TwlhdV2TexRecord rec;
         uint32_t w, h;
@@ -235,8 +236,8 @@ int main(void) {
         goto cleanup;
     }
 
-    if (twlhd_pica_frame_arena_needed(tex, vertex_count, &view, scratch,
-                                      scratch_size, &arena_needed) !=
+    if (twlhd_pica_frame_arena_needed(tex, vertex_count, &view,
+                                      &arena_needed) !=
         TWLHD_PICA_FRAME_OK) {
         fprintf(stderr, "arena_needed failed\n");
         bad = 1;

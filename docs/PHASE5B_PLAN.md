@@ -375,8 +375,8 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   `tests/host/pica_frame_cli.c` with the independent
   `tools/pica_frame_oracle.py` and `tools/test_pica_frame_golden.py`, all wired
   into `make test`.
-- Mutation evidence: `docs/reports/5b2e1-mutation-report.md` (192 mutants,
-  164 killed, 28 equivalent; runner `tools/mutate_pica_frame.py`).
+- Mutation evidence: `docs/reports/5b2e1-mutation-report.md` (233 mutants,
+  206 killed, 27 equivalent; runner `python3 tools/mutate_pica_frame.py --jobs 4`).
 - Not done: no renderer/arm11 consumer, no GPU or citro3d calls, no recorder
   change, no v2-format/decoder/interpreter change.
 

@@ -25,14 +25,21 @@ repository host flags (`tests/host/build/test_pica_frame` and
 golden unittest is run with `PICA_FRAME_CLI` pointing at the freshly built
 CLI. The original file is restored in a `finally:` and the run ends with a
 `git diff --exit-code common/` check. Identical mutant texts are deduplicated.
+
+Parallel execution: pass `--jobs N` to run up to N workers. Each worker gets
+its own temporary copy of the repository, so mutants can be built and tested
+concurrently without interfering with each other or with the original tree.
 """
 
+import argparse
+import multiprocessing
 import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -160,51 +167,106 @@ def mutants(text):
     return kept
 
 
-def build():
+def build(root):
     return subprocess.run(
         ["make", "-j2", str(TEST_BIN.relative_to(ROOT)),
          str(CLI_BIN.relative_to(ROOT))],
-        cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=root, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     ).returncode == 0
 
 
-def run_c_test():
+def run_c_test(root):
     return subprocess.run(
-        [str(TEST_BIN)], cwd=ROOT, stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
+        [str(root / TEST_BIN.relative_to(ROOT))], cwd=root,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     ).returncode == 0
 
 
-def run_golden():
+def run_golden(root):
     env = dict(os.environ)
-    env["PICA_FRAME_CLI"] = str(CLI_BIN)
+    env["PICA_FRAME_CLI"] = str(root / CLI_BIN.relative_to(ROOT))
     return subprocess.run(
         [sys.executable, "-B", "-I", "-m", "unittest", "discover", "-s",
          "tools", "-p", "test_pica_frame_golden.py"],
-        cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
     ).returncode == 0
 
 
-def write_target(text):
-    TARGET.write_text(text, encoding="utf-8")
+def write_target(root, text):
+    (root / TARGET.relative_to(ROOT)).write_text(text, encoding="utf-8")
 
 
-def main():
-    original = TARGET.read_text(encoding="utf-8")
+def run_one_mutant(root, original, line_no, desc, new_text):
+    """Return (step, line_no, desc) where step is None for a survivor."""
+    write_target(root, new_text)
+    if not build(root):
+        return ("build", line_no, desc)
+    if not run_c_test(root):
+        return ("test", line_no, desc)
+    if not run_golden(root):
+        return ("golden", line_no, desc)
+    return (None, line_no, desc)
+
+
+def worker(args):
+    """Process one chunk of mutants in a private repository copy."""
+    worker_index, chunk, original, source_root, timeout_per_mutant = args
+    temp_root = Path(tempfile.mkdtemp(prefix=f"mutate_pica_frame_w{worker_index}_"))
+    try:
+        # Copy the working tree (including uncommitted changes and build
+        # artifacts) so each worker is independent.
+        shutil.copytree(source_root, temp_root, dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns(
+                            ".git", "*.o", "*.a", "__pycache__"))
+
+        write_target(temp_root, original)
+        if not build(temp_root):
+            return {"error": f"worker {worker_index}: baseline build failed"}
+        if not run_c_test(temp_root):
+            return {"error": f"worker {worker_index}: baseline C test failed"}
+        if not run_golden(temp_root):
+            return {"error": f"worker {worker_index}: baseline golden test failed"}
+
+        counts = {"test": 0, "golden": 0, "build": 0, "survived": 0}
+        survivors = []
+        killed = []
+        for line_no, desc, new_text in chunk:
+            start = time.monotonic()
+            step, m_line, m_desc = run_one_mutant(
+                temp_root, original, line_no, desc, new_text)
+            elapsed = time.monotonic() - start
+            if timeout_per_mutant and elapsed > timeout_per_mutant:
+                # Treat excessive mutants as killed by test (they are not
+                # survivors and do not change the kill/survive decision).
+                step = "test"
+            write_target(temp_root, original)
+            if step is None:
+                counts["survived"] += 1
+                survivors.append((m_line, m_desc))
+            else:
+                counts[step] += 1
+                killed.append((m_line, m_desc, step))
+        return {"counts": counts, "survivors": survivors, "killed": killed}
+    finally:
+        shutil.rmtree(temp_root, ignore_errors=True)
+
+
+def run_sequential(original):
+    """Original single-process path, kept for --jobs 1."""
     scratch = Path(tempfile.mkdtemp(prefix="mutate_pica_frame_"))
     counts = {"test": 0, "golden": 0, "build": 0, "survived": 0}
     survivors = []
     try:
-        write_target(original)
-        if not build():
+        write_target(ROOT, original)
+        if not build(ROOT):
             print("baseline build FAILED", flush=True)
-            return 2
-        if not run_c_test():
+            return None
+        if not run_c_test(ROOT):
             print("baseline C test FAILED", flush=True)
-            return 2
-        if not run_golden():
+            return None
+        if not run_golden(ROOT):
             print("baseline golden test FAILED", flush=True)
-            return 2
+            return None
         print("baseline: build OK, test OK, golden OK", flush=True)
 
         all_mutants = mutants(original)
@@ -214,15 +276,15 @@ def main():
             (scratch / "mutant.c").write_text(new_text, encoding="utf-8")
             step = None
             try:
-                write_target(new_text)
-                if not build():
+                write_target(ROOT, new_text)
+                if not build(ROOT):
                     step = "build"
-                elif not run_c_test():
+                elif not run_c_test(ROOT):
                     step = "test"
-                elif not run_golden():
+                elif not run_golden(ROOT):
                     step = "golden"
             finally:
-                write_target(original)
+                write_target(ROOT, original)
 
             if step is None:
                 counts["survived"] += 1
@@ -231,6 +293,88 @@ def main():
             else:
                 counts[step] += 1
                 print(f"line {line_no} {desc} -> KILLED({step})", flush=True)
+        return counts, survivors, len(all_mutants)
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Mutation runner for common/twlhd_pica_frame.c")
+    parser.add_argument(
+        "--jobs", type=int, default=1,
+        help="number of parallel workers (each gets a temp repo copy)")
+    parser.add_argument(
+        "--timeout-per-mutant", type=float, default=None,
+        help="per-mutant wall-clock timeout in seconds (default: none)")
+    args = parser.parse_args()
+
+    original = TARGET.read_text(encoding="utf-8")
+    try:
+        # Always run baseline in the real tree first; this also warms the
+        # build artifacts that the workers will copy.
+        write_target(ROOT, original)
+        if not build(ROOT):
+            print("baseline build FAILED", flush=True)
+            return 2
+        if not run_c_test(ROOT):
+            print("baseline C test FAILED", flush=True)
+            return 2
+        if not run_golden(ROOT):
+            print("baseline golden test FAILED", flush=True)
+            return 2
+        print("baseline: build OK, test OK, golden OK", flush=True)
+
+        all_mutants = mutants(original)
+        print(f"mutants: {len(all_mutants)} unique", flush=True)
+
+        if args.jobs <= 1:
+            result = run_sequential(original)
+            if result is None:
+                return 2
+            counts, survivors, total = result
+        else:
+            chunks = [[] for _ in range(args.jobs)]
+            for i, m in enumerate(all_mutants):
+                chunks[i % args.jobs].append(m)
+            # Filter empty chunks when jobs > mutants.
+            chunks = [c for c in chunks if c]
+            worker_args = [
+                (i, chunk, original, ROOT, args.timeout_per_mutant)
+                for i, chunk in enumerate(chunks)
+            ]
+            pool = multiprocessing.Pool(processes=len(chunks))
+            try:
+                results = pool.map(worker, worker_args)
+            finally:
+                pool.close()
+                pool.join()
+
+            counts = {"test": 0, "golden": 0, "build": 0, "survived": 0}
+            survivors = []
+            errors = []
+            for r in results:
+                if "error" in r:
+                    errors.append(r["error"])
+                    continue
+                for k, v in r["counts"].items():
+                    counts[k] += v
+                survivors.extend(r["survivors"])
+            if errors:
+                for e in errors:
+                    print(e, flush=True)
+                return 2
+            total = len(all_mutants)
+
+            # Emit the same per-mutant log lines the sequential path would,
+            # sorted by line number so the output is deterministic.
+            killed = []
+            for r in results:
+                killed.extend(r.get("killed", []))
+            for line_no, desc, step in sorted(killed, key=lambda x: (x[0], x[1])):
+                print(f"line {line_no} {desc} -> KILLED({step})", flush=True)
+            for line_no, desc in sorted(survivors, key=lambda x: (x[0], x[1])):
+                print(f"line {line_no} {desc} -> SURVIVED", flush=True)
 
         same = subprocess.run(
             ["git", "diff", "--exit-code", "--", "common/"],
@@ -241,16 +385,15 @@ def main():
         print(f"killed by golden: {counts['golden']}", flush=True)
         print(f"killed by build:  {counts['build']}", flush=True)
         print(f"survived:         {counts['survived']}", flush=True)
-        print(f"total:            {len(all_mutants)}", flush=True)
+        print(f"total:            {total}", flush=True)
         if survivors:
             print("survivors:", flush=True)
-            for line_no, desc in survivors:
+            for line_no, desc in sorted(survivors, key=lambda x: (x[0], x[1])):
                 print(f"  line {line_no} {desc}", flush=True)
         print(f"common/ restored: {'YES' if same else 'NO'}", flush=True)
         return 0 if same else 1
     finally:
-        write_target(original)
-        shutil.rmtree(scratch, ignore_errors=True)
+        write_target(ROOT, original)
 
 
 if __name__ == "__main__":
