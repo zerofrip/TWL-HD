@@ -40,7 +40,7 @@ def _dims(param):
     return (8 << ((param >> 20) & 7), 8 << ((param >> 23) & 7))
 
 
-def _make_entry(rng, param, pltt):
+def _make_entry(rng, param, pltt, fmt5_word=0x4000, fmt5_palette=8):
     fmt = (param >> 26) & 7
     width, height = _dims(param)
     pixels = width * height
@@ -49,10 +49,11 @@ def _make_entry(rng, param, pltt):
 
     texel = bytes(rng.getrandbits(8) for _ in range(texel_size))
     if fmt == 5:
-        palette_size = 8
+        palette_size = fmt5_palette
         palette = bytes(rng.getrandbits(8) for _ in range(palette_size))
-        # Every block: mode 1, palette offset 0 -> needs 4 of the 8 bytes.
-        index = b"".join(struct.pack("<H", 0x4000)
+        # Every block carries the same word; the default is mode 1, palette
+        # offset 0 -> needs 4 of the 8 bytes.
+        index = b"".join(struct.pack("<H", fmt5_word)
                          for _ in range(pixels // 16))
     else:
         palette_size = _PALETTE_ENTRIES[fmt] * 2
@@ -70,7 +71,8 @@ def _make_entry(rng, param, pltt):
 
 
 def _build_frame(rng, runs):
-    """runs: list of None (untextured), (param, pltt) or ('missing', p, pltt)."""
+    """runs: list of None (untextured), (param, pltt), ('missing', p, pltt) or
+    ('fmt5', p, pltt, index_word, palette_size)."""
     order = []
     entries = []
     seen = set()
@@ -83,6 +85,13 @@ def _build_frame(rng, runs):
         elif run[0] == "missing":
             key = run[1]
             pltt = run[2]
+        elif run[0] == "fmt5":
+            key = run[1]
+            pltt = run[2]
+            if (key, pltt) not in seen:
+                seen.add((key, pltt))
+                order.append((key, pltt))
+                entries.append(_make_entry(rng, key, pltt, run[3], run[4]))
         else:
             key, pltt = run
             if (key, pltt) not in seen:
@@ -176,6 +185,7 @@ def _frame_specs():
     m2 = _param(7, st=1)             # 8x16 key that no record carries
     big_w = _param(7, ss=7)          # 1024x8, the largest width
     big_h = _param(7, st=7)          # 8x1024, the largest height
+    f5 = _param(5)                   # 8x8 4x4, palette-window cases
 
     return [
         [(a, 0), (b, 1), None, (a, 0)],
@@ -193,6 +203,11 @@ def _frame_specs():
         [None, (a, 0), (b, 1)],
         # A NO_DATA run before any textured run, untextured last.
         [("missing", m2, 0), (c, 2), None],
+        # Format-5 palette windows: mode 0 exact fit (6 bytes), mode 2 exact
+        # fit (8 bytes), and a mode-2 window that would fit 4 bytes but not 8
+        # (the decoder's pre-scan refuses it: ERR_PALETTE_RANGE).
+        [("fmt5", f5, 13, 0x0000, 6), ("fmt5", f5, 14, 0x8000, 8),
+         ("fmt5", f5, 15, 0x8001, 8)],
     ]
 
 

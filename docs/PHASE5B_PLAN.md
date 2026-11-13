@@ -370,14 +370,22 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   byte-exact hand-computed arena bytes for the 8x8 texture and the 16x8
   paletted one; hand-computed non-square texcoords; every NULL/capacity/arena/
   count path with untouched-output canaries; missing-record and
-  decoder-rejected per-entry statuses; `arena_needed == arena_used`; guard
-  bytes before/after every output and a 0x00/0xFF input-tail two-pass compare).
+  decoder-rejected per-entry statuses; format-5 palette windows pinned per
+  block mode, with mode-0/2 exact fits, mode-0/2 windows that fit 4 but not
+  6/8 bytes, mode-1/3 exact fits vs 2 bytes short, the offender first and
+  last, and `arena_needed == arena_used` in every case; guard bytes
+  before/after every output and a 0x00/0xFF input-tail two-pass compare).
   `tests/host/pica_frame_cli.c` with the independent
   `tools/pica_frame_oracle.py` and `tools/test_pica_frame_golden.py`, all wired
   into `make test`.
 - Mutation evidence: `docs/reports/5b2e1-mutation-report.md` (233 mutants,
   206 killed, 27 equivalent; runner
-  `python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4`).
+  `python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4`). The runner
+  skips shift operators by design, so the format-5 mode shift
+  (`word >> 14` -> `word << 14`, line 192) is verified manually: the C suite
+  fails via the `arena_needed == 0` assertion while the golden stays green
+  (the decoder re-checks the rule); `common/` is restored and
+  `git diff --exit-code common/` clean.
 - Not done: no renderer/arm11 consumer, no GPU or citro3d calls, no recorder
   change, no v2-format/decoder/interpreter change.
 

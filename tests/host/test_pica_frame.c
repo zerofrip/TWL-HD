@@ -1255,6 +1255,94 @@ static void test_arena_needed_status(void) {
     test_report("pica-frame/arena-needed-status");
 }
 
+/*
+ * Format-5 palette windows pinned per block mode, for arena_needed AND prepare
+ * (the helpers assert the two agree). A mode-0 block needs 6 palette bytes and
+ * a mode-2 block 8 (:88-95); a predicate that used 4 for every mode would let
+ * a window that fits 4 bytes but not 6/8 through and size a texture the decode
+ * pass refuses.
+ */
+static void test_fmt5_palette_window(void) {
+    /* (a) mode 0 at offset 4: 4 + 6 == 10 exact fit, then 2 bytes short. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24];
+        uint8_t pldt[16];
+        TwlhdV2View view5;
+        uint16_t words[4] = {0x0001u, 0x0001u, 0x0001u, 0x0001u};
+
+        make_fmt5_view(&view5, record, txdt, pldt, 10u, words);
+        expect_sizing_ok_256(&view5);
+        make_fmt5_view(&view5, record, txdt, pldt, 8u, words);
+        expect_sizing_unsupported_zero(&view5, PARAM_FMT5_8);
+    }
+
+    /* (b) mode 2 at offset 4: 4 + 8 == 12 exact fit; the same window fits 4
+     * but not 8 bytes at palette_size 8. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24];
+        uint8_t pldt[16];
+        TwlhdV2View view5;
+        uint16_t words[4] = {0x8001u, 0x8001u, 0x8001u, 0x8001u};
+
+        make_fmt5_view(&view5, record, txdt, pldt, 12u, words);
+        expect_sizing_ok_256(&view5);
+        make_fmt5_view(&view5, record, txdt, pldt, 8u, words);
+        expect_sizing_unsupported_zero(&view5, PARAM_FMT5_8);
+    }
+
+    /* (c) the 4-byte modes: 1 at offset 4 and 3 (the default) at offset 4:
+     * 4 + 4 == 8 exact fit, then 2 bytes short. */
+    {
+        static const uint16_t four_byte_words[] = {0x4001u, 0xC001u};
+        uint32_t c;
+
+        for (c = 0; c < 2u; c++) {
+            uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+            uint8_t txdt[24];
+            uint8_t pldt[16];
+            TwlhdV2View view5;
+            uint16_t words[4];
+
+            words[0] = four_byte_words[c];
+            words[1] = four_byte_words[c];
+            words[2] = four_byte_words[c];
+            words[3] = four_byte_words[c];
+            make_fmt5_view(&view5, record, txdt, pldt, 8u, words);
+            expect_sizing_ok_256(&view5);
+            make_fmt5_view(&view5, record, txdt, pldt, 6u, words);
+            expect_sizing_unsupported_zero(&view5, PARAM_FMT5_8);
+        }
+    }
+
+    /* (d) the loop bounds: the mode-2 offender is the LAST block, then the
+     * FIRST block; 0x4000 (mode 1, offset 0) is a benign filler at 4 <= 8. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24];
+        uint8_t pldt[16];
+        TwlhdV2View view5;
+        uint16_t words[4];
+
+        words[0] = 0x4000u;
+        words[1] = 0x4000u;
+        words[2] = 0x4000u;
+        words[3] = 0x8001u;
+        make_fmt5_view(&view5, record, txdt, pldt, 8u, words);
+        expect_sizing_unsupported_zero(&view5, PARAM_FMT5_8);
+
+        words[0] = 0x8001u;
+        words[1] = 0x4000u;
+        words[2] = 0x4000u;
+        words[3] = 0x4000u;
+        make_fmt5_view(&view5, record, txdt, pldt, 8u, words);
+        expect_sizing_unsupported_zero(&view5, PARAM_FMT5_8);
+    }
+
+    test_report("pica-frame/fmt5-palette-window");
+}
+
 
 /*
  * Guard harness: [OOB_GUARD bytes][exact payload][OOB_GUARD bytes] around
@@ -1961,6 +2049,7 @@ int main(void) {
     test_missing_and_unsupported();
     test_arena_needed_no_writes();
     test_arena_needed_status();
+    test_fmt5_palette_window();
     test_out_of_bounds();
     test_size_bounds_1024();
     test_scratch_exact();
