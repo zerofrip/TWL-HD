@@ -30,6 +30,12 @@
 #define PARAM_B 0x0C100000u
 /* Format 7, 8x8, no wrap bits: matches no record in the "missing" frame. */
 #define PARAM_MISSING 0x1C000000u
+/* Format 4 (I8), 8x8: 64 texel B, 512 palette B. */
+#define PARAM_FMT4_8 0x10000000u
+/* Format 6 (A5I3), 8x8: 64 texel B, 16 palette B. */
+#define PARAM_FMT6_8 0x18000000u
+/* Format 5 (4x4), 8x8: 16 texel B, 8 palette B, 8 index B. */
+#define PARAM_FMT5_8 0x14000000u
 
 /* Literal 5-bit -> 8-bit table (DeSmuME colorspacehandler.cpp). */
 static const unsigned FIVE_TO_EIGHT[32] = {
@@ -280,7 +286,6 @@ static void test_prepare_basic(void) {
     CHECK_EQ_INT(twlhd_v2_txds_count(&view), 2u);
 
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view,
-                                               g_out.scratch, SCRATCH_BYTES,
                                                &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, ARENA_BYTES);
@@ -432,8 +437,7 @@ static void test_mixed_vertex_runs(void) {
     set_vtx(&tex[5], 16.0f, 8.0f, PARAM_A, 0u);
 
     CHECK_EQ_INT(write_and_parse(g_main_entries, 2u, &view), TWLHD_V2_OK);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 6u, &view, g_out.scratch,
-                                               SCRATCH_BYTES, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 6u, &view, &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, ARENA_BYTES);
 
@@ -490,7 +494,6 @@ static void test_mixed_vertex_runs(void) {
     memset(&empty, 0, sizeof(empty));
     needed = 0xDEADBEEFu;
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(many, 257u * 3u, &empty,
-                                               g_out.scratch, SCRATCH_BYTES,
                                                &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, 0u);
@@ -525,8 +528,7 @@ static void test_dedupe_key_halves(void) {
     set_vtx(&tex[5], 16.0f, 8.0f, PARAM_B, 0u);
 
     CHECK_EQ_INT(write_and_parse(entries, 2u, &view), TWLHD_V2_OK);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 6u, &view, g_out.scratch,
-                                               SCRATCH_BYTES, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 6u, &view, &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, ARENA_BYTES);
 
@@ -651,24 +653,26 @@ static void test_errors(void) {
 
     /* Arena sizing errors. */
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(NULL, VERTEX_COUNT, &view,
-                                               scratch, SCRATCH_BYTES,
                                                &needed),
                  TWLHD_PICA_FRAME_ERR_NULL);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, NULL, scratch,
-                                               SCRATCH_BYTES, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, NULL,
+                                               &needed),
                  TWLHD_PICA_FRAME_ERR_NULL);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view, NULL,
-                                               SCRATCH_BYTES, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view, NULL),
                  TWLHD_PICA_FRAME_ERR_NULL);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view,
-                                               scratch, SCRATCH_BYTES, NULL),
-                 TWLHD_PICA_FRAME_ERR_NULL);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 4u, &view, scratch,
-                                               SCRATCH_BYTES, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 4u, &view, &needed),
                  TWLHD_PICA_FRAME_ERR_COUNT);
+
+    /* Sizing needs no scratch buffer at all: the exact answer comes out with
+     * no work buffer, and only *out_arena_bytes is written. (The old
+     * small-scratch ERR_CAPACITY no longer exists; the remaining sizing
+     * capacity error, >MAX textures, is pinned by
+     * pica-frame/texture-cap-256.) */
+    needed = 0xDEADBEEFu;
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view,
-                                               scratch, 100u, &needed),
-                 TWLHD_PICA_FRAME_ERR_CAPACITY);
+                                               &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, ARENA_BYTES);
 
     /* Each capacity failure leaves every output byte untouched. */
     {
@@ -788,7 +792,6 @@ static void test_missing_and_unsupported(void) {
 
     CHECK_EQ_INT(write_and_parse(g_a_only, 1u, &view), TWLHD_V2_OK);
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view,
-                                               g_out.scratch, SCRATCH_BYTES,
                                                &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, 256u);
@@ -857,6 +860,401 @@ static void test_missing_and_unsupported(void) {
 
     test_report("pica-frame/missing-and-unsupported");
 }
+
+/* ------------------------------------------------------------------------- */
+/* Round-3: arena_needed is a pure sizing pass and answers per-entry status.  */
+/* ------------------------------------------------------------------------- */
+
+/* Inputs and dedicated output buffers snapshotted by the no-write test. */
+static uint8_t g_snap_txds[TWLHD_V2_TXDS_MAX_RECORDS * TWLHD_V2_TXDS_RECORD_SIZE];
+static uint8_t g_snap_txdt[TWLHD_V2_TXDT_MAX_BYTES];
+static uint8_t g_snap_pldt[TWLHD_V2_PLDT_MAX_BYTES];
+static uint8_t g_snap_arena[ARENA_BYTES];
+static TwlhdPicaTexCoord g_snap_texcoords[VERTEX_COUNT];
+
+/*
+ * The sizing pass writes only *out_arena_bytes: the vertex array, the parsed
+ * view (struct and TXDS/TXDT/PLDT bytes) and any arena/texcoords buffers the
+ * caller happens to pass must be byte-identical afterwards.
+ */
+static void test_arena_needed_no_writes(void) {
+    TwlhdGxTexVertex tex[VERTEX_COUNT];
+    TwlhdGxTexVertex tex_copy[VERTEX_COUNT];
+    TwlhdV2View view;
+    TwlhdV2View view_copy;
+    uint32_t needed = 0xDEADBEEFu;
+    size_t txds_bytes;
+
+    fill_tex_a();
+    fill_pal_b();
+    fill_tex_b();
+    make_main_vertices(tex);
+    CHECK_EQ_INT(write_and_parse(g_main_entries, 2u, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_txds_count(&view), 2u);
+
+    txds_bytes = (size_t)view.txds_count * TWLHD_V2_TXDS_RECORD_SIZE;
+    CHECK(txds_bytes <= sizeof(g_snap_txds));
+    CHECK((size_t)view.txdt_size <= sizeof(g_snap_txdt));
+    CHECK((size_t)view.pldt_size <= sizeof(g_snap_pldt));
+
+    memcpy(tex_copy, tex, sizeof(tex));
+    memcpy(&view_copy, &view, sizeof(view));
+    memcpy(g_snap_txds, view.txds, txds_bytes);
+    memcpy(g_snap_txdt, view.txdt, view.txdt_size);
+    memcpy(g_snap_pldt, view.pldt, view.pldt_size);
+    memset(g_snap_arena, 0x5B, sizeof(g_snap_arena));
+    memset(g_snap_texcoords, 0x5B, sizeof(g_snap_texcoords));
+
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, VERTEX_COUNT, &view,
+                                               &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, ARENA_BYTES); /* two textures: 256 + 512 */
+
+    CHECK(memcmp(tex, tex_copy, sizeof(tex)) == 0);
+    CHECK(memcmp(&view, &view_copy, sizeof(view)) == 0);
+    CHECK(memcmp(view.txds, g_snap_txds, txds_bytes) == 0);
+    CHECK(memcmp(view.txdt, g_snap_txdt, view.txdt_size) == 0);
+    CHECK(memcmp(view.pldt, g_snap_pldt, view.pldt_size) == 0);
+    CHECK(all_bytes_are(g_snap_arena, sizeof(g_snap_arena), 0x5B));
+    CHECK(all_bytes_are(g_snap_texcoords, sizeof(g_snap_texcoords), 0x5B));
+
+    test_report("pica-frame/arena-needed-no-writes");
+}
+
+/*
+ * One run whose record the decoder would refuse: sizing must answer 0 and
+ * prepare must agree with UNSUPPORTED (same shared predicate), storing no
+ * texture. The views are hand-built because the parser rejects these records
+ * (common/twlhd_v2_parse.c:379-384), exactly as in the broken-record test.
+ */
+static void expect_sizing_unsupported_zero(const TwlhdV2View *broken,
+                                           uint32_t param) {
+    TwlhdGxTexVertex one[3];
+    uint32_t needed = 0xDEADBEEFu;
+
+    set_vtx(&one[0], 0.0f, 0.0f, param, 0u);
+    set_vtx(&one[1], 2.0f, 2.0f, param, 0u);
+    set_vtx(&one[2], 4.0f, 4.0f, param, 0u);
+
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(one, 3u, broken, &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, 0u);
+
+    out_reset(&g_out);
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     one, 3u, broken, g_out.plan, RUN_COUNT, g_out.textures,
+                     RUN_COUNT, g_out.arena, ARENA_BYTES, g_out.texcoords,
+                     VERTEX_COUNT, g_out.entry_texture, g_out.entry_status,
+                     RUN_COUNT, g_out.scratch, SCRATCH_BYTES,
+                     &g_out.entry_count, &g_out.texture_count,
+                     &g_out.arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(g_out.entry_count, 1u);
+    CHECK_EQ_INT(g_out.texture_count, 0u);
+    CHECK_EQ_INT(g_out.arena_used, 0u);
+    CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED);
+    CHECK_EQ_INT(g_out.entry_texture[0], -1);
+}
+
+/* Hand-built format-5 view: 8x8, 16 texel bytes, 8 index bytes, and
+ * `palette_size` palette bytes whose four block words are words[0..3]. */
+static void make_fmt5_view(TwlhdV2View *view, uint8_t *record, uint8_t *txdt,
+                           uint8_t *pldt, uint32_t palette_size,
+                           const uint16_t *words) {
+    uint32_t block;
+
+    memset(record, 0, TWLHD_V2_TXDS_RECORD_SIZE);
+    put_le32(record + 0u, PARAM_FMT5_8);
+    put_le32(record + 12u, 16u);          /* texel_size */
+    put_le32(record + 20u, palette_size); /* palette_size */
+    put_le32(record + 24u, 16u);          /* index_offset */
+    put_le32(record + 28u, 8u);           /* index_size */
+    memset(txdt, 0, 24u);
+    for (block = 0; block < 4u; block++) {
+        put_le16(txdt + 16u + block * 2u, words[block]);
+    }
+    memset(pldt, 0x44, palette_size);
+
+    memset(view, 0, sizeof(*view));
+    view->txds = record;
+    view->txds_count = 1u;
+    view->txdt = txdt;
+    view->txdt_size = 24u;
+    view->pldt = pldt;
+    view->pldt_size = palette_size;
+}
+
+/* The same frame must size to one 8x8 RGBA8 texture and prepare it. */
+static void expect_sizing_ok_256(const TwlhdV2View *view5) {
+    TwlhdGxTexVertex one[3];
+    uint32_t needed = 0xDEADBEEFu;
+
+    set_vtx(&one[0], 0.0f, 0.0f, PARAM_FMT5_8, 0u);
+    set_vtx(&one[1], 2.0f, 2.0f, PARAM_FMT5_8, 0u);
+    set_vtx(&one[2], 4.0f, 4.0f, PARAM_FMT5_8, 0u);
+
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(one, 3u, view5, &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, 256u);
+
+    out_reset(&g_out);
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     one, 3u, view5, g_out.plan, RUN_COUNT, g_out.textures,
+                     RUN_COUNT, g_out.arena, ARENA_BYTES, g_out.texcoords,
+                     VERTEX_COUNT, g_out.entry_texture, g_out.entry_status,
+                     RUN_COUNT, g_out.scratch, SCRATCH_BYTES,
+                     &g_out.entry_count, &g_out.texture_count,
+                     &g_out.arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(g_out.entry_count, 1u);
+    CHECK_EQ_INT(g_out.texture_count, 1u);
+    CHECK_EQ_INT(g_out.arena_used, 256u);
+    CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_OK);
+    CHECK_EQ_INT(g_out.entry_texture[0], 0);
+}
+
+static void test_arena_needed_status(void) {
+    /* (a) texel_size does not match twlhd_v2_tex_sizes(): :171-173. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[16];
+        TwlhdV2View broken;
+
+        memset(record, 0, sizeof(record));
+        put_le32(record + 0u, PARAM_MISSING); /* format 7, 8x8 */
+        put_le32(record + 4u, 0u);
+        put_le32(record + 8u, 0u);  /* texel_offset */
+        put_le32(record + 12u, 4u); /* texel_size: wrong (128) */
+        memset(txdt, 0x22, sizeof(txdt));
+
+        memset(&broken, 0, sizeof(broken));
+        broken.txds = record;
+        broken.txds_count = 1u;
+        broken.txdt = txdt;
+        broken.txdt_size = sizeof(txdt);
+
+        expect_sizing_unsupported_zero(&broken, PARAM_MISSING);
+    }
+
+    /* (b) format 5, valid pointers and sizes, but the first index word's
+     * palette window leaves palette_size: :239-247. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24]; /* 16 texel + 8 index bytes */
+        uint8_t pldt[8];
+        TwlhdV2View broken;
+
+        memset(record, 0, sizeof(record));
+        put_le32(record + 0u, PARAM_FMT5_8); /* 4x4, 8x8 */
+        put_le32(record + 4u, 0u);
+        put_le32(record + 8u, 0u);   /* texel_offset */
+        put_le32(record + 12u, 16u); /* texel_size */
+        put_le32(record + 16u, 0u);  /* palette_offset */
+        put_le32(record + 20u, 8u);  /* palette_size */
+        put_le32(record + 24u, 16u); /* index_offset */
+        put_le32(record + 28u, 8u);  /* index_size */
+        memset(txdt, 0x33, sizeof(txdt));
+        /* Word 1 = mode 0, palette offset 1 -> 4 + 6 = 10 > 8. */
+        put_le16(txdt + 16u, 1u);
+        memset(pldt, 0x44, sizeof(pldt));
+
+        memset(&broken, 0, sizeof(broken));
+        broken.txds = record;
+        broken.txds_count = 1u;
+        broken.txdt = txdt;
+        broken.txdt_size = sizeof(txdt);
+        broken.pldt = pldt;
+        broken.pldt_size = sizeof(pldt);
+
+        expect_sizing_unsupported_zero(&broken, PARAM_FMT5_8);
+    }
+
+    /* (c) format 4 with palette_size below the fixed 256-entry table: :174-181.
+     * Palette sizes must also pass twlhd_v2_tex_palette_size_ok(), so the
+     * record is refused at that check and the fixed-table rule backs it up. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[64];
+        uint8_t pldt[8];
+        TwlhdV2View broken;
+
+        memset(record, 0, sizeof(record));
+        put_le32(record + 0u, PARAM_FMT4_8); /* I8, 8x8 */
+        put_le32(record + 4u, 0u);
+        put_le32(record + 8u, 0u);   /* texel_offset */
+        put_le32(record + 12u, 64u); /* texel_size */
+        put_le32(record + 16u, 0u);  /* palette_offset */
+        put_le32(record + 20u, 8u);  /* palette_size: 512 required */
+        memset(txdt, 0x55, sizeof(txdt));
+        memset(pldt, 0x66, sizeof(pldt));
+
+        memset(&broken, 0, sizeof(broken));
+        broken.txds = record;
+        broken.txds_count = 1u;
+        broken.txdt = txdt;
+        broken.txdt_size = sizeof(txdt);
+        broken.pldt = pldt;
+        broken.pldt_size = sizeof(pldt);
+
+        expect_sizing_unsupported_zero(&broken, PARAM_FMT4_8);
+    }
+
+    /* (d) exact fit: block offset 4 + mode-1 window 4 == palette_size 8, the
+     * decoder's `end > palette_size` boundary (:242-246) accepts equality. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24]; /* 16 texel + 8 index bytes */
+        uint8_t pldt[8];
+        TwlhdV2View view5;
+        TwlhdGxTexVertex one[3];
+        uint32_t needed = 0xDEADBEEFu;
+        uint32_t block;
+
+        memset(record, 0, sizeof(record));
+        put_le32(record + 0u, PARAM_FMT5_8);
+        put_le32(record + 12u, 16u); /* texel_size */
+        put_le32(record + 20u, 8u);  /* palette_size */
+        put_le32(record + 24u, 16u); /* index_offset */
+        put_le32(record + 28u, 8u);  /* index_size */
+        memset(txdt, 0x33, sizeof(txdt));
+        /* Word 0x4001 = mode 1, palette offset 1 -> 4 + 4 == 8. */
+        for (block = 0; block < 4u; block++) {
+            put_le16(txdt + 16u + block * 2u, 0x4001u);
+        }
+        memset(pldt, 0x44, sizeof(pldt));
+
+        memset(&view5, 0, sizeof(view5));
+        view5.txds = record;
+        view5.txds_count = 1u;
+        view5.txdt = txdt;
+        view5.txdt_size = sizeof(txdt);
+        view5.pldt = pldt;
+        view5.pldt_size = sizeof(pldt);
+
+        set_vtx(&one[0], 0.0f, 0.0f, PARAM_FMT5_8, 0u);
+        set_vtx(&one[1], 2.0f, 2.0f, PARAM_FMT5_8, 0u);
+        set_vtx(&one[2], 4.0f, 4.0f, PARAM_FMT5_8, 0u);
+
+        CHECK_EQ_INT(twlhd_pica_frame_arena_needed(one, 3u, &view5, &needed),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(needed, 256u);
+
+        out_reset(&g_out);
+        CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                         one, 3u, &view5, g_out.plan, RUN_COUNT,
+                         g_out.textures, RUN_COUNT, g_out.arena, ARENA_BYTES,
+                         g_out.texcoords, VERTEX_COUNT, g_out.entry_texture,
+                         g_out.entry_status, RUN_COUNT, g_out.scratch,
+                         SCRATCH_BYTES, &g_out.entry_count,
+                         &g_out.texture_count, &g_out.arena_used),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(g_out.entry_count, 1u);
+        CHECK_EQ_INT(g_out.texture_count, 1u);
+        CHECK_EQ_INT(g_out.arena_used, 256u);
+        CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_OK);
+        CHECK_EQ_INT(g_out.entry_texture[0], 0);
+        CHECK_EQ_INT(g_out.textures[0].width, 8u);
+        CHECK_EQ_INT(g_out.textures[0].height, 8u);
+    }
+
+    /* (e) near miss: mode 1 at palette offset 2 needs 8 + 4 = 12 > 10. The
+     * predicate must reject it, otherwise arena_needed would count a texture
+     * the write-pass decode refuses (:244) and sizing would disagree. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24];
+        uint8_t pldt[10];
+        TwlhdV2View broken;
+        uint32_t block;
+
+        memset(record, 0, sizeof(record));
+        put_le32(record + 0u, PARAM_FMT5_8);
+        put_le32(record + 12u, 16u); /* texel_size */
+        put_le32(record + 20u, 10u); /* palette_size */
+        put_le32(record + 24u, 16u); /* index_offset */
+        put_le32(record + 28u, 8u);  /* index_size */
+        memset(txdt, 0x33, sizeof(txdt));
+        for (block = 0; block < 4u; block++) {
+            put_le16(txdt + 16u + block * 2u, 0x4002u);
+        }
+        memset(pldt, 0x44, sizeof(pldt));
+
+        memset(&broken, 0, sizeof(broken));
+        broken.txds = record;
+        broken.txds_count = 1u;
+        broken.txdt = txdt;
+        broken.txdt_size = sizeof(txdt);
+        broken.pldt = pldt;
+        broken.pldt_size = sizeof(pldt);
+
+        expect_sizing_unsupported_zero(&broken, PARAM_FMT5_8);
+    }
+
+    /* (f) exact fit for every block mode: mode 0 needs 6 bytes, mode 2 needs
+     * 8, mode 3 (the default) needs 4 (:88-95). Equality must be accepted. */
+    {
+        static const struct {
+            uint32_t palette_size;
+            uint16_t word;
+        } exact[] = {
+            {6u, 0x0000u},  /* mode 0, offset 0: 0 + 6 == 6 */
+            {8u, 0x8000u},  /* mode 2, offset 0: 0 + 8 == 8 */
+            {10u, 0xC001u}, /* mode 3, offset 1: 4 + 4 == 10 */
+        };
+        uint32_t c;
+
+        for (c = 0; c < sizeof(exact) / sizeof(exact[0]); c++) {
+            uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+            uint8_t txdt[24];
+            uint8_t pldt[16];
+            TwlhdV2View view5;
+            uint16_t words[4];
+
+            words[0] = exact[c].word;
+            words[1] = exact[c].word;
+            words[2] = exact[c].word;
+            words[3] = exact[c].word;
+            make_fmt5_view(&view5, record, txdt, pldt, exact[c].palette_size,
+                           words);
+            expect_sizing_ok_256(&view5);
+        }
+    }
+
+    /* (g) the per-block range check must visit every block and use the whole
+     * offset field: out of range in block 0 only, then in block 1 only. */
+    {
+        uint8_t record[TWLHD_V2_TXDS_RECORD_SIZE];
+        uint8_t txdt[24];
+        uint8_t pldt[6];
+        TwlhdV2View broken;
+        uint16_t words[4];
+
+        words[0] = 0x0001u; /* offset 4, mode 0: 4 + 6 > 6 */
+        words[1] = 0x0000u;
+        words[2] = 0x0000u;
+        words[3] = 0x0000u;
+        make_fmt5_view(&broken, record, txdt, pldt, 6u, words);
+        expect_sizing_unsupported_zero(&broken, PARAM_FMT5_8);
+
+        words[0] = 0x0000u;
+        words[1] = 0x0001u;
+        words[2] = 0x0000u;
+        words[3] = 0x0000u;
+        make_fmt5_view(&broken, record, txdt, pldt, 6u, words);
+        expect_sizing_unsupported_zero(&broken, PARAM_FMT5_8);
+
+        /* Only block 2 is out of range: the block count must not shrink. */
+        words[0] = 0x0000u;
+        words[1] = 0x0000u;
+        words[2] = 0x0001u;
+        words[3] = 0x0000u;
+        make_fmt5_view(&broken, record, txdt, pldt, 6u, words);
+        expect_sizing_unsupported_zero(&broken, PARAM_FMT5_8);
+    }
+
+    test_report("pica-frame/arena-needed-status");
+}
+
 
 /*
  * Guard harness: [OOB_GUARD bytes][exact payload][OOB_GUARD bytes] around
@@ -1030,8 +1428,7 @@ static void test_size_bounds_1024(void) {
     set_vtx(&verts[5], 2.0f, 2.0f, PARAM_BIG_H, 1u);
 
     CHECK_EQ_INT(write_and_parse(entries, 2u, &view), TWLHD_V2_OK);
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(verts, 6u, &view, scratch,
-                                               32768u, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(verts, 6u, &view, &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, 65536u);
 
@@ -1084,8 +1481,10 @@ static void test_size_bounds_1024(void) {
 }
 
 /*
- * Scratch exactly the decoded size must succeed; one byte less must fail with
- * the documented capacity error and leave every output untouched.
+ * Prepare's scratch exactly the decoded size must succeed; one byte less must
+ * fail with the documented capacity error and leave every output untouched.
+ * The sizing pass is scratch-free, so it reports the same 256 bytes in both
+ * cases.
  */
 static void test_scratch_exact(void) {
     TwlhdGxTexVertex tex[3];
@@ -1099,8 +1498,7 @@ static void test_scratch_exact(void) {
     CHECK_EQ_INT(write_and_parse(g_a_only, 1u, &view), TWLHD_V2_OK);
 
     /* 8x8 RGBA8 = 256 bytes. */
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &view, g_out.scratch,
-                                               256u, &needed),
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &view, &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, 256u);
 
@@ -1123,10 +1521,9 @@ static void test_scratch_exact(void) {
     expect_a_bytes(&g_out);
 
     needed = 0xDEADBEEFu;
-    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &view, g_out.scratch,
-                                               255u, &needed),
-                 TWLHD_PICA_FRAME_ERR_CAPACITY);
-    CHECK_EQ_INT(needed, 0xDEADBEEFu);
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &view, &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, 256u);
 
     out_reset(&g_out);
     CHECK_EQ_INT(twlhd_pica_frame_prepare(
@@ -1204,8 +1601,7 @@ static void test_texture_cap_256(void) {
     CHECK_EQ_INT(twlhd_v2_txds_count(&view), CAP_TEXTURES);
 
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(
-                     g_cap_vertices, CAP_TEXTURES * 3u, &view, g_cap_scratch,
-                     CAP_TEX_BYTES * 2u, &needed),
+                     g_cap_vertices, CAP_TEXTURES * 3u, &view, &needed),
                  TWLHD_PICA_FRAME_OK);
     CHECK_EQ_INT(needed, CAP_TEXTURES * 256u);
 
@@ -1273,8 +1669,7 @@ static void test_texture_cap_256(void) {
 
     needed = 0xDEADBEEFu;
     CHECK_EQ_INT(twlhd_pica_frame_arena_needed(
-                     g_raw_vertices, CAP_EXTRA * 3u, &raw, g_cap_scratch,
-                     CAP_TEX_BYTES * 2u, &needed),
+                     g_raw_vertices, CAP_EXTRA * 3u, &raw, &needed),
                  TWLHD_PICA_FRAME_ERR_CAPACITY);
     CHECK_EQ_INT(needed, 0xDEADBEEFu);
 
@@ -1295,9 +1690,6 @@ static void test_texture_cap_256(void) {
 
 /* Format 4 and 6 need no index data; format 5 does. The `format == 5u` test
  * must not fire `NO_DATA` for the index-less formats. */
-#define PARAM_FMT4_8 0x10000000u /* I8, 8x8: 64 texel B, 512 palette B */
-#define PARAM_FMT6_8 0x18000000u /* A5I3, 8x8: 64 texel B, 16 palette B */
-#define PARAM_FMT5_8 0x14000000u /* 4x4, 8x8: 16 texel B, 8 pal B, 8 idx B */
 
 static uint8_t g_fmt4_tex[64];
 static uint8_t g_fmt4_pal[512];
@@ -1380,6 +1772,7 @@ static void test_format_index_matrix(void) {
         uint8_t txdt[32];
         TwlhdV2View broken;
         TwlhdGxTexVertex tex[3];
+        uint32_t needed = 0xDEADBEEFu;
 
         memset(record, 0, sizeof(record));
         put_le32(record + 0u, PARAM_FMT5_8);
@@ -1404,6 +1797,10 @@ static void test_format_index_matrix(void) {
         set_vtx(&tex[0], 0.0f, 0.0f, PARAM_FMT5_8, 0u);
         set_vtx(&tex[1], 2.0f, 2.0f, PARAM_FMT5_8, 0u);
         set_vtx(&tex[2], 4.0f, 4.0f, PARAM_FMT5_8, 0u);
+
+        CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &broken, &needed),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(needed, 0u);
 
         out_reset(&g_out);
         CHECK_EQ_INT(twlhd_pica_frame_prepare(
@@ -1562,6 +1959,8 @@ int main(void) {
     test_dedupe_key_halves();
     test_errors();
     test_missing_and_unsupported();
+    test_arena_needed_no_writes();
+    test_arena_needed_status();
     test_out_of_bounds();
     test_size_bounds_1024();
     test_scratch_exact();

@@ -10,10 +10,30 @@
 #include "twlhd_pica_frame.h"
 
 #include <stddef.h>
+#include <string.h>
 
 #include "twlhd_tex_decode.h"
 
 #define FRAME_FORMAT(param) (((param) >> 26) & 7u)
+
+/* One classified run: the input key, the record, and the sizing result. */
+typedef struct {
+    uint32_t param;
+    uint32_t pltt;
+    TwlhdV2TexRecord record;
+    const uint8_t *texel;
+    const uint8_t *palette;
+    const uint8_t *index;
+    int untextured;
+    TwlhdPicaFrameEntryStatus status;
+    uint32_t width;
+    uint32_t height;
+    uint32_t bytes;
+} FrameRun;
+
+static uint16_t frame_read_le16(const uint8_t *p) {
+    return (uint16_t)((uint16_t)p[0] | ((uint16_t)p[1] << 8));
+}
 
 static int frame_size_ok(uint32_t v) {
     return v >= 8u && v <= 1024u && (v & (v - 1u)) == 0u;
@@ -51,79 +71,134 @@ static int frame_find_record(const TwlhdV2View *view, uint32_t param,
 }
 
 /*
+ * Fixed palette table size in 16-bit entries, copied from
+ * fixed_palette_entries() (common/twlhd_tex_decode.c:54-63). Formats 5
+ * (window) and 7 (none) have no fixed table.
+ */
+static uint32_t frame_fixed_palette_entries(uint32_t format) {
+    switch (format) {
+    case 1u: return 32u;  /* A3I5 */
+    case 2u: return 4u;   /* I2 */
+    case 3u: return 16u;  /* I4 */
+    case 4u: return 256u; /* I8 */
+    case 6u: return 8u;   /* A5I3 */
+    default: return 0u;
+    }
+}
+
+/* 4x4 palette bytes needed by one block of `mode`, copied from
+ * mode_palette_bytes() (common/twlhd_tex_decode.c:88-95). */
+static uint32_t frame_mode_palette_bytes(uint32_t mode) {
+    switch (mode) {
+    case 0u: return 6u;
+    case 2u: return 8u;
+    default: return 4u;
+    }
+}
+
+/*
  * Classify one run (the triangle whose first vertex is `first`).
  *
- * Returns 0 when the run was classified (the out parameters are written) and
- * -1 when a texture that would decode needs more scratch than scratch_size.
- * The texture image is decoded into scratch when the run is texturable, so a
- * later pass can swizzle it without decoding a second time.
+ * This is the one no-decode predicate shared by twlhd_pica_frame_prepare()'s
+ * validation pass, its write pass and twlhd_pica_frame_arena_needed(): it reads
+ * the input view and vertex array and writes only *run. Every refusal
+ * twlhd_tex_decode() can make is reproduced here read-only (the file:line
+ * citations below are common/twlhd_tex_decode.c), so a run reported OK decodes
+ * in the write pass; the only remaining decode failure is ERR_OUTPUT_SIZE,
+ * which twlhd_pica_frame_prepare() rules out up front with `bytes >
+ * scratch_size` (:186-187).
+ *
+ * The record and pointer fields stay zero/NULL for an untextured or failed
+ * run; the write pass only uses them for status OK.
  */
-static int frame_eval_run(const TwlhdGxTexVertex *tex,
-                          const TwlhdV2View *view, uint8_t *scratch,
-                          uint32_t scratch_size, uint32_t first,
-                          uint32_t *out_param, uint32_t *out_pltt,
-                          int *out_untextured,
-                          TwlhdPicaFrameEntryStatus *out_status,
-                          uint32_t *out_width, uint32_t *out_height,
-                          uint32_t *out_bytes) {
-    uint32_t param = tex[first].teximage_param;
-    uint32_t pltt = tex[first].pltt_base;
-    uint32_t format = FRAME_FORMAT(param);
-    uint32_t rec_index = 0;
-    uint32_t width = 0;
-    uint32_t height = 0;
-    uint32_t bytes;
-    TwlhdV2TexRecord rec;
-    const uint8_t *texel;
-    const uint8_t *palette;
-    const uint8_t *index;
+static void frame_classify_run(const TwlhdGxTexVertex *tex,
+                               const TwlhdV2View *view, uint32_t first,
+                               FrameRun *run) {
+    uint32_t format;
+    uint32_t texel_bytes;
+    uint32_t index_bytes;
+    uint32_t entries;
+    uint32_t blocks;
+    uint32_t block;
+    uint32_t record_index;
 
-    *out_param = param;
-    *out_pltt = pltt;
-    *out_width = 0;
-    *out_height = 0;
-    *out_bytes = 0;
+    memset(run, 0, sizeof(*run));
+    run->param = tex[first].teximage_param;
+    run->pltt = tex[first].pltt_base;
+    run->status = TWLHD_PICA_FRAME_ENTRY_OK;
 
+    format = FRAME_FORMAT(run->param);
     if (format == 0u) {
-        *out_untextured = 1;
-        *out_status = TWLHD_PICA_FRAME_ENTRY_OK;
-        return 0;
-    }
-    *out_untextured = 0;
-
-    if (!frame_find_record(view, param, pltt, &rec_index, &rec)) {
-        *out_status = TWLHD_PICA_FRAME_ENTRY_NO_DATA;
-        return 0;
+        run->untextured = 1; /* :163: format 0 is the untextured path */
+        return;
     }
 
-    texel = twlhd_v2_tex_texel_ptr(view, rec_index);
-    palette = twlhd_v2_tex_palette_ptr(view, rec_index);
-    index = twlhd_v2_tex_index_ptr(view, rec_index);
-    if (!texel || (format != 7u && !palette) || (format == 5u && !index)) {
-        *out_status = TWLHD_PICA_FRAME_ENTRY_NO_DATA;
-        return 0;
+    if (!frame_find_record(view, run->param, run->pltt, &record_index,
+                           &run->record)) {
+        run->status = TWLHD_PICA_FRAME_ENTRY_NO_DATA;
+        return;
     }
 
-    if (!twlhd_tex_dimensions(param, &width, &height) ||
-        !frame_size_ok(width) || !frame_size_ok(height)) {
-        *out_status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
-        return 0;
+    run->texel = twlhd_v2_tex_texel_ptr(view, record_index);
+    run->palette = twlhd_v2_tex_palette_ptr(view, record_index);
+    run->index = twlhd_v2_tex_index_ptr(view, record_index);
+    /* :160-165: the decoder's own pointer rules. */
+    if (!run->texel || (format != 7u && !run->palette) ||
+        (format == 5u && !run->index)) {
+        run->status = TWLHD_PICA_FRAME_ENTRY_NO_DATA;
+        return;
     }
 
-    bytes = width * height * 4u;
-    if (bytes > scratch_size) return -1;
-
-    if (twlhd_tex_decode(&rec, texel, palette, index, scratch, scratch_size) !=
-        TWLHD_TEX_OK) {
-        *out_status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
-        return 0;
+    /* :65-72 and :183-185: the PICA size check the decoder applies. */
+    if (!twlhd_tex_dimensions(run->param, &run->width, &run->height) ||
+        !frame_size_ok(run->width) || !frame_size_ok(run->height)) {
+        run->status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+        return;
     }
 
-    *out_status = TWLHD_PICA_FRAME_ENTRY_OK;
-    *out_width = width;
-    *out_height = height;
-    *out_bytes = bytes;
-    return 0;
+    /* :167-173: sizes must match twlhd_v2_tex_sizes(). That call cannot fail
+     * here because format != 0 (common/twlhd_v2_parse.c:144). */
+    (void)twlhd_v2_tex_sizes(run->param, &texel_bytes, NULL, &index_bytes);
+    if (run->record.texel_size != texel_bytes ||
+        run->record.index_size != index_bytes) {
+        run->status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+        return;
+    }
+
+    /* :174-176: format 5 window / exact fixed table. */
+    if (!twlhd_v2_tex_palette_size_ok(run->param, run->record.palette_size)) {
+        run->status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+        return;
+    }
+
+    /* :178-181: fixed palette table must be fully present. */
+    entries = frame_fixed_palette_entries(format);
+    if (entries != 0u &&
+        (uint64_t)run->record.palette_size < (uint64_t)entries * 2u) {
+        run->status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+        return;
+    }
+
+    /* :239-247: every 4x4 block's palette window must fit palette_size. The
+     * index bytes are already range-checked by the accessor above, so this
+     * only reads the input view. */
+    if (format == 5u) {
+        blocks = (run->width >> 2) * (run->height >> 2);
+        for (block = 0; block < blocks; block++) {
+            uint16_t word =
+                frame_read_le16(run->index + (size_t)block * 2u);
+            uint32_t offset = (uint32_t)(word & 0x3FFFu) * 4u;
+            uint64_t end = (uint64_t)offset + (uint64_t)
+                frame_mode_palette_bytes((uint32_t)word >> 14);
+
+            if (end > (uint64_t)run->record.palette_size) {
+                run->status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+                return;
+            }
+        }
+    }
+
+    run->bytes = run->width * run->height * 4u;
 }
 
 static uint32_t frame_count_runs(const TwlhdGxTexVertex *tex,
@@ -171,26 +246,25 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
         return TWLHD_PICA_FRAME_ERR_CAPACITY;
     }
 
-    /* Validation/sizing pass. Writes only scratch. */
+    /*
+     * Validation/sizing pass: reads only. Every run goes through the same
+     * no-decode predicate twlhd_pica_frame_arena_needed() uses, so the two
+     * cannot disagree. `bytes` is the decoded arena size; rejecting
+     * `bytes > scratch_size` here is the frame-level guard that makes
+     * TWLHD_TEX_ERR_OUTPUT_SIZE (common/twlhd_tex_decode.c:186-187)
+     * impossible in the write pass.
+     */
     for (i = 0; i < vertex_count; i += 3u) {
-        TwlhdPicaFrameEntryStatus status;
-        uint32_t param;
-        uint32_t pltt;
-        uint32_t width;
-        uint32_t height;
-        uint32_t bytes;
-        int untextured;
+        FrameRun run;
 
         if (i != 0u && frame_same_key(tex, i, i - 3u)) continue;
 
-        if (frame_eval_run(tex, view, scratch, scratch_size, i, &param, &pltt,
-                           &untextured, &status, &width, &height, &bytes) < 0) {
-            return TWLHD_PICA_FRAME_ERR_CAPACITY;
-        }
-        if (status != TWLHD_PICA_FRAME_ENTRY_OK || untextured) continue;
+        frame_classify_run(tex, view, i, &run);
+        if (run.status != TWLHD_PICA_FRAME_ENTRY_OK || run.untextured) continue;
+        if (run.bytes > scratch_size) return TWLHD_PICA_FRAME_ERR_CAPACITY;
 
         for (j = 0; j < tex_count; j++) {
-            if (key_param[j] == param && key_pltt[j] == pltt) break;
+            if (key_param[j] == run.param && key_pltt[j] == run.pltt) break;
         }
         if (j != tex_count) continue;
 
@@ -198,10 +272,10 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
             tex_count >= texture_capacity) {
             return TWLHD_PICA_FRAME_ERR_CAPACITY;
         }
-        key_param[tex_count] = param;
-        key_pltt[tex_count] = pltt;
+        key_param[tex_count] = run.param;
+        key_pltt[tex_count] = run.pltt;
         tex_count++;
-        arena_used += bytes;
+        arena_used += run.bytes;
     }
 
     if (arena_used > arena_capacity) return TWLHD_PICA_FRAME_ERR_ARENA;
@@ -218,46 +292,47 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
     for (i = 0; i <= vertex_count; i += 3u) {
         int boundary = i == vertex_count ||
                        (i != 0u && !frame_same_key(tex, i, i - 3u));
-        uint32_t param;
-        uint32_t pltt;
-        uint32_t width;
-        uint32_t height;
-        uint32_t bytes;
+        FrameRun run;
         uint32_t vc;
-        TwlhdPicaFrameEntryStatus status;
         int32_t tex_index = -1;
-        int untextured;
 
         if (!boundary) continue;
 
         vc = i - j;
-        if (frame_eval_run(tex, view, scratch, scratch_size, j, &param, &pltt,
-                           &untextured, &status, &width, &height, &bytes) < 0) {
-            /* Pass 1 proved the scratch is large enough. */
-            status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
-        }
+        frame_classify_run(tex, view, j, &run);
 
-        if (status == TWLHD_PICA_FRAME_ENTRY_OK && !untextured) {
+        if (run.status == TWLHD_PICA_FRAME_ENTRY_OK && !run.untextured) {
             uint32_t t;
 
             for (t = 0; t < tex_count; t++) {
-                if (key_param[t] == param && key_pltt[t] == pltt) break;
+                if (key_param[t] == run.param && key_pltt[t] == run.pltt) break;
             }
             if (t == tex_count) {
-                if (twlhd_pica_tex_swizzle_rgba8(scratch, width, height,
-                                                 arena + arena_used,
-                                                 arena_capacity - arena_used) !=
-                    TWLHD_PICA_TEX_OK) {
-                    status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+                /*
+                 * The validation pass proved run.bytes <= scratch_size and the
+                 * predicate reproduced every decoder refusal, so neither call
+                 * can fail; these branches are kept as defence and are
+                 * classified as unreachable in the mutation report.
+                 */
+                if (twlhd_tex_decode(&run.record, run.texel, run.palette,
+                                     run.index, scratch,
+                                     scratch_size) != TWLHD_TEX_OK) {
+                    run.status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
+                } else if (twlhd_pica_tex_swizzle_rgba8(
+                               scratch, run.width, run.height,
+                               arena + arena_used,
+                               arena_capacity - arena_used) !=
+                           TWLHD_PICA_TEX_OK) {
+                    run.status = TWLHD_PICA_FRAME_ENTRY_UNSUPPORTED;
                 } else {
                     textures[tex_count].offset = arena_used;
-                    textures[tex_count].width = width;
-                    textures[tex_count].height = height;
+                    textures[tex_count].width = run.width;
+                    textures[tex_count].height = run.height;
                     (void)twlhd_pica_wrap_from_teximage(
-                        param, &textures[tex_count].wrap_s,
+                        run.param, &textures[tex_count].wrap_s,
                         &textures[tex_count].wrap_t);
                     tex_index = (int32_t)tex_count;
-                    arena_used += bytes;
+                    arena_used += run.bytes;
                     tex_count++;
                 }
             } else {
@@ -265,13 +340,13 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
             }
         }
 
-        entry_status[run_index] = status;
+        entry_status[run_index] = run.status;
         entry_texture[run_index] = tex_index;
         run_index++;
 
-        if (status == TWLHD_PICA_FRAME_ENTRY_OK && !untextured &&
+        if (run.status == TWLHD_PICA_FRAME_ENTRY_OK && !run.untextured &&
             tex_index >= 0) {
-            if (twlhd_pica_texcoords_from_gx(tex + j, vc, width, height,
+            if (twlhd_pica_texcoords_from_gx(tex + j, vc, run.width, run.height,
                                              texcoords + j, vc) !=
                 TWLHD_PICA_TEX_OK) {
                 uint32_t v;
@@ -299,8 +374,7 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
 
 TwlhdPicaFrameResult twlhd_pica_frame_arena_needed(
     const TwlhdGxTexVertex *tex, uint32_t vertex_count,
-    const TwlhdV2View *view, uint8_t *scratch, uint32_t scratch_size,
-    uint32_t *out_arena_bytes) {
+    const TwlhdV2View *view, uint32_t *out_arena_bytes) {
     uint32_t key_param[TWLHD_PICA_FRAME_MAX_TEXTURES] = {0};
     uint32_t key_pltt[TWLHD_PICA_FRAME_MAX_TEXTURES] = {0};
     uint32_t tex_count = 0;
@@ -308,40 +382,31 @@ TwlhdPicaFrameResult twlhd_pica_frame_arena_needed(
     uint32_t i;
     uint32_t j;
 
-    if (!tex || !view || !scratch || !out_arena_bytes) {
+    if (!tex || !view || !out_arena_bytes) {
         return TWLHD_PICA_FRAME_ERR_NULL;
     }
     if (vertex_count % 3u != 0u) return TWLHD_PICA_FRAME_ERR_COUNT;
 
     for (i = 0; i < vertex_count; i += 3u) {
-        TwlhdPicaFrameEntryStatus status;
-        uint32_t param;
-        uint32_t pltt;
-        uint32_t width;
-        uint32_t height;
-        uint32_t bytes;
-        int untextured;
+        FrameRun run;
 
         if (i != 0u && frame_same_key(tex, i, i - 3u)) continue;
 
-        if (frame_eval_run(tex, view, scratch, scratch_size, i, &param, &pltt,
-                           &untextured, &status, &width, &height, &bytes) < 0) {
-            return TWLHD_PICA_FRAME_ERR_CAPACITY;
-        }
-        if (status != TWLHD_PICA_FRAME_ENTRY_OK || untextured) continue;
+        frame_classify_run(tex, view, i, &run);
+        if (run.status != TWLHD_PICA_FRAME_ENTRY_OK || run.untextured) continue;
 
         for (j = 0; j < tex_count; j++) {
-            if (key_param[j] == param && key_pltt[j] == pltt) break;
+            if (key_param[j] == run.param && key_pltt[j] == run.pltt) break;
         }
         if (j != tex_count) continue;
 
         if (tex_count >= TWLHD_PICA_FRAME_MAX_TEXTURES) {
             return TWLHD_PICA_FRAME_ERR_CAPACITY;
         }
-        key_param[tex_count] = param;
-        key_pltt[tex_count] = pltt;
+        key_param[tex_count] = run.param;
+        key_pltt[tex_count] = run.pltt;
         tex_count++;
-        arena_used += bytes;
+        arena_used += run.bytes;
     }
 
     *out_arena_bytes = arena_used;

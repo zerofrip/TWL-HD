@@ -37,8 +37,8 @@
  *
  * Every error path leaves the caller's output buffers untouched. The scratch
  * buffer is a work buffer, not an output: its contents are undefined on return
- * (including on error), because the validation pass decodes through it. No
- * dynamic allocation happens anywhere in this module.
+ * (including on error), because the write pass decodes into it. No dynamic
+ * allocation happens anywhere in this module.
  */
 #pragma once
 
@@ -149,14 +149,43 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
 /*
  * Pure sizing pass: returns the exact number of arena bytes that
  * twlhd_pica_frame_prepare() will consume for the same inputs (equal to
- * *out_arena_used on success). Writes only scratch and *out_arena_bytes.
- * Fails with ERR_NULL / ERR_COUNT / ERR_CAPACITY (scratch too small for a
- * texture that would decode).
+ * *out_arena_used on success). It writes only *out_arena_bytes and never
+ * decodes a texture, so it needs no scratch buffer: every run is classified
+ * from the TXDS record and the input bytes alone, with the same static
+ * no-decode predicate the prepare() validation pass uses, so the two can
+ * never disagree. Fails with ERR_NULL / ERR_COUNT / ERR_CAPACITY (more than
+ * TWLHD_PICA_FRAME_MAX_TEXTURES distinct textures).
+ *
+ * Why "the predicate says OK" implies "twlhd_tex_decode() succeeds" in the
+ * write pass - the exhaustive list of the decoder's refusal modes
+ * (common/twlhd_tex_decode.c):
+ *
+ *   :160 ERR_NULL             rec/texel/out are non-NULL here: the record was
+ *                             found, the accessors below were checked, and the
+ *                             caller's scratch was checked non-NULL.
+ *   :163 ERR_FORMAT           format 0 is classified untextured before it.
+ *   :164-165 ERR_NULL         the palette/index pointer rules are reproduced by
+ *                             the predicate's own NO_DATA check.
+ *   :167-170 ERR_FORMAT       twlhd_v2_tex_sizes() only fails for format 0
+ *                             (common/twlhd_v2_parse.c:144), already excluded.
+ *   :171-173 ERR_SIZE         rec.texel_size / rec.index_size are compared to
+ *                             twlhd_v2_tex_sizes() by the predicate.
+ *   :174-176 ERR_PALETTE_SIZE twlhd_v2_tex_palette_size_ok() is the
+ *                             predicate's check.
+ *   :178-181 ERR_PALETTE_RANGE the predicate repeats the fixed-table rule
+ *                             (fixed_palette_entries(), :54-63).
+ *   :186-187 ERR_OUTPUT_SIZE  prepare()'s validation pass rejects
+ *                             `bytes > scratch_size` with ERR_CAPACITY first.
+ *   :239-247 ERR_PALETTE_RANGE the predicate repeats the format-5 per-block
+ *                             window check (mode_palette_bytes(), :88-95).
+ *
+ * The predicate is a read-only copy of these rules, not a call into the
+ * decoder; a decoder change must be mirrored in common/twlhd_pica_frame.c
+ * (the hand-built and golden frame tests cover it).
  */
 TwlhdPicaFrameResult twlhd_pica_frame_arena_needed(
     const TwlhdGxTexVertex *tex, uint32_t vertex_count,
-    const TwlhdV2View *view, uint8_t *scratch, uint32_t scratch_size,
-    uint32_t *out_arena_bytes);
+    const TwlhdV2View *view, uint32_t *out_arena_bytes);
 
 const char *twlhd_pica_frame_result_string(TwlhdPicaFrameResult result);
 
