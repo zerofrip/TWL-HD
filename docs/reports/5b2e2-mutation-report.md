@@ -63,32 +63,31 @@ and ends by comparing the file's current text with the saved `original` text.
 
 | metric | count |
 | --- | --- |
-| unique mutants | 105 |
-| killed by `tests/host/build/test_tex_draw_plan` | 78 |
+| unique mutants | 109 |
+| killed by `tests/host/build/test_tex_draw_plan` | 82 |
 | killed by `-Werror` build | 20 |
 | survived | 7 |
-| total | 105 |
+| total | 109 |
 
 Kill distribution:
 
 | step | count | share |
 | --- | --- | --- |
-| C test | 78 | 74.3 % |
-| build | 20 | 19.0 % |
-| survived | 7 | 6.7 % |
+| C test | 82 | 75.2 % |
+| build | 20 | 18.3 % |
+| survived | 7 | 6.4 % |
 
-The runner command and final summary (re-run on the final `common/` module
-after repair round 4; the target file was unchanged, so the mutant set and
-counts are identical to the previous run):
+The runner command and final summary (re-run after repair round 5; the new
+`twlhd_tex_hook_*` helpers added four test-killed mutants to the previous set):
 
     $ python3 docs/reports/5b2e2_mutate_tex_draw_plan.py --jobs 4
     baseline: build OK, test OK
-    mutants: 105 unique
+    mutants: 109 unique
     ...
-    killed by test:   78
+    killed by test:   82
     killed by build:  20
     survived:         7
-    total:            105
+    total:            109
     survivors:
       line 71 const 1024 -> 1025
       line 71 const 1024 -> 1025
@@ -117,6 +116,7 @@ Lines refer to `common/twlhd_tex_draw_plan.c` as of the run.
 | 113-119 | result write | final verdict and counts |
 | 122-132 | `twlhd_tex_draw_verdict_string` | human-readable verdict names |
 | 134-196 | `twlhd_tex_lifecycle_*` | pure pending/active release state machine |
+| 198-223 | `twlhd_tex_hook_*` | pure trace-hook save/restore rule for the ARM11 texture path |
 
 ## Survivor triage
 
@@ -148,6 +148,7 @@ kills the mutant: the original code treats the entry as untextured and returns
 `NO_TEXTURE`; the mutant reads `textures[1]` (inside the guard-byte harness)
 and would return `OK` with a garbage texture slot.
 
+
 ## Per-mutant results
 
 Each row is one mutant, labelled with the original line number and the single
@@ -164,25 +165,25 @@ triaged above.
 | 42 | const 0 -> 1 | KILLED(test) |
 | 43 | const 1 -> 0 | KILLED(test) |
 | 43 | const 1 -> 2 | KILLED(test) |
-| 46 | op \|\| -> && | KILLED(build) |
-| 46 | op \|\| -> && | KILLED(build) |
-| 46 | op \|\| -> && | KILLED(build) |
-| 46 | op \|\| -> && | KILLED(build) |
-| 47 | op \|\| -> && | KILLED(build) |
+| 46 | op || -> && | KILLED(build) |
+| 46 | op || -> && | KILLED(build) |
+| 46 | op || -> && | KILLED(build) |
+| 46 | op || -> && | KILLED(build) |
+| 47 | op || -> && | KILLED(build) |
 | 51 | const 0 -> 1 | KILLED(test) |
 | 51 | op == -> != | KILLED(test) |
 | 56 | op > -> >= | KILLED(test) |
 | 56 | op > -> >= | KILLED(test) |
-| 56 | op \|\| -> && | KILLED(build) |
-| 56 | op \|\| -> && | KILLED(build) |
+| 56 | op || -> && | KILLED(build) |
+| 56 | op || -> && | KILLED(build) |
 | 57 | op > -> >= | KILLED(test) |
 | 57 | op > -> >= | KILLED(test) |
-| 57 | op \|\| -> && | KILLED(build) |
+| 57 | op || -> && | KILLED(build) |
 | 61 | const 0 -> 1 | KILLED(test) |
-| 61 | op && -> \|\| | KILLED(test) |
+| 61 | op && -> || | KILLED(test) |
 | 61 | op > -> >= | KILLED(build) |
 | 62 | op == -> != | KILLED(test) |
-| 62 | op \|\| -> && | KILLED(test) |
+| 62 | op || -> && | KILLED(test) |
 | 63 | const 0 -> 1 | KILLED(test) |
 | 63 | op != -> == | KILLED(test) |
 | 67 | const 0 -> 1 | KILLED(test) |
@@ -197,39 +198,39 @@ triaged above.
 | 71 | op < -> <= | KILLED(test) |
 | 71 | op > -> >= | KILLED(test) |
 | 71 | op > -> >= | KILLED(test) |
-| 71 | op \|\| -> && | KILLED(build) |
-| 71 | op \|\| -> && | KILLED(build) |
-| 71 | op \|\| -> && | KILLED(build) |
-| 71 | op \|\| -> && | KILLED(build) |
+| 71 | op || -> && | KILLED(build) |
+| 71 | op || -> && | KILLED(build) |
+| 71 | op || -> && | KILLED(build) |
+| 71 | op || -> && | KILLED(build) |
 | 72 | const 0 -> 1 | KILLED(test) |
 | 72 | const 0 -> 1 | KILLED(test) |
 | 72 | const 1 -> 0 | KILLED(test) |
 | 72 | const 1 -> 0 | KILLED(test) |
 | 72 | op != -> == | KILLED(test) |
 | 72 | op != -> == | KILLED(test) |
-| 72 | op \|\| -> && | KILLED(build) |
-| 72 | op \|\| -> && | KILLED(build) |
+| 72 | op || -> && | KILLED(build) |
+| 72 | op || -> && | KILLED(build) |
 | 73 | op > -> >= | KILLED(test) |
 | 76 | const 0 -> 1 | KILLED(test) |
 | 76 | op != -> == | KILLED(test) |
-| 76 | op \|\| -> && | KILLED(test) |
+| 76 | op || -> && | KILLED(test) |
 | 77 | op > -> >= | KILLED(test) |
 | 82 | const 0 -> 1 | KILLED(test) |
 | 82 | op < -> <= | KILLED(test) |
 | 87 | const 0 -> 1 | KILLED(test) |
 | 87 | op < -> <= | KILLED(test) |
 | 87 | op >= -> > | KILLED(test) |
-| 87 | op \|\| -> && | KILLED(build) |
-| 87 | op \|\| -> && | KILLED(build) |
-| 88 | op \|\| -> && | KILLED(build) |
+| 87 | op || -> && | KILLED(build) |
+| 87 | op || -> && | KILLED(build) |
+| 88 | op || -> && | KILLED(build) |
 | 89 | op != -> == | KILLED(test) |
 | 91 | const 0 -> 1 | KILLED(test) |
 | 91 | const 3 -> 2 | KILLED(test) |
 | 91 | const 3 -> 4 | KILLED(test) |
 | 91 | op != -> == | KILLED(test) |
 | 91 | op > -> >= | KILLED(test) |
-| 91 | op \|\| -> && | KILLED(build) |
-| 91 | op \|\| -> && | KILLED(build) |
+| 91 | op || -> && | KILLED(build) |
+| 91 | op || -> && | KILLED(build) |
 | 92 | op > -> >= | KILLED(test) |
 | 98 | const 1 -> 0 | KILLED(test) |
 | 98 | const 1 -> 2 | KILLED(test) |
@@ -254,6 +255,10 @@ triaged above.
 | 192 | const 0 -> 1 | KILLED(test) |
 | 193 | const 0 -> 1 | KILLED(test) |
 | 194 | const 0 -> 1 | KILLED(test) |
+| 199 | const 0 -> 1 | KILLED(test) |
+| 212 | const 1 -> 0 | KILLED(test) |
+| 212 | const 1 -> 2 | KILLED(test) |
+| 221 | const 0 -> 1 | KILLED(test) |
 | 71 | const 1024 -> 1025 | SURVIVED |
 | 71 | const 1024 -> 1025 | SURVIVED |
 | 71 | const 8 -> 7 | SURVIVED |

@@ -342,16 +342,18 @@ Reproduced in this sandbox, 2026-11-14, with the external core
 - `make azahar-host`: clean build, no warnings.
 - Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
 - Textured frame `tex_shot_199.ppm` sha256:
-  `7c74e132cf5e269b775ad607633cf34a5a8ba4f31a13b468906f46dd6d6500df`.
+  `58003d653e8d8c18b08af47ffcf3f6316460735e57a440fdeb9bc1f4a22f896a`.
 - Control frame `tex_ctl_shot_199.ppm` sha256:
-  `5eb9a7b00858dae3eb48a03eae4c78a8e08102add0e22d3ac2fb206db5d58211`.
+  `b1be377150b726bff4b43a7f85f407988ff3d310301c67c6d693693a37f4fa7c`.
 - The two screenshots differ; the texture path is exercised.
 - Bottom-screen readout at frame 199 shows the staging verdict
   `tex staged OK: 4 entries, 3 textures` and the trace ring includes
   `tex commit`, `tex bind`, and `clip tex DrawArrays`, confirming the
-  textured shader path ran. The control screenshot no longer prints the `T:`
-  trace-ring line because the renderer trace hook is now installed only while
-  a textured frame is staged.
+  textured shader path ran. The control screenshot still prints no `T:`
+  trace-ring line because the renderer trace hook is only installed while a
+  textured frame is staged. The sha256s differ from the previous reference
+  run because the screenshots were regenerated with the repair-round-5
+  binary; the checker output and the control console layout are unchanged.
 - `check_tex_shot.py` output for the textured screenshot:
 
       UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)

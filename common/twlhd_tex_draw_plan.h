@@ -133,6 +133,32 @@ TwlhdTexLifecycleAction twlhd_tex_lifecycle_clear(TwlhdTexLifecycleState *s);
 TwlhdTexLifecycleAction twlhd_tex_lifecycle_commit(TwlhdTexLifecycleState *s);
 TwlhdTexLifecycleAction twlhd_tex_lifecycle_shutdown(TwlhdTexLifecycleState *s);
 
+/*
+ * Pure hook save/restore rule for the ARM11 texture path.  The rule decides
+ * when the caller may install its trace callback and when it must restore the
+ * hook that was in place before the first install.  It is allocation-free,
+ * has no libctru dependency, and is host-testable.
+ */
+typedef void (*TwlhdTexHookFn)(const char *step);
+
+typedef enum {
+    TWLHD_TEX_HOOK_NONE = 0,   /* touch nothing */
+    TWLHD_TEX_HOOK_TAKE,       /* save current hook, install ours */
+    TWLHD_TEX_HOOK_REINSTALL,  /* already ours: keep saved, install ours */
+    TWLHD_TEX_HOOK_RESTORE,    /* restore saved hook, disarm */
+} TwlhdTexHookAction;
+
+typedef struct {
+    int installed;
+    TwlhdTexHookFn saved;
+} TwlhdTexHookState;
+
+void twlhd_tex_hook_init(TwlhdTexHookState *s);
+TwlhdTexHookAction twlhd_tex_hook_take(TwlhdTexHookState *s,
+                                       TwlhdTexHookFn current,
+                                       TwlhdTexHookFn ours);
+TwlhdTexHookAction twlhd_tex_hook_leave(TwlhdTexHookState *s);
+
 #ifdef __cplusplus
 }
 #endif

@@ -840,6 +840,135 @@ static void test_lifecycle_shutdown(void) {
     test_report("tex-draw-plan/lifecycle-shutdown");
 }
 
+/* Hook save/restore helpers.  g_current_hook simulates the renderer's trace
+ * hook variable; apply_action performs the renderer_set_trace() side effect
+ * that arm11/source/main.c's tex_hook_apply() does. */
+static TwlhdTexHookFn g_current_hook;
+
+static void diag_hook(const char *step) {
+    (void)step;
+}
+
+static void tex_hook(const char *step) {
+    (void)step;
+}
+
+static void apply_action(TwlhdTexHookState *s, TwlhdTexHookAction action) {
+    switch (action) {
+    case TWLHD_TEX_HOOK_TAKE:
+    case TWLHD_TEX_HOOK_REINSTALL:
+        g_current_hook = tex_hook;
+        break;
+    case TWLHD_TEX_HOOK_RESTORE:
+        g_current_hook = s->saved;
+        break;
+    case TWLHD_TEX_HOOK_NONE:
+    default:
+        break;
+    }
+}
+
+static void test_tex_hook_basic(void) {
+    TwlhdTexHookState s;
+
+    twlhd_tex_hook_init(&s);
+    g_current_hook = diag_hook;
+    CHECK_EQ_INT(twlhd_tex_hook_take(&s, g_current_hook, tex_hook),
+                 TWLHD_TEX_HOOK_TAKE);
+    CHECK_EQ_INT(s.installed, 1);
+    CHECK(s.saved == diag_hook);
+    apply_action(&s, TWLHD_TEX_HOOK_TAKE);
+    CHECK(g_current_hook == tex_hook);
+
+    CHECK_EQ_INT(twlhd_tex_hook_leave(&s), TWLHD_TEX_HOOK_RESTORE);
+    CHECK_EQ_INT(s.installed, 0);
+    apply_action(&s, TWLHD_TEX_HOOK_RESTORE);
+    CHECK(g_current_hook == diag_hook);
+
+    CHECK_EQ_INT(twlhd_tex_hook_leave(&s), TWLHD_TEX_HOOK_NONE);
+    CHECK(g_current_hook == diag_hook);
+
+    test_report("tex-draw-plan/hook-basic");
+}
+
+static void test_tex_hook_reinstall_keeps_saved(void) {
+    TwlhdTexHookState s;
+
+    twlhd_tex_hook_init(&s);
+    g_current_hook = diag_hook;
+    CHECK_EQ_INT(twlhd_tex_hook_take(&s, g_current_hook, tex_hook),
+                 TWLHD_TEX_HOOK_TAKE);
+    apply_action(&s, TWLHD_TEX_HOOK_TAKE);
+
+    /* A second textured frame while we already own the hook must reinstall
+     * ours without overwriting the saved DIAG hook. */
+    CHECK_EQ_INT(twlhd_tex_hook_take(&s, tex_hook, tex_hook),
+                 TWLHD_TEX_HOOK_REINSTALL);
+    CHECK(s.saved == diag_hook);
+    apply_action(&s, TWLHD_TEX_HOOK_REINSTALL);
+    CHECK(g_current_hook == tex_hook);
+
+    CHECK_EQ_INT(twlhd_tex_hook_leave(&s), TWLHD_TEX_HOOK_RESTORE);
+    apply_action(&s, TWLHD_TEX_HOOK_RESTORE);
+    CHECK(g_current_hook == diag_hook);
+
+    test_report("tex-draw-plan/hook-reinstall-keeps-saved");
+}
+
+static void test_tex_hook_required_sequence(void) {
+    TwlhdTexHookState s;
+    TwlhdTexHookAction action;
+
+    twlhd_tex_hook_init(&s);
+    g_current_hook = diag_hook;
+
+    /* Untextured frame: no texture path attempted, hook untouched. */
+    action = twlhd_tex_hook_leave(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_HOOK_NONE);
+    apply_action(&s, action);
+    CHECK(g_current_hook == diag_hook);
+
+    /* Textured frame: take the hook, install the texture callback. */
+    action = twlhd_tex_hook_take(&s, g_current_hook, tex_hook);
+    CHECK_EQ_INT(action, TWLHD_TEX_HOOK_TAKE);
+    apply_action(&s, action);
+    CHECK(g_current_hook == tex_hook);
+    CHECK(s.saved == diag_hook);
+
+    /* Back to an untextured frame: restore the DIAG hook. */
+    action = twlhd_tex_hook_leave(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_HOOK_RESTORE);
+    apply_action(&s, action);
+    CHECK(g_current_hook == diag_hook);
+
+    test_report("tex-draw-plan/hook-required-sequence");
+}
+
+static void test_tex_hook_textured_then_fallback_then_restore(void) {
+    TwlhdTexHookState s;
+    TwlhdTexHookAction action;
+
+    twlhd_tex_hook_init(&s);
+    g_current_hook = diag_hook;
+
+    action = twlhd_tex_hook_take(&s, g_current_hook, tex_hook);
+    CHECK_EQ_INT(action, TWLHD_TEX_HOOK_TAKE);
+    apply_action(&s, action);
+
+    /* A budget/prepare/staging fallback calls leave() to restore the old hook. */
+    action = twlhd_tex_hook_leave(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_HOOK_RESTORE);
+    apply_action(&s, action);
+    CHECK(g_current_hook == diag_hook);
+
+    /* A later untextured frame must not touch the hook again. */
+    action = twlhd_tex_hook_leave(&s);
+    CHECK_EQ_INT(action, TWLHD_TEX_HOOK_NONE);
+    CHECK(g_current_hook == diag_hook);
+
+    test_report("tex-draw-plan/hook-textured-then-fallback-then-restore");
+}
+
 /* D(6): draw-range guards.  end = first_vertex + vertex_count must fit in
  * uint32, must not exceed the supplied vertex_count, and vertex_count must be
  * a multiple of 3. */
@@ -1025,6 +1154,10 @@ int main(void) {
     test_lifecycle_clear_then_commit();
     test_lifecycle_flag_then_swap();
     test_lifecycle_shutdown();
+    test_tex_hook_basic();
+    test_tex_hook_reinstall_keeps_saved();
+    test_tex_hook_required_sequence();
+    test_tex_hook_textured_then_fallback_then_restore();
     test_draw_range_guard();
     test_texture_arena_guard();
     return test_exit_code();
