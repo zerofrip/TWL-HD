@@ -58,6 +58,7 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_v2_write.h common/twlhd_gx_record.h \
 	common/twlhd_gx_interp.h common/twlhd_tex_decode.h \
 	common/twlhd_pica_tex.h \
+	common/twlhd_pica_frame.h \
 	common/twlhd_attr_pad.h \
 	common/twlhd_clipfix.h common/twlhd_seq.h tests/host/tests_host.h \
 	tools/azahar_host/azahar_host_util.h
@@ -73,6 +74,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_gx_interp \
 	tests/host/build/test_tex_decode \
 	tests/host/build/test_pica_tex \
+	tests/host/build/test_pica_frame \
 	tests/host/build/test_clipfix \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
@@ -148,6 +150,12 @@ tests/host/build/test_pica_tex: tests/host/test_pica_tex.c \
 		common/twlhd_pica_tex.c $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_tex.c $(HOST_LDFLAGS)
 
+tests/host/build/test_pica_frame: tests/host/test_pica_frame.c \
+		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_frame.c \
+		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
 tests/host/build/test_seq: tests/host/test_seq.c $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
 
@@ -175,6 +183,12 @@ tests/host/build/tex_decode_cli: tests/host/tex_decode_cli.c $(HOST_V2_COMMON) \
 tests/host/build/pica_tex_cli: tests/host/pica_tex_cli.c \
 		common/twlhd_pica_tex.c $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_tex.c $(HOST_LDFLAGS)
+
+tests/host/build/pica_frame_cli: tests/host/pica_frame_cli.c \
+		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_frame.c \
+		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_LDFLAGS)
 
 # Blend-config test compiles the real libctru GPU enums header on the host and
 # asserts the clip-path (alpha blend) and DEBUG-path (opaque) configurations.
@@ -489,7 +503,7 @@ tools/ntr_capture/build/ntr_input: tools/ntr_capture/ntr_input.c \
 		-Itools/ntr_capture -o $@ $<
 
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
-	tests/host/build/pica_tex_cli
+	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:

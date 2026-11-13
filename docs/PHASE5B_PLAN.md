@@ -335,12 +335,76 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   untextured, and guard-byte harnesses), `tests/host/pica_tex_cli.c` plus the
   independent oracle `tools/pica_tex_oracle.py` and golden cross-check
   `tools/test_pica_tex_golden.py`, all wired into `make test`.
-- Mutation evidence: `docs/reports/5b2d-mutation-report.md` (58/58 mutants
-  killed).
+- Mutation evidence: `docs/reports/5b2d-mutation-report.md` (260 unique
+  mutants, 251 killed, 9 equivalent).
 - Not done: no renderer/arm11 consumer, no GPU calls, no recorder-side texture
   capture, no v2-format change, no second texture format (RGBA8 only), and no
   hardware verification of the layout, alignment, size limits or sampler
   defaults.
+
+#### Status 5B-2e-1 — host-side textured frame preparation
+
+Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+
+- `common/twlhd_pica_frame.[ch]`: one allocation-free call turns a parsed v2
+  frame (`TwlhdV2View` with TXDS/TXDT/PLDT) plus the interpreter's per-vertex
+  `TwlhdGxTexVertex` latch into (a) bind-plan entries, (b) deduplicated
+  decoded+swizzled PICA RGBA8 textures packed into a caller arena, (c) an
+  8-byte-per-vertex texcoord array normalised with each entry's texture size,
+  and (d) an entry -> texture index array with a per-entry status. It reuses
+  the v2 parser, `twlhd_tex_decode`, and `twlhd_pica_tex_*` and never allocates.
+- Keying: bind-plan runs are keyed by the triangle's first vertex
+  (`common/twlhd_pica_tex.h:118-129`); the texture is the TXDS record with the
+  exact same `(teximage_param, pltt_base)` pair, which the format guarantees is
+  unique (`common/twlhd_v2_parse.c:358-366`, `docs/TWLHD_V2_FORMAT.md:296`).
+  Missing/unsupported textures are reported per entry; NULL, capacity, arena
+  and `count % 3` errors fail the whole call. `ERR_ARENA` is distinct and never
+  drops textures silently. `vertex_count == 0` is a valid empty frame (`OK`
+  with zero entries/textures/arena bytes); `tex` stays a required pointer and
+  still fails with `ERR_NULL`.
+- Memory budget (stated exactly in `docs/DS_GX_RESEARCH.md`, "Textured frame
+  preparation (5B-2e-1)"): 4 MiB for one 1024x1024 RGBA8, 1 GiB worst-case
+  arena (256 overlapping TXDS records), 8 MiB non-overlapping worst case,
+  4 MiB scratch, 512 KiB texcoords. 128-byte texture-start alignment is an
+  explicit UNVERIFIED-for-hardware assumption.
+- Tests: `tests/host/test_pica_frame.c` (hand-built v2 frame with two
+  textures, a reused texture, an untextured entry and a paletted entry;
+  byte-exact hand-computed arena bytes for the 8x8 texture and the 16x8
+  paletted one; hand-computed non-square texcoords; every NULL/capacity/arena/
+  count path with untouched-output canaries; missing-record and
+  decoder-rejected per-entry statuses; format-5 palette windows pinned per
+  block mode, with mode-0/2 exact fits, mode-0/2 windows that fit 4 but not
+  6/8 bytes, mode-1/3 exact fits vs 2 bytes short, the offender first and
+  last, and `arena_needed == arena_used` in every case; guard bytes
+  before/after every output and a 0x00/0xFF input-tail two-pass compare;
+  `vertex_count == 0` with every capacity 0, a textured `tex[0]` that
+  matches a TXDS record and a poisoned one-element array, returning OK with
+  zero entries/textures/arena bytes and untouched guards, plus the
+  `tex == NULL` `ERR_NULL` rule for both entry points).
+  `tests/host/pica_frame_cli.c` with the independent
+  `tools/pica_frame_oracle.py` and `tools/test_pica_frame_golden.py`, all wired
+  into `make test`.
+- Mutation evidence: `docs/reports/5b2e1-mutation-report.md` (238 mutants,
+  211 killed, 27 equivalent; runner
+  `python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4`, 17/17 C labels).
+  The runner skips shift operators by design, so the format-5 mode shift
+  (`word >> 14` -> `word << 14`, line 192) is verified manually: the C suite
+  fails via the `arena_needed == 0` assertion while the golden stays green
+  (the decoder re-checks the rule); `common/` is restored and
+  `git diff --exit-code common/` clean. The round-6 fix moved the source
+  lines below `common/twlhd_pica_frame.c:254` down by 13.
+- Not done: no renderer/arm11 consumer, no GPU or citro3d calls, no recorder
+  change, no v2-format/decoder/interpreter change.
+
+5B-2e-2 (outline, **not implemented**): teach the arm11/citro3d renderer to
+consume the prepared frame. After `twlhd_pica_frame_prepare()` fills the plan,
+the texture table and the arena, the renderer would upload each prepared RGBA8
+image once (choosing VRAM vs linear memory and the matching PICA address/align
+class), bind the per-entry texture+sampler, submit the run's vertices with the
+separate 8-byte texcoord attribute buffer, and skip `-1`-index (untextured/
+failed) entries or draw them with the untextured path. That step is the first
+one that needs GPU calls, so it must stay a separate emulator/hardware-verified
+stage; nothing in 5B-2e-1 assumes it exists.
 
 ## 4. Where the DS GX equations must come from
 
