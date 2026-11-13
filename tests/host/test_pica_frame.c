@@ -983,6 +983,578 @@ static void test_out_of_bounds(void) {
     test_report("pica-frame/oob");
 }
 
+/* ------------------------------------------------------------------------- */
+/* Round-1 mutation survivors: exact boundaries and last-element cases.       */
+/* ------------------------------------------------------------------------- */
+
+/* Format 7, 1024x8 (S shift 7) and 8x1024 (T shift 7). */
+#define PARAM_BIG_W 0x1C700000u
+#define PARAM_BIG_H 0x1F800000u
+
+/*
+ * The largest reachable sizes: 1024x8 and 8x1024 both pass the PICA size
+ * check, use 32768 scratch bytes each and 65536 arena bytes together. A
+ * mutated upper bound (1024 -> 1023, <= -> <) turns both entries UNSUPPORTED.
+ */
+static void test_size_bounds_1024(void) {
+    static uint8_t tex[2][16384]; /* 8192 texels x 2 bytes each */
+    static uint8_t arena[65536];
+    static uint8_t scratch[32768];
+    static const TwlhdV2TexEntry entries[2] = {
+        {PARAM_BIG_W, 0u, tex[0], NULL, NULL, 16384u, 0u, 0u},
+        {PARAM_BIG_H, 1u, tex[1], NULL, NULL, 16384u, 0u, 0u},
+    };
+    TwlhdGxTexVertex verts[6];
+    TwlhdV2View view;
+    TwlhdPicaBindPlan plan[2];
+    TwlhdPicaFrameTexture textures[2];
+    TwlhdPicaTexCoord texcoords[6];
+    int32_t entry_texture[2];
+    TwlhdPicaFrameEntryStatus entry_status[2];
+    uint32_t entry_count = 0;
+    uint32_t texture_count = 0;
+    uint32_t arena_used = 0;
+    uint32_t needed = 0xDEADBEEFu;
+    uint32_t i;
+
+    /* 0x801F = opaque red, 0x83E0 = opaque green; both formats are 16bpp. */
+    for (i = 0; i < 8192u; i++) {
+        put_le16(tex[0] + i * 2u, 0x801Fu);
+        put_le16(tex[1] + i * 2u, 0x83E0u);
+    }
+    set_vtx(&verts[0], 0.0f, 0.0f, PARAM_BIG_W, 0u);
+    set_vtx(&verts[1], 1.0f, 1.0f, PARAM_BIG_W, 0u);
+    set_vtx(&verts[2], 2.0f, 2.0f, PARAM_BIG_W, 0u);
+    set_vtx(&verts[3], 0.0f, 0.0f, PARAM_BIG_H, 1u);
+    set_vtx(&verts[4], 1.0f, 1.0f, PARAM_BIG_H, 1u);
+    set_vtx(&verts[5], 2.0f, 2.0f, PARAM_BIG_H, 1u);
+
+    CHECK_EQ_INT(write_and_parse(entries, 2u, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(verts, 6u, &view, scratch,
+                                               32768u, &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, 65536u);
+
+    memset(plan, 0, sizeof(plan));
+    memset(textures, 0, sizeof(textures));
+    memset(texcoords, 0, sizeof(texcoords));
+    memset(entry_texture, 0, sizeof(entry_texture));
+    memset(entry_status, 0, sizeof(entry_status));
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     verts, 6u, &view, plan, 2u, textures, 2u, arena, 65536u,
+                     texcoords, 6u, entry_texture, entry_status, 2u, scratch,
+                     32768u, &entry_count, &texture_count, &arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(entry_count, 2u);
+    CHECK_EQ_INT(texture_count, 2u);
+    CHECK_EQ_INT(arena_used, 65536u);
+    CHECK_EQ_INT(plan[0].first_vertex, 0u);
+    CHECK_EQ_INT(plan[0].vertex_count, 3u);
+    CHECK_EQ_INT(plan[1].first_vertex, 3u);
+    CHECK_EQ_INT(plan[1].vertex_count, 3u);
+    CHECK_EQ_INT(entry_texture[0], 0);
+    CHECK_EQ_INT(entry_texture[1], 1);
+    CHECK_EQ_INT(entry_status[0], TWLHD_PICA_FRAME_ENTRY_OK);
+    CHECK_EQ_INT(entry_status[1], TWLHD_PICA_FRAME_ENTRY_OK);
+
+    CHECK_EQ_INT(textures[0].offset, 0u);
+    CHECK_EQ_INT(textures[0].width, 1024u);
+    CHECK_EQ_INT(textures[0].height, 8u);
+    CHECK_EQ_INT(textures[0].wrap_s, TWLHD_PICA_WRAP_CLAMP_TO_EDGE);
+    CHECK_EQ_INT(textures[0].wrap_t, TWLHD_PICA_WRAP_CLAMP_TO_EDGE);
+    CHECK_EQ_INT(textures[1].offset, 32768u);
+    CHECK_EQ_INT(textures[1].width, 8u);
+    CHECK_EQ_INT(textures[1].height, 1024u);
+
+    /* PICA texel 42 is source (0,0) for both shapes; texel 63 is (7,0).
+     * The 8x1024 layout puts source row 1023 in tile row 0 (texel 42) and
+     * source row 0 in tile row 127 (texel 8170). */
+    CHECK_EQ_INT(arena[42u * 4u + 0u], 255u);
+    CHECK_EQ_INT(arena[42u * 4u + 1u], 0u);
+    CHECK_EQ_INT(arena[42u * 4u + 2u], 0u);
+    CHECK_EQ_INT(arena[42u * 4u + 3u], 255u);
+    CHECK_EQ_INT(arena[63u * 4u + 3u], 255u);
+    CHECK_EQ_INT(arena[32768u + 42u * 4u + 0u], 255u);
+    CHECK_EQ_INT(arena[32768u + 42u * 4u + 1u], 0u);
+    CHECK_EQ_INT(arena[32768u + 42u * 4u + 2u], 255u);
+    CHECK_EQ_INT(arena[32768u + 42u * 4u + 3u], 0u);
+    CHECK_EQ_INT(arena[32768u + 8170u * 4u + 2u], 255u);
+
+    test_report("pica-frame/size-bounds-1024");
+}
+
+/*
+ * Scratch exactly the decoded size must succeed; one byte less must fail with
+ * the documented capacity error and leave every output untouched.
+ */
+static void test_scratch_exact(void) {
+    TwlhdGxTexVertex tex[3];
+    TwlhdV2View view;
+    uint32_t needed = 0xDEADBEEFu;
+
+    fill_tex_a();
+    set_vtx(&tex[0], 0.0f, 0.0f, PARAM_A, 0u);
+    set_vtx(&tex[1], 2.0f, 2.0f, PARAM_A, 0u);
+    set_vtx(&tex[2], 4.0f, 4.0f, PARAM_A, 0u);
+    CHECK_EQ_INT(write_and_parse(g_a_only, 1u, &view), TWLHD_V2_OK);
+
+    /* 8x8 RGBA8 = 256 bytes. */
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &view, g_out.scratch,
+                                               256u, &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, 256u);
+
+    out_reset(&g_out);
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     tex, 3u, &view, g_out.plan, RUN_COUNT, g_out.textures,
+                     RUN_COUNT, g_out.arena, ARENA_BYTES, g_out.texcoords,
+                     VERTEX_COUNT, g_out.entry_texture, g_out.entry_status,
+                     RUN_COUNT, g_out.scratch, 256u, &g_out.entry_count,
+                     &g_out.texture_count, &g_out.arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(g_out.entry_count, 1u);
+    CHECK_EQ_INT(g_out.texture_count, 1u);
+    CHECK_EQ_INT(g_out.arena_used, 256u);
+    CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_OK);
+    CHECK_EQ_INT(g_out.entry_texture[0], 0);
+    CHECK_EQ_INT(g_out.textures[0].offset, 0u);
+    CHECK_EQ_INT(g_out.textures[0].width, 8u);
+    CHECK_EQ_INT(g_out.textures[0].height, 8u);
+    expect_a_bytes(&g_out);
+
+    needed = 0xDEADBEEFu;
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(tex, 3u, &view, g_out.scratch,
+                                               255u, &needed),
+                 TWLHD_PICA_FRAME_ERR_CAPACITY);
+    CHECK_EQ_INT(needed, 0xDEADBEEFu);
+
+    out_reset(&g_out);
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     tex, 3u, &view, g_out.plan, RUN_COUNT, g_out.textures,
+                     RUN_COUNT, g_out.arena, ARENA_BYTES, g_out.texcoords,
+                     VERTEX_COUNT, g_out.entry_texture, g_out.entry_status,
+                     RUN_COUNT, g_out.scratch, 255u, &g_out.entry_count,
+                     &g_out.texture_count, &g_out.arena_used),
+                 TWLHD_PICA_FRAME_ERR_CAPACITY);
+    CHECK(outputs_untouched(&g_out));
+
+    test_report("pica-frame/scratch-exact");
+}
+
+/*
+ * Exactly TWLHD_PICA_FRAME_MAX_TEXTURES distinct textures must all be stored,
+ * and the defensive MAX check must still fire for a view with one more record
+ * (only reachable hand-built: the parsed format caps TXDS at 256 records).
+ */
+#define CAP_TEXTURES 256u
+#define CAP_TEX_BYTES 128u /* 8x8 16bpp */
+#define CAP_EXTRA 257u
+
+static TwlhdV2TexEntry g_cap_entries[CAP_TEXTURES];
+static uint8_t g_cap_tex[CAP_TEXTURES][CAP_TEX_BYTES];
+static TwlhdGxTexVertex g_cap_vertices[CAP_TEXTURES * 3u];
+static TwlhdPicaBindPlan g_cap_plan[CAP_TEXTURES];
+static TwlhdPicaFrameTexture g_cap_textures[CAP_TEXTURES];
+static TwlhdPicaTexCoord g_cap_texcoords[CAP_TEXTURES * 3u];
+static int32_t g_cap_entry_texture[CAP_TEXTURES];
+static TwlhdPicaFrameEntryStatus g_cap_entry_status[CAP_TEXTURES];
+static uint8_t g_cap_arena[CAP_TEXTURES * 256u];
+static uint8_t g_cap_scratch[256];
+
+static uint8_t g_raw_txds[CAP_EXTRA * 40u];
+static uint8_t g_raw_txdt[CAP_EXTRA * CAP_TEX_BYTES];
+static TwlhdGxTexVertex g_raw_vertices[CAP_EXTRA * 3u];
+static TwlhdPicaBindPlan g_raw_plan[CAP_EXTRA];
+static TwlhdPicaFrameTexture g_raw_textures[CAP_EXTRA];
+static TwlhdPicaTexCoord g_raw_texcoords[CAP_EXTRA * 3u];
+static int32_t g_raw_entry_texture[CAP_EXTRA];
+static TwlhdPicaFrameEntryStatus g_raw_entry_status[CAP_EXTRA];
+static uint8_t g_raw_arena[CAP_EXTRA * 256u];
+
+static void test_texture_cap_256(void) {
+    TwlhdV2View view;
+    TwlhdV2View raw;
+    uint32_t entry_count = 0;
+    uint32_t texture_count = 0;
+    uint32_t arena_used = 0;
+    uint32_t needed = 0xDEADBEEFu;
+    uint32_t k;
+    uint32_t x;
+    uint32_t y;
+    uint32_t v;
+
+    memset(g_cap_entries, 0, sizeof(g_cap_entries));
+    for (k = 0; k < CAP_TEXTURES; k++) {
+        uint32_t i;
+
+        g_cap_entries[k].teximage_param = PARAM_A;
+        g_cap_entries[k].pltt_base = k; /* unique (param, pltt) per record */
+        g_cap_entries[k].texel = g_cap_tex[k];
+        g_cap_entries[k].texel_bytes = CAP_TEX_BYTES;
+        for (i = 0; i < CAP_TEX_BYTES / 2u; i++) {
+            put_le16(g_cap_tex[k] + i * 2u,
+                     (uint16_t)(0x8000u | ((k * 37u + i * 11u) & 0x7FFFu)));
+        }
+        for (v = 0; v < 3u; v++) {
+            set_vtx(&g_cap_vertices[k * 3u + v], 1.0f, 2.0f, PARAM_A, k);
+        }
+    }
+    CHECK_EQ_INT(write_and_parse(g_cap_entries, CAP_TEXTURES, &view),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_txds_count(&view), CAP_TEXTURES);
+
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(
+                     g_cap_vertices, CAP_TEXTURES * 3u, &view, g_cap_scratch,
+                     CAP_TEX_BYTES * 2u, &needed),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(needed, CAP_TEXTURES * 256u);
+
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     g_cap_vertices, CAP_TEXTURES * 3u, &view, g_cap_plan,
+                     CAP_TEXTURES, g_cap_textures, CAP_TEXTURES, g_cap_arena,
+                     CAP_TEXTURES * 256u, g_cap_texcoords, CAP_TEXTURES * 3u,
+                     g_cap_entry_texture, g_cap_entry_status, CAP_TEXTURES,
+                     g_cap_scratch, CAP_TEX_BYTES * 2u, &entry_count,
+                     &texture_count, &arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(entry_count, CAP_TEXTURES);
+    CHECK_EQ_INT(texture_count, CAP_TEXTURES);
+    CHECK_EQ_INT(arena_used, CAP_TEXTURES * 256u);
+    CHECK_EQ_INT(g_cap_plan[CAP_TEXTURES - 1u].first_vertex,
+                 (CAP_TEXTURES - 1u) * 3u);
+    CHECK_EQ_INT(g_cap_plan[CAP_TEXTURES - 1u].vertex_count, 3u);
+
+    for (k = 0; k < CAP_TEXTURES; k++) {
+        CHECK_EQ_INT(g_cap_textures[k].offset, k * 256u);
+        CHECK_EQ_INT(g_cap_textures[k].width, 8u);
+        CHECK_EQ_INT(g_cap_textures[k].height, 8u);
+        CHECK_EQ_INT(g_cap_entry_texture[k], (int32_t)k);
+        CHECK_EQ_INT(g_cap_entry_status[k], TWLHD_PICA_FRAME_ENTRY_OK);
+        for (v = 0; v < 3u; v++) {
+            CHECK_NEAR(g_cap_texcoords[k * 3u + v].u, 0.125, 1e-6);
+            CHECK_NEAR(g_cap_texcoords[k * 3u + v].v, 0.75, 1e-6);
+        }
+        for (y = 0; y < 8u; y++) {
+            for (x = 0; x < 8u; x++) {
+                uint32_t n = y * 8u + x;
+                uint32_t dest = kMorton8x8[y][x];
+                uint16_t c = (uint16_t)(0x8000u |
+                                        ((k * 37u + n * 11u) & 0x7FFFu));
+                const uint8_t *p = g_cap_arena + k * 256u + dest * 4u;
+
+                CHECK_EQ_INT(p[0], 255u);
+                CHECK_EQ_INT(p[1], FIVE_TO_EIGHT[(c >> 10) & 31u]);
+                CHECK_EQ_INT(p[2], FIVE_TO_EIGHT[(c >> 5) & 31u]);
+                CHECK_EQ_INT(p[3], FIVE_TO_EIGHT[c & 31u]);
+            }
+        }
+    }
+
+    /* MAX+1: a hand-built view with 257 valid records. The parsed format
+     * cannot reach this state, so this pins the module's own defensive limit. */
+    memset(g_raw_txds, 0, sizeof(g_raw_txds));
+    memset(g_raw_txdt, 0x80, sizeof(g_raw_txdt));
+    for (k = 0; k < CAP_EXTRA; k++) {
+        uint8_t *p = g_raw_txds + (size_t)k * 40u;
+
+        put_le32(p + 0u, PARAM_A);
+        put_le32(p + 4u, k);
+        put_le32(p + 8u, k * CAP_TEX_BYTES);
+        put_le32(p + 12u, CAP_TEX_BYTES);
+        for (v = 0; v < 3u; v++) {
+            set_vtx(&g_raw_vertices[k * 3u + v], 0.0f, 0.0f, PARAM_A, k);
+        }
+    }
+    memset(&raw, 0, sizeof(raw));
+    raw.txds = g_raw_txds;
+    raw.txds_count = CAP_EXTRA;
+    raw.txdt = g_raw_txdt;
+    raw.txdt_size = CAP_EXTRA * CAP_TEX_BYTES;
+
+    needed = 0xDEADBEEFu;
+    CHECK_EQ_INT(twlhd_pica_frame_arena_needed(
+                     g_raw_vertices, CAP_EXTRA * 3u, &raw, g_cap_scratch,
+                     CAP_TEX_BYTES * 2u, &needed),
+                 TWLHD_PICA_FRAME_ERR_CAPACITY);
+    CHECK_EQ_INT(needed, 0xDEADBEEFu);
+
+    entry_count = 0xDEADBEEFu;
+    texture_count = 0xDEADBEEFu;
+    arena_used = 0xDEADBEEFu;
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     g_raw_vertices, CAP_EXTRA * 3u, &raw, g_raw_plan,
+                     CAP_EXTRA, g_raw_textures, CAP_EXTRA, g_raw_arena,
+                     CAP_EXTRA * 256u, g_raw_texcoords, CAP_EXTRA * 3u,
+                     g_raw_entry_texture, g_raw_entry_status, CAP_EXTRA,
+                     g_cap_scratch, CAP_TEX_BYTES * 2u, &entry_count,
+                     &texture_count, &arena_used),
+                 TWLHD_PICA_FRAME_ERR_CAPACITY);
+
+    test_report("pica-frame/texture-cap-256");
+}
+
+/* Format 4 and 6 need no index data; format 5 does. The `format == 5u` test
+ * must not fire `NO_DATA` for the index-less formats. */
+#define PARAM_FMT4_8 0x10000000u /* I8, 8x8: 64 texel B, 512 palette B */
+#define PARAM_FMT6_8 0x18000000u /* A5I3, 8x8: 64 texel B, 16 palette B */
+#define PARAM_FMT5_8 0x14000000u /* 4x4, 8x8: 16 texel B, 8 pal B, 8 idx B */
+
+static uint8_t g_fmt4_tex[64];
+static uint8_t g_fmt4_pal[512];
+static uint8_t g_fmt6_tex[64];
+static uint8_t g_fmt6_pal[16];
+static uint8_t g_fmt5_tex[16];
+static uint8_t g_fmt5_pal[8];
+static uint8_t g_fmt5_idx[8];
+
+static void fmt_frame_ok(const TwlhdV2TexEntry *entry, uint32_t param,
+                         uint32_t first_alpha, uint32_t first_red) {
+    TwlhdGxTexVertex tex[3];
+    TwlhdV2View view;
+
+    set_vtx(&tex[0], 0.0f, 0.0f, param, 0u);
+    set_vtx(&tex[1], 2.0f, 2.0f, param, 0u);
+    set_vtx(&tex[2], 4.0f, 4.0f, param, 0u);
+    CHECK_EQ_INT(write_and_parse(entry, 1u, &view), TWLHD_V2_OK);
+
+    out_reset(&g_out);
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     tex, 3u, &view, g_out.plan, RUN_COUNT, g_out.textures,
+                     RUN_COUNT, g_out.arena, ARENA_BYTES, g_out.texcoords, 3u,
+                     g_out.entry_texture, g_out.entry_status, RUN_COUNT,
+                     g_out.scratch, SCRATCH_BYTES, &g_out.entry_count,
+                     &g_out.texture_count, &g_out.arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(g_out.entry_count, 1u);
+    CHECK_EQ_INT(g_out.texture_count, 1u);
+    CHECK_EQ_INT(g_out.arena_used, 256u);
+    CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_OK);
+    CHECK_EQ_INT(g_out.entry_texture[0], 0);
+    CHECK_EQ_INT(g_out.textures[0].width, 8u);
+    CHECK_EQ_INT(g_out.textures[0].height, 8u);
+    /* Source texel (0,0) -> PICA texel 42 (A,B,G,R). */
+    CHECK_EQ_INT(g_out.arena[42u * 4u + 0u], first_alpha);
+    CHECK_EQ_INT(g_out.arena[42u * 4u + 1u], 0u);
+    CHECK_EQ_INT(g_out.arena[42u * 4u + 2u], 0u);
+    CHECK_EQ_INT(g_out.arena[42u * 4u + 3u], first_red);
+}
+
+static void test_format_index_matrix(void) {
+    static const TwlhdV2TexEntry fmt4 = {
+        PARAM_FMT4_8, 0u, g_fmt4_tex, g_fmt4_pal, NULL, 64u, 512u, 0u};
+    static const TwlhdV2TexEntry fmt6 = {
+        PARAM_FMT6_8, 0u, g_fmt6_tex, g_fmt6_pal, NULL, 64u, 16u, 0u};
+    static const TwlhdV2TexEntry fmt5 = {
+        PARAM_FMT5_8, 0u, g_fmt5_tex, g_fmt5_pal, g_fmt5_idx, 16u, 8u, 8u};
+    uint32_t i;
+
+    for (i = 0; i < 64u; i++) {
+        g_fmt4_tex[i] = (uint8_t)i;
+        g_fmt6_tex[i] = (uint8_t)(i & 7u);
+    }
+    for (i = 0; i < 256u; i++) {
+        put_le16(g_fmt4_pal + i * 2u, (uint16_t)i);
+    }
+    for (i = 0; i < 8u; i++) {
+        put_le16(g_fmt6_pal + i * 2u, (uint16_t)(i * 3u));
+    }
+    for (i = 0; i < 4u; i++) {
+        put_le16(g_fmt5_pal + i * 2u, (uint16_t)(i * 7u));
+    }
+    for (i = 0; i < 4u; i++) {
+        put_le32(g_fmt5_tex + i * 4u, 0x03020100u);
+        put_le16(g_fmt5_idx + i * 2u, 0x4000u); /* mode 1, palette offset 0 */
+    }
+
+    /* (a) format 4 has no index data and must be OK. */
+    fmt_frame_ok(&fmt4, PARAM_FMT4_8, 255u, 0u);
+    /* (b) format 6 has no index data and must be OK. */
+    fmt_frame_ok(&fmt6, PARAM_FMT6_8, 0u, 0u);
+    /* (c) format 5 with index data must be OK. */
+    fmt_frame_ok(&fmt5, PARAM_FMT5_8, 255u, 0u);
+
+    /* (d) format 5 without usable index data: hand-built view, the parser
+     * refuses out-of-bounds index offsets so no parsed frame can show this. */
+    {
+        uint8_t record[40];
+        uint8_t txdt[32];
+        TwlhdV2View broken;
+        TwlhdGxTexVertex tex[3];
+
+        memset(record, 0, sizeof(record));
+        put_le32(record + 0u, PARAM_FMT5_8);
+        put_le32(record + 4u, 0u);
+        put_le32(record + 8u, 0u);   /* texel_offset */
+        put_le32(record + 12u, 16u); /* texel_size */
+        put_le32(record + 16u, 0u);  /* palette_offset */
+        put_le32(record + 20u, 8u);  /* palette_size */
+        put_le32(record + 24u, 100u);/* index_offset: past txdt_size */
+        put_le32(record + 28u, 8u);  /* index_size */
+        memcpy(txdt, g_fmt5_tex, 16u);
+        memset(txdt + 16u, 0, 16u);
+
+        memset(&broken, 0, sizeof(broken));
+        broken.txds = record;
+        broken.txds_count = 1u;
+        broken.txdt = txdt;
+        broken.txdt_size = sizeof(txdt);
+        broken.pldt = g_fmt5_pal;
+        broken.pldt_size = sizeof(g_fmt5_pal);
+
+        set_vtx(&tex[0], 0.0f, 0.0f, PARAM_FMT5_8, 0u);
+        set_vtx(&tex[1], 2.0f, 2.0f, PARAM_FMT5_8, 0u);
+        set_vtx(&tex[2], 4.0f, 4.0f, PARAM_FMT5_8, 0u);
+
+        out_reset(&g_out);
+        CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                         tex, 3u, &broken, g_out.plan, RUN_COUNT,
+                         g_out.textures, RUN_COUNT, g_out.arena, ARENA_BYTES,
+                         g_out.texcoords, 3u, g_out.entry_texture,
+                         g_out.entry_status, RUN_COUNT, g_out.scratch,
+                         SCRATCH_BYTES, &g_out.entry_count,
+                         &g_out.texture_count, &g_out.arena_used),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(g_out.entry_count, 1u);
+        CHECK_EQ_INT(g_out.texture_count, 0u);
+        CHECK_EQ_INT(g_out.arena_used, 0u);
+        CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_NO_DATA);
+        CHECK_EQ_INT(g_out.entry_texture[0], -1);
+        CHECK_NEAR(g_out.texcoords[0].u, 0.0, 1e-6);
+        CHECK_NEAR(g_out.texcoords[0].v, 0.0, 1e-6);
+    }
+
+    test_report("pica-frame/format-index-matrix");
+}
+
+/*
+ * A failed (NO_DATA) run and an untextured run before the first textured run
+ * must consume no texture slot: with texture_capacity == the one real texture,
+ * a phantom slot makes the sizing pass report ERR_CAPACITY.
+ */
+static void test_failure_run_before_textured(void) {
+    TwlhdGxTexVertex tex[9];
+    TwlhdV2View view;
+
+    fill_tex_a();
+    set_vtx(&tex[0], 0.0f, 0.0f, PARAM_MISSING, 0u);
+    set_vtx(&tex[1], 0.0f, 0.0f, PARAM_MISSING, 0u);
+    set_vtx(&tex[2], 0.0f, 0.0f, PARAM_MISSING, 0u);
+    set_vtx(&tex[3], 0.0f, 0.0f, 0u, 0u);
+    set_vtx(&tex[4], 0.0f, 0.0f, 0u, 0u);
+    set_vtx(&tex[5], 0.0f, 0.0f, 0u, 0u);
+    set_vtx(&tex[6], 1.0f, 1.0f, PARAM_A, 0u);
+    set_vtx(&tex[7], 3.0f, 3.0f, PARAM_A, 0u);
+    set_vtx(&tex[8], 5.0f, 5.0f, PARAM_A, 0u);
+    CHECK_EQ_INT(write_and_parse(g_a_only, 1u, &view), TWLHD_V2_OK);
+
+    out_reset(&g_out);
+    CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                     tex, 9u, &view, g_out.plan, RUN_COUNT, g_out.textures, 1u,
+                     g_out.arena, ARENA_BYTES, g_out.texcoords, 9u,
+                     g_out.entry_texture, g_out.entry_status, RUN_COUNT,
+                     g_out.scratch, SCRATCH_BYTES, &g_out.entry_count,
+                     &g_out.texture_count, &g_out.arena_used),
+                 TWLHD_PICA_FRAME_OK);
+    CHECK_EQ_INT(g_out.entry_count, 3u);
+    CHECK_EQ_INT(g_out.texture_count, 1u);
+    CHECK_EQ_INT(g_out.arena_used, 256u);
+    CHECK_EQ_INT(g_out.entry_status[0], TWLHD_PICA_FRAME_ENTRY_NO_DATA);
+    CHECK_EQ_INT(g_out.entry_status[1], TWLHD_PICA_FRAME_ENTRY_OK);
+    CHECK_EQ_INT(g_out.entry_status[2], TWLHD_PICA_FRAME_ENTRY_OK);
+    CHECK_EQ_INT(g_out.entry_texture[0], -1);
+    CHECK_EQ_INT(g_out.entry_texture[1], -1);
+    CHECK_EQ_INT(g_out.entry_texture[2], 0);
+    CHECK_EQ_INT(g_out.textures[0].offset, 0u);
+    CHECK_EQ_INT(g_out.textures[0].width, 8u);
+    CHECK_EQ_INT(g_out.textures[0].height, 8u);
+    CHECK_NEAR(g_out.texcoords[0].u, 0.0, 0.0);
+    CHECK_NEAR(g_out.texcoords[2].v, 0.0, 0.0);
+    CHECK_NEAR(g_out.texcoords[5].u, 0.0, 0.0);
+    CHECK_NEAR(g_out.texcoords[6].u, 0.125, 1e-6);
+    CHECK_NEAR(g_out.texcoords[6].v, 0.875, 1e-6);
+    CHECK_NEAR(g_out.texcoords[8].u, 0.625, 1e-6);
+    CHECK_NEAR(g_out.texcoords[8].v, 0.375, 1e-6);
+    expect_a_bytes(&g_out);
+
+    test_report("pica-frame/failure-run-before-textured");
+}
+
+/*
+ * Last run untextured, exact-size guarded texcoords: the zeroing loop must
+ * not write texcoords[vertex_count] (one element past the payload).
+ */
+static void test_texcoord_tail_guard(void) {
+    TwlhdGxTexVertex payload[9];
+    TwlhdV2View view;
+    uint8_t tc_copy[2][sizeof(g_oob_tc)];
+    uint32_t count_copy[2][3];
+    uint32_t pass;
+
+    fill_tex_a();
+    set_vtx(&payload[0], 0.0f, 0.0f, PARAM_A, 0u);
+    set_vtx(&payload[1], 2.0f, 2.0f, PARAM_A, 0u);
+    set_vtx(&payload[2], 4.0f, 4.0f, PARAM_A, 0u);
+    set_vtx(&payload[3], 0.0f, 0.0f, 0u, 0u);
+    set_vtx(&payload[4], 1.0f, 1.0f, 0u, 0u);
+    set_vtx(&payload[5], 2.0f, 2.0f, 0u, 0u);
+    set_vtx(&payload[6], 0.0f, 0.0f, 0u, 1u);
+    set_vtx(&payload[7], 1.0f, 1.0f, 0u, 1u);
+    set_vtx(&payload[8], 2.0f, 2.0f, 0u, 1u);
+    CHECK_EQ_INT(write_and_parse(g_a_only, 1u, &view), TWLHD_V2_OK);
+
+    for (pass = 0; pass < 2u; pass++) {
+        int fill = pass == 0 ? 0x00 : 0xFF;
+        uint32_t entry_count = 0xDEADBEEFu;
+        uint32_t texture_count = 0xDEADBEEFu;
+        uint32_t arena_used = 0xDEADBEEFu;
+
+        memset(g_oob_tex, fill, sizeof(g_oob_tex));
+        memcpy(g_oob_tex + OOB_GUARD, payload, sizeof(payload));
+        memset(g_oob_plan, OOB_FILL, sizeof(g_oob_plan));
+        memset(g_oob_texs, OOB_FILL, sizeof(g_oob_texs));
+        memset(g_oob_tc, OOB_FILL, sizeof(g_oob_tc));
+        memset(g_oob_et, OOB_FILL, sizeof(g_oob_et));
+        memset(g_oob_es, OOB_FILL, sizeof(g_oob_es));
+        memset(g_oob_arena, OOB_FILL, sizeof(g_oob_arena));
+
+        CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                         OOB_TEX, 9u, &view, OOB_PLAN, RUN_COUNT, OOB_TEXS,
+                         RUN_COUNT, OOB_ARENA, ARENA_BYTES, OOB_TC, 9u, OOB_ET,
+                         OOB_ES, RUN_COUNT, g_out.scratch, SCRATCH_BYTES,
+                         &entry_count, &texture_count, &arena_used),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(entry_count, 3u);
+        CHECK_EQ_INT(texture_count, 1u);
+        CHECK_EQ_INT(arena_used, 256u);
+        CHECK_EQ_INT(OOB_ES[2], TWLHD_PICA_FRAME_ENTRY_OK);
+        CHECK_EQ_INT(OOB_ET[2], -1);
+        CHECK_NEAR(OOB_TC[0].u, 0.0, 1e-6);
+        CHECK_NEAR(OOB_TC[1].v, 0.75, 1e-6);
+        CHECK_NEAR(OOB_TC[8].v, 0.0, 0.0);
+
+        CHECK(guard_intact(g_oob_tex, 9u * sizeof(TwlhdGxTexVertex), fill));
+        CHECK(guard_intact(g_oob_plan, 3u * sizeof(TwlhdPicaBindPlan),
+                           OOB_FILL));
+        CHECK(guard_intact(g_oob_texs, sizeof(TwlhdPicaFrameTexture),
+                           OOB_FILL));
+        CHECK(guard_intact(g_oob_tc, 9u * sizeof(TwlhdPicaTexCoord), OOB_FILL));
+        CHECK(guard_intact(g_oob_et, 3u * sizeof(int32_t), OOB_FILL));
+        CHECK(guard_intact(g_oob_es, 3u * sizeof(TwlhdPicaFrameEntryStatus),
+                           OOB_FILL));
+        CHECK(guard_intact(g_oob_arena, 256u, OOB_FILL));
+
+        memcpy(tc_copy[pass], g_oob_tc, sizeof(g_oob_tc));
+        count_copy[pass][0] = entry_count;
+        count_copy[pass][1] = texture_count;
+        count_copy[pass][2] = arena_used;
+    }
+
+    CHECK(memcmp(tc_copy[0], tc_copy[1], sizeof(g_oob_tc)) == 0);
+    CHECK(memcmp(count_copy[0], count_copy[1], sizeof(count_copy[0])) == 0);
+
+    test_report("pica-frame/texcoord-tail-guard");
+}
+
 int main(void) {
     test_prepare_basic();
     test_merged_run_indexing();
@@ -991,5 +1563,11 @@ int main(void) {
     test_errors();
     test_missing_and_unsupported();
     test_out_of_bounds();
+    test_size_bounds_1024();
+    test_scratch_exact();
+    test_texture_cap_256();
+    test_format_index_matrix();
+    test_failure_run_before_textured();
+    test_texcoord_tail_guard();
     return test_exit_code();
 }

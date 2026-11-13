@@ -1,179 +1,323 @@
-# 5B-2e-1 mutation report: host-side textured frame preparation
+# 5B-2e-1 mutation report (round 1): host-side textured frame preparation
 
-Status: **IMPLEMENTED**, BUILD/UNIT only. `make test` is green; nothing
-EMULATOR or HARDWARE is verified. This report contains only numbers and
-results produced by the run described below.
+Status: **IMPLEMENTED**, BUILD/UNIT only. `make host-test` and the targeted
+golden suite are green; nothing EMULATOR or HARDWARE is verified. This report
+contains only numbers and results produced by the run described below.
 
 ## Method
 
-Every mutant is a scratch copy of the ONE file `common/twlhd_pica_frame.c`
-under `/tmp/opencode/mutants5b2e1/mNNN/twlhd_pica_frame.c` (outside the
-worktree). Every other translation unit was compiled once from the
-unmodified worktree. Each mutant was compiled with the repository host flags
+Round 1 closes the survivors of an independent 212-mutant run of
+`common/twlhd_pica_frame.c` (180 killed, 32 survived). The repair is
+**tests only**; `common/` is byte-for-byte unchanged.
+
+The mutant set is generated systematically by a script, one edit per mutant:
+
+- every comparison/logical operator occurrence is swapped to its neighbour
+  (`==` <-> `!=`, `<` <-> `<=`, `>` <-> `>=`, `&&` <-> `||`); shift operators
+  (`<<`, `>>`) and `->` are skipped;
+- every numeric constant gets `+1` and, when positive, `-1`
+
+inside code only (comments and `#include` lines are skipped). Each mutant is a
+scratch copy of the ONE file `common/twlhd_pica_frame.c` under
+`/tmp/opencode/mutants5b2e1_r1/mNNN/twlhd_pica_frame.c` (outside the
+worktree). Every other translation unit is compiled once from the unmodified
+worktree. Each mutant is compiled with the repository host flags
 (`-std=c11 -Wall -Wextra -Werror -O1 -g -Icommon -Itests/host
 -Itools/azahar_host -fsanitize=address,undefined -fno-omit-frame-pointer`)
 and linked into exactly the two artifacts `make test` builds for this
 feature:
 
 1. `tests/host/build/test_pica_frame` (the `host-test` step), run directly.
-2. `tests/host/build/pica_frame_cli` + `tools/test_pica_frame_golden.py`
-   (the `python3 -m unittest discover -s tools` step), with
-   `PICA_FRAME_CLI` pointing at the mutant CLI.
+2. `tests/host/build/pica_frame_cli` + `tools/test_pica_frame_golden.py`,
+   with `PICA_FRAME_CLI` pointing at the mutant CLI.
 
-A mutant is **KILLED** when at least one of those two steps exits non-zero.
-A mutant that stops compiling under `-Werror` is also killed by `make test`
-and is listed as `build`. The unmutated baseline passes both steps (7/7 C
-test labels, 1/1 golden test).
+A mutant is **KILLED** when at least one of those two steps exits non-zero (a
+`-Werror` build failure counts, because `make test` fails on it). The
+unmutated baseline passes both steps (13/13 C test labels, 1 golden test with
+9 subTests). Identical mutants are deduplicated by comparing the resulting
+source text.
 
-The set is systematic but curated by hand: operators on every comparison,
-logical operator, arithmetic operator and constant that affects run
-grouping, keying, dedupe, offsets, capacities, texcoords, status routing and
-the result strings, plus +/-1 edits on loop strides, bounds, shifts, format
-masks, sizes, indices and the alignment/offset arithmetic. Each entry is one
-edit; the runner checks that every edit is unique, so no byte-identical
-mutant is counted twice. The set was generated and executed by
-`python3 /tmp/opencode/run_mutants5b2e1.py`; machine-readable results are in
-`/tmp/opencode/mutants5b2e1/results.json`.
+The runner is `python3 /tmp/opencode/run_mutants5b2e1_r1.py`; machine-readable
+results are in `/tmp/opencode/mutants5b2e1_r1/results.json`.
 
-The test file also gained one label during this round,
-`pica-frame/dedupe-key-halves`, which pins the case where two records share
-only the `pltt_base` half of the dedupe key and the arena is one byte short:
-the call must still report `ERR_ARENA` from the sizing pass.
+**Reconciliation with the independent run.** That run's exact edit list is
+not available, so "same method" was implemented as the systematic
+enumeration above. It produces **192** unique mutants, not 212: the two
+enumerations need not contain exactly the same edits (operator direction,
+whether `0 -> -1` is generated, shift operators, and duplicates all change
+the count), so the totals legitimately differ. Every one of the 32 survivors
+listed in the independent run *is* present in this set. Of those 32, **10 are
+killed** by the round-1 tests and **22 remain genuinely equivalent**; the
+systematic set also found **6 further equivalents** (lines 83-85, 88, 279,
+280) that the independent list did not mention, for **28 survivors total**.
+No mutant is killed by the golden step alone in this run: the new C tests are
+strictly stronger for every behaviour the CLI can express, and the C step runs
+first, so it accounts for all test-step kills. The golden suite is still part
+of the run and still passes for every survivor.
 
 ## Results
 
-**92 unique mutants, 80 KILLED, 12 equivalent survivors.**
+**192 unique mutants, 164 KILLED, 28 equivalent survivors.**
 
 | Killing step | Mutants |
 |---|---:|
-| `test_pica_frame` (host-test) | 74 |
-| `test_pica_frame_golden.py` (golden) | 5 |
-| build (`-Werror`, no binary produced) | 1 |
-| **Total killed** | **80** |
-| equivalent survivors | 12 |
-| **Total** | **92** |
+| `test_pica_frame` (host-test) | 140 |
+| build (`-Werror`, no binary produced) | 24 |
+| golden (`test_pica_frame_golden.py`) | 0 |
+| **Total killed** | **164** |
+| equivalent survivors | 28 |
+| **Total** | **192** |
 
-The build-killed mutant is `cap-and` (the `runs > plan_capacity &&
-runs > entry_capacity || ...` edit trips `-Werror=parentheses`); `make
-test` fails on it exactly as it would for any non-compiling change, so it is
-counted as killed.
+The 24 build kills are all `-Werror=parentheses` failures from mixing `&&`
+and `||` in one expression (`||` -> `&&` next to existing `&&`, or the
+reverse), for example the size check at line 19 and the NULL/capacity checks
+at lines 102, 107-108, 161-163, 169, 272 and 311. `make test` fails on them
+exactly as it would for any non-compiling change.
+
+## Tests added in round 1
+
+Six new C labels (all added, none renamed or weakened):
+
+| Label | Closes |
+|---|---|
+| `pica-frame/size-bounds-1024` | line 19 `1024 -> 1023` and `<= -> <`: 1024x8 and 8x1024 both must be OK, with exact 32768-byte scratch, 65536 arena bytes, offsets 0/32768 and hand-computed arena texels. |
+| `pica-frame/scratch-exact` | line 114 `> -> >=`: scratch exactly 256 bytes for one 8x8 texture succeeds; 255 bytes fails with `ERR_CAPACITY` and leaves every output untouched; the same pair through `twlhd_pica_frame_arena_needed`. |
+| `pica-frame/texture-cap-256` | lines 197/338 `>= -> >`: 256 distinct textures all stored (per-texture offsets, dims, indices, statuses and every arena byte hand-checked), plus a hand-built 257-record view whose `MAX+1` key must report `ERR_CAPACITY`; also kills the `tex_count`/`arena_used` initialiser mutants (lines 155, 156, 157, 306, 307) and pins the last TXDS record and the last bind-plan entry. |
+| `pica-frame/format-index-matrix` | line 102 `5 -> 4` and `5 -> 6`: format 4 (I8) and format 6 (A5I3) without index data are OK; format 5 with index data is OK; a hand-built format-5 record whose index offset is out of bounds is `NO_DATA` (not `UNSUPPORTED`). |
+| `pica-frame/failure-run-before-textured` | line 190 `|| -> &&`: a `NO_DATA` run and an untextured run before the first textured run must consume no texture slot, with `texture_capacity` equal to the real texture count. |
+| `pica-frame/texcoord-tail-guard` | line 285 `< -> <=`: last run untextured, exact-size guarded texcoords (the zero loop must not write `texcoords[vertex_count]`), plus the 0x00/0xFF input-tail two-pass comparison. |
+
+Gap (d) of the task (sizes 4, 2048, non-power-of-two, 0) is unreachable
+through the public API: `twlhd_tex_dimensions()` returns
+`8 << ((param >> 20) & 7)` / `8 << ((param >> 23) & 7)`, so the domain is
+exactly `{8, 16, 32, 64, 128, 256, 512, 1024}`. The reachable boundaries 8 and
+1024 are covered by the existing 8x8 tests and the new 1024 test; no fake
+test was added for unreachable values.
+
+Two golden frames were added to `_frame_specs()`: an untextured run first
+(`[None, (a, 0), (b, 1)]`) and a NO_DATA run first with an untextured run last
+(`[("missing", m2, 0), (c, 2), None]`). The CLI allocates the texture buffer
+with capacity equal to the entry count and the scratch buffer at exactly the
+largest decoded texture, so both frames also exercise the line-190 and exact
+scratch behaviour through the independent Python oracle.
 
 ## Equivalent survivors
 
-All 12 survivors are provably equivalent for every input the module
-contract admits; none is an untested behaviour change.
+All 28 were confirmed empirically: each single edit was compiled, both steps
+were run, and both passed. None is an untested behaviour change.
 
-| Mutant | Why it cannot change an observable result |
-|---|---|
-| `pow2-minus-two` | The size check only ever sees values produced by `twlhd_tex_dimensions` (`8 << shift`), i.e. powers of two. For every power of two `v >= 4`, `v & (v - 1) == 0` and `v & (v - 2) == 0`, so no test input can distinguish the two. |
-| `rec-loop-inclusive` | The extra iteration calls `twlhd_v2_txds_record(view, count, &rec)`, which returns false, and `frame_find_record` immediately returns 0 — the same result as leaving the loop. A match in the real range returns before the extra iteration. |
-| `rec-invalid-returns-hit` | The `return 1` is dead for every view produced by `twlhd_v2_parse()`: the loop index is `< txds_count`, the view is non-NULL and `rec` is a valid local, so the accessor cannot fail. A hand-built view that violates the parsed-view precondition is outside the module contract; under it the branch is unreachable. |
-| `eval-skip-dropped` | Re-evaluating a run that has the same key as the previous one is redundant work, not a result change: the per-key linear scan finds the stored texture and `continue`s, so `tex_count`, the key table and `arena_used` are unchanged. Scratch is documented as undefined on return, so its contents cannot be observed. |
-| `max-tex-gt` | A texture is only stored after a TXDS record with the exact `(param, pltt)` pair was found, and the format guarantees the pair is unique (`twlhd_v2_parse.c:358-366`). With at most 256 records, a 257th distinct stored key (the first index the mutated `>` accepts) is unreachable. |
-| `write-boundary-ge` | In the write loop `i` takes only multiples of 3 up to `vertex_count`, so `i >= vertex_count` is true exactly when `i == vertex_count`; no other value of `i` can satisfy it. |
-| `write-arena-capacity-full` | The capacity argument only feeds `twlhd_pica_tex_swizzle_rgba8`'s `dst_size < width*height*4` check. Pass 1 already proved `arena_capacity >= sum of all texture bytes`, so `arena_capacity` is always at least the remaining need at every call; the swizzle result and every written byte are unchanged. |
-| `texcoord-drop-index-test` | When `status == OK && !untextured`, `tex_index` is either a reused index `>= 0` or a freshly stored one `>= 0`; a failed swizzle changes `status` to `UNSUPPORTED` before this condition. The dropped `tex_index >= 0` conjunct is therefore always true here. |
-| `zero-loop-inclusive` | This is the fallback loop used only when `twlhd_pica_texcoords_from_gx` fails. With valid width/height (already checked), valid pointers, `vc >= 3` and `texcoords` capacity `>= vc` (checked in pass 1), that helper cannot return anything but OK, so the whole branch is unreachable. |
-| `zero-u-one` | Same unreachable fallback branch as `zero-loop-inclusive`; the assignment never executes. |
-| `zero-v-one` | Same unreachable fallback branch as `zero-loop-inclusive`; the assignment never executes. |
-| `needed-max-gt` | The `arena_needed` copy of the same 256-record bound: at most 256 distinct `(param, pltt)` keys can match a TXDS record, so `tex_count` never reaches 257 and the mutated bound is equivalent to `>=`. |
+| Line(s) | Mutant | Why it cannot change an observable result |
+|---|---|---|
+| 19 | `8 -> 7` | `frame_size_ok` is only called at :108 with values from `twlhd_tex_dimensions` = `8 << (bits & 7)`, i.e. exactly `{8..1024}`; `>= 7` and `>= 8` agree on that domain. |
+| 19 | `1024 -> 1025` | Same domain: no reachable size exceeds 1024, and for every power of two in `{8..1024}` both upper bounds accept. |
+| 19 | `1 -> 2` (`v - 1` -> `v - 2`) | For every power of two `v >= 8`, `v & (v - 1) == 0` and `v & (v - 2) == 0`; 4, 2048, non-powers and 0 are unreachable (see gap (d) above). |
+| 40 | `< -> <=` | The extra iteration is `i == count == view->txds_count`; `twlhd_v2_txds_record()` requires `index < txds_count` (parse.c:736) and returns 0, so the helper returns 0 exactly as on normal loop exit. No accessor can succeed at `i == count`. |
+| 43 | `0 -> 1` | The only in-loop failure mode is `view->txds == NULL` (the index is always `< count`); then all three pointer accessors re-run `twlhd_v2_txds_record()` and fail identically, so the run is `NO_DATA` either way. The parser never produces `txds == NULL` with `txds_count > 0`. `rec_index`/`rec` are never read before being (re)derived. |
+| 47 | `1 -> 2` | `frame_find_record()` is static with one call site (:94) which tests truthiness only (`!frame_find_record(...)`). |
+| 72 | `rec_index = 0 -> 1` | Written at :45 before any read (:99/:101 are reached only after a successful find); on failure the function returns at :96 first. |
+| 73, 74 | `width`/`height = 0 -> 1` | Always overwritten by `twlhd_tex_dimensions()` at :107 before the first read at :113; a failing dimensions call returns at :110 (and the `||` short-circuits) without reading them. |
+| 83, 84, 85 | `*out_width`/`*out_height`/`*out_bytes = 0 -> 1` | Callers use these out-params only on the `status == OK && !untextured` path, where all three are overwritten at :123-125. Untextured, `NO_DATA` and `UNSUPPORTED` runs discard them. |
+| 88 | `*out_untextured = 1 -> 2` | The flag is only tested for truthiness (`|| untextured`, `!untextured`) at :190, :240, :272, :331. |
+| 90, 96, 104, 110, 119, 126 | `return 0 -> 1` | All three call sites (:186-189, :234-238, :327-330) test only `< 0`; every caller-relevant value flows through the out-params, which are written before each return. A non-negative return takes the classified path. |
+| 114 | `return -1 -> -2` (`1 -> 2` in `-1`) | Same `< 0`-only use: both are negative and produce `ERR_CAPACITY`. |
+| 152, 153, 304, 305 | `{0} -> {1}` key tables | The tables are append-only. Every slot read by a dedupe loop (`j`/`t < tex_count`) was written earlier in the same pass or in the validation pass, which stores keys in the same run order; an unwritten slot is never read. |
+| 279, 280 | fallback zero-loop `u`/`v = 0 -> 1` | The fallback branch is unreachable: `twlhd_pica_texcoords_from_gx()` cannot fail here (pointers are non-NULL, width/height already passed `frame_size_ok`, and `out_capacity == vc >= count`), so the assignments never execute. |
+| 243 | `< -> <=` | In the write pass, a run whose key is new has its validation-pass slot at index `tex_count` (the validation pass stored keys in the same run order and classification), so the extra probe at `t == tex_count` reads the run's own key and breaks at `t == tex_count`, taking the same store branch. Reused keys break earlier. At `tex_count == 256` the probe would be out of bounds, but that state is unreachable (256-record TXDS cap plus the MAX check). |
+| 278 | `< -> <=` | Same unreachable fallback as lines 279/280; the loop body never executes. |
 
 ## Per-mutant results
 
-| Mutant | Edit | Result | Killing step |
-|---|---|---|---|
-| `size-min-strict` | size lower bound >= 8 -> > 8 | KILLED | test |
-| `size-max-strict` | size upper bound <= 1024 -> < 1024 | KILLED | golden |
-| `pow2-test-inverted` | power-of-two test == 0 -> != 0 | KILLED | test |
-| `pow2-minus-two` | power-of-two v-1 -> v-2 | SURVIVED (equivalent) | - |
-| `same-key-param` | run key param == -> != | KILLED | test |
-| `same-key-pltt` | run key pltt == -> != | KILLED | test |
-| `same-key-and` | run key && -> || | KILLED | test |
-| `rec-param-ne` | record lookup param == -> != | KILLED | test |
-| `rec-pltt-ne` | record lookup pltt == -> != | KILLED | test |
-| `rec-loop-inclusive` | record loop i < count -> <= count | SURVIVED (equivalent) | - |
-| `rec-invalid-returns-hit` | invalid record treated as match | SURVIVED (equivalent) | - |
-| `format-shift-25` | format shift 26 -> 25 | KILLED | test |
-| `format-mask-3` | format mask 7 -> 3 | KILLED | test |
-| `untextured-inverted` | format 0 check == -> != | KILLED | test |
-| `palette-skip-inverted` | format 7 palette test != -> == | KILLED | test |
-| `palette-or` | palette condition && -> || | KILLED | test |
-| `index-test-inverted` | format 5 index test == -> != | KILLED | test |
-| `index-or` | index condition && -> || | KILLED | test |
-| `bytes-times-3` | bytes per texel 4 -> 3 | KILLED | test |
-| `bytes-times-8` | bytes per texel 4 -> 8 | KILLED | test |
-| `scratch-ge` | scratch fit > -> >= | KILLED | golden |
-| `scratch-inverted` | scratch fit > -> < | KILLED | test |
-| `decode-ok-inverted` | decode != OK -> == OK | KILLED | test |
-| `runs-i-plus2` | run count i += 3 -> 2 | KILLED | test |
-| `runs-i-plus4` | run count i += 3 -> 4 | KILLED | test |
-| `runs-first-ne` | run count first i == 0 -> != | KILLED | test |
-| `runs-double` | run count ++ -> += 2 | KILLED | test |
-| `null-drop-entry-status` | NULL check drops entry_status | KILLED | test |
-| `null-drop-arena-out` | NULL check drops out_arena_used | KILLED | test |
-| `count-mod2` | vertex count mod 3 -> mod 2 | KILLED | test |
-| `count-inverted` | vertex count mod test != -> == | KILLED | test |
-| `cap-plan-ge` | plan capacity > -> >= | KILLED | test |
-| `cap-entry-ge` | entry capacity > -> >= | KILLED | test |
-| `cap-texcoord-ge` | texcoord capacity > -> >= | KILLED | test |
-| `cap-and` | capacity checks || -> && | KILLED | build |
-| `eval-loop-plus2` | validation loop i += 3 -> 2 | KILLED | test |
-| `eval-first-ne` | validation skip first i != 0 -> != 1 | KILLED | test |
-| `eval-skip-dropped` | validation never skips equal runs | SURVIVED (equivalent) | - |
-| `eval-status-and` | classify status || -> && | KILLED | golden |
-| `eval-untextured-dropped` | classify ignores untextured flag | KILLED | golden |
-| `dedupe-and` | validation dedupe && -> || | KILLED | test |
-| `dedupe-param-ne` | validation dedupe param == -> != | KILLED | test |
-| `dedupe-pltt-ne` | validation dedupe pltt == -> != | KILLED | test |
-| `dedupe-loop-inclusive` | validation dedupe j < -> <= | KILLED | test |
-| `max-tex-gt` | max texture count >= -> > | SURVIVED (equivalent) | - |
-| `texcap-gt` | texture capacity >= -> > | KILLED | test |
-| `arena-sum-plus1` | validation arena sum +1 | KILLED | test |
-| `arena-check-ge` | arena check > -> >= | KILLED | test |
-| `arena-check-inverted` | arena check > -> < | KILLED | test |
-| `write-loop-lt` | write loop <= vertex_count -> < | KILLED | test |
-| `write-boundary-ge` | write boundary == -> >= | SURVIVED (equivalent) | - |
-| `write-vc-plus1` | run length i-j -> i-j+1 | KILLED | test |
-| `write-arena-offset-plus1` | texture start offset +1 (alignment) | KILLED | test |
-| `write-arena-capacity-full` | swizzle gets full capacity | SURVIVED (equivalent) | - |
-| `write-arena-capacity-minus1` | swizzle capacity off by one | KILLED | test |
-| `write-arena-sum-plus1` | write arena sum +1 | KILLED | test |
-| `tex-offset-plus128` | stored texture offset +128 | KILLED | test |
-| `tex-width-swapped` | stored width <- height | KILLED | test |
-| `tex-height-swapped` | stored height <- width | KILLED | test |
-| `tex-index-plus1` | new texture index +1 | KILLED | test |
-| `tex-count-plus2` | write tex_count += 2 | KILLED | test |
-| `write-dedupe-and` | write dedupe && -> || | KILLED | test |
-| `write-dedupe-inverted` | write dedupe found test == -> != | KILLED | test |
-| `write-reuse-plus1` | reused texture index +1 | KILLED | test |
-| `status-always-ok` | entry status forced OK | KILLED | test |
-| `entry-texture-zero` | entry texture index forced 0 | KILLED | test |
-| `run-index-plus2` | run index += 2 | KILLED | test |
-| `texcoord-drop-index-test` | texcoord ignores tex_index >= 0 | SURVIVED (equivalent) | - |
-| `texcoord-index-gt` | texcoord tex_index >= 0 -> > 0 | KILLED | test |
-| `texcoord-size-swapped` | texcoord width/height swapped | KILLED | test |
-| `texcoord-offset-i` | texcoord destination indexed by i | KILLED | test |
-| `zero-loop-inclusive` | zeroed texcoord loop < -> <= | SURVIVED (equivalent) | - |
-| `zero-u-one` | zeroed u <- 1.0 | SURVIVED (equivalent) | - |
-| `zero-v-one` | zeroed v <- 1.0 | SURVIVED (equivalent) | - |
-| `zero-loop-inclusive-else` | else zeroed loop < -> <= | KILLED | golden |
-| `zero-u-one-else` | else zeroed u <- 1.0 | KILLED | test |
-| `zero-v-one-else` | else zeroed v <- 1.0 | KILLED | test |
-| `j-next-plus1` | next run start j = i + 1 | KILLED | test |
-| `out-runs-plus1` | entry count +1 | KILLED | test |
-| `out-tex-plus1` | texture count +1 | KILLED | test |
-| `out-arena-plus1` | arena used +1 | KILLED | test |
-| `needed-count-mod2` | arena_needed mod 3 -> mod 2 | KILLED | test |
-| `needed-loop-plus2` | arena_needed loop i += 2 | KILLED | test |
-| `needed-skip-first` | arena_needed first-run test | KILLED | test |
-| `needed-dedupe-and` | arena_needed dedupe && -> || | KILLED | test |
-| `needed-max-gt` | arena_needed max >= -> > | SURVIVED (equivalent) | - |
-| `needed-sum-minus1` | arena_needed sum -1 | KILLED | test |
-| `needed-out-plus1` | arena_needed out +1 | KILLED | test |
-| `result-ok-wrong` | result_string OK -> ERR_NULL | KILLED | test |
-| `result-default-ok` | result_string default -> OK | KILLED | test |
-| `status-ok-wrong` | entry_status_string OK -> NO_DATA | KILLED | test |
-| `status-default-ok` | entry_status_string default -> OK | KILLED | test |
-
-Rerun: `python3 /tmp/opencode/run_mutants5b2e1.py` (scratch artifacts and
-`results.json` under `/tmp/opencode/mutants5b2e1/`).
+| Mutant edit | Result | Killing step |
+|---|---|---|
+| `line 16 const 26 -> 27` | KILLED | `test_pica_frame` |
+| `line 16 const 26 -> 25` | KILLED | `test_pica_frame` |
+| `line 16 const 7 -> 8` | KILLED | `test_pica_frame` |
+| `line 16 const 7 -> 6` | KILLED | `test_pica_frame` |
+| `line 19 const 8 -> 9` | KILLED | `test_pica_frame` |
+| `line 19 const 8 -> 7` | SURVIVED (equivalent) | - |
+| `line 19 const 1024 -> 1025` | SURVIVED (equivalent) | - |
+| `line 19 const 1024 -> 1023` | KILLED | `test_pica_frame` |
+| `line 19 const 1 -> 2` | SURVIVED (equivalent) | - |
+| `line 19 const 1 -> 0` | KILLED | `test_pica_frame` |
+| `line 19 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 40 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 43 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 47 const 1 -> 2` | SURVIVED (equivalent) | - |
+| `line 47 const 1 -> 0` | KILLED | `test_pica_frame` |
+| `line 50 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 72 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 73 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 74 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 83 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 84 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 85 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 87 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 88 const 1 -> 2` | SURVIVED (equivalent) | - |
+| `line 88 const 1 -> 0` | KILLED | `test_pica_frame` |
+| `line 90 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 92 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 96 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 102 const 7 -> 8` | KILLED | `test_pica_frame` |
+| `line 102 const 7 -> 6` | KILLED | `test_pica_frame` |
+| `line 102 const 5 -> 6` | KILLED | `test_pica_frame` |
+| `line 102 const 5 -> 4` | KILLED | `test_pica_frame` |
+| `line 104 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 110 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 113 const 4 -> 5` | KILLED | `test_pica_frame` |
+| `line 113 const 4 -> 3` | KILLED | `test_pica_frame` |
+| `line 114 const 1 -> 2` | SURVIVED (equivalent) | - |
+| `line 114 const 1 -> 0` | KILLED | `test_pica_frame` |
+| `line 119 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 126 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 131 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 134 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 134 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 134 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 135 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 135 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 135 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 152 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 153 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 155 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 156 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 157 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 166 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 166 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 166 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 175 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 175 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 175 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 184 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 184 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 184 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 187 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 192 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 215 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 216 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 217 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 218 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 218 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 218 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 220 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 220 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 220 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 228 const 1 -> 2` | KILLED | `test_pica_frame` |
+| `line 228 const 1 -> 0` | KILLED | `test_pica_frame` |
+| `line 235 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 243 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 273 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 279 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 280 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 286 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 287 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 304 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 305 const 0 -> 1` | SURVIVED (equivalent) | - |
+| `line 306 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 307 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 314 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 314 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 314 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 316 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 316 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 316 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 325 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 325 const 3 -> 4` | KILLED | `test_pica_frame` |
+| `line 325 const 3 -> 2` | KILLED | `test_pica_frame` |
+| `line 328 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 333 const 0 -> 1` | KILLED | `test_pica_frame` |
+| `line 19 op >= -> >` | KILLED | `test_pica_frame` |
+| `line 19 op && -> ||` | KILLED | build (`-Werror`) |
+| `line 19 op <= -> <` | KILLED | `test_pica_frame` |
+| `line 19 op && -> ||` | KILLED | build (`-Werror`) |
+| `line 19 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 23 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 23 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 24 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 40 op < -> <=` | SURVIVED (equivalent) | - |
+| `line 44 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 44 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 44 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 87 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 102 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 102 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 102 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 102 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 102 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 102 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 107 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 108 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 114 op > -> >=` | KILLED | `test_pica_frame` |
+| `line 116 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 134 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 135 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 135 op || -> &&` | KILLED | `test_pica_frame` |
+| `line 161 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 161 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 161 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 161 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 161 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 161 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 162 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 162 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 162 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 162 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 163 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 166 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 169 op > -> >=` | KILLED | `test_pica_frame` |
+| `line 169 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 169 op > -> >=` | KILLED | `test_pica_frame` |
+| `line 169 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 170 op > -> >=` | KILLED | `test_pica_frame` |
+| `line 175 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 184 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 184 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 187 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 190 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 190 op || -> &&` | KILLED | `test_pica_frame` |
+| `line 192 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 193 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 193 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 193 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 195 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 197 op >= -> >` | KILLED | `test_pica_frame` |
+| `line 197 op || -> &&` | KILLED | `test_pica_frame` |
+| `line 198 op >= -> >` | KILLED | `test_pica_frame` |
+| `line 207 op > -> >=` | KILLED | `test_pica_frame` |
+| `line 211 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 218 op <= -> <` | KILLED | `test_pica_frame` |
+| `line 219 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 219 op || -> &&` | KILLED | `test_pica_frame` |
+| `line 220 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 220 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 235 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 240 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 240 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 243 op < -> <=` | SURVIVED (equivalent) | - |
+| `line 244 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 244 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 244 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 246 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 249 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 272 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 272 op && -> ||` | KILLED | build (`-Werror`) |
+| `line 272 op && -> ||` | KILLED | build (`-Werror`) |
+| `line 273 op >= -> >` | KILLED | `test_pica_frame` |
+| `line 275 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 278 op < -> <=` | SURVIVED (equivalent) | - |
+| `line 285 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 311 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 311 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 311 op || -> &&` | KILLED | build (`-Werror`) |
+| `line 314 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 316 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 325 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 325 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 328 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 331 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 331 op || -> &&` | KILLED | `test_pica_frame` |
+| `line 333 op < -> <=` | KILLED | `test_pica_frame` |
+| `line 334 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 334 op && -> ||` | KILLED | `test_pica_frame` |
+| `line 334 op == -> !=` | KILLED | `test_pica_frame` |
+| `line 336 op != -> ==` | KILLED | `test_pica_frame` |
+| `line 338 op >= -> >` | KILLED | `test_pica_frame` |
