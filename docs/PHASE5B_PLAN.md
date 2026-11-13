@@ -406,25 +406,38 @@ Status labels:
   builds.
 - **UNIT:** `make test` green, including the new
   `tests/host/test_tex_draw_plan` and `tools/test_check_tex_shot.py`; existing
-  structural test `test_diag_config` re-pinned where the new code shifted
-  counts (`test_blend_config` did not change). Mutation report
-  `docs/reports/5b2e2-mutation-report.md` covers
+  structural tests `test_diag_config` and `test_blend_config` did not need
+  re-pinning. Mutation report `docs/reports/5b2e2-mutation-report.md` covers
   `common/twlhd_tex_draw_plan.c` (105 unique mutants, 78 killed by tests,
   20 killed by `-Werror` build, 7 equivalent survivors).
 - **EMULATOR:** generator script `tools/gen_tex_frames.py` and checker
   `tools/check_tex_shot.py` committed with a documented procedure; see
   `docs/EMULATOR_VALIDATION.md` for the exact commands. Reproduced in this
   sandbox with `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
-  (Azahar `9c38437`). The regenerated screenshots have sha256
-  `648728e258bddca25bc4f1b2f46105b1da9799a924df36510b363748e240c53e`
-  for both `tex_shot_199.ppm` and `tex_ctl_shot_199.ppm`; they are
-  byte-identical. The strengthened checker rejects the textured screenshot
-  because it does not contain the expected white checker texels (it matches
-  the solid-colour control frame), so the structure check was not exercised
-  on a real checker pattern. The control screenshot passes the colour check.
-  Tolerance: per-channel RGB `<= 40`; structure tolerance `25 %` (or `1 px`)
-  of predicted cell period, ratio diff `> 0.15`.
-  This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
+  (Azahar `9c38437`). The regenerated screenshots differ:
+  `tex_shot_199.ppm` sha256
+  `5010d58a11c858ad49c96f99c1f238a5822c535bb56bff79f8df13e358dee672`,
+  `tex_ctl_shot_199.ppm` sha256
+  `91c8b18200ad7a37372b7c9edce70ccb5f754461c94c98901ba1086874b24710`.
+  The bottom-screen readout shows `tex staged OK: 4 entries, 3 textures` and
+  the trace ring includes `tex commit`, `tex bind`, and `clip tex DrawArrays`,
+  confirming the texture path is exercised. `check_tex_shot.py --frame tex`
+  passes all four regions:
+
+      UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
+      UR colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LL colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+      LR colour OK: 2 distinct colours: (0, 0, 255) (255, 255, 255)
+      UL structure OK: quad=125x66 cells=4x2 predicted_period=31.2x33.0 measured_period=31.0x32.5
+      UR structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+      LL structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+      LR structure OK: quad=125x66 cells=4x4 predicted_period=31.2x16.5 measured_period=31.0x16.2
+      UL ratio OK: UL=0.95 square_avg=1.91 diff=0.95
+      UR==LL reuse OK: period=True phase=True
+
+  `--frame ctl` passes the colour check. Tolerance: per-channel RGB `<= 40`;
+  structure tolerance `25 %` (or `1 px`) of predicted cell period, ratio diff
+  `> 0.15`. This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
 - **HARDWARE:** NOT RUN. A draft procedure is below; needs owner approval
   before any console action.
 
@@ -437,18 +450,25 @@ What changed:
   state machine mirrors the pending/active release rule used by the renderer.
   Wrap/filter codes are exported as constants bit-identical to libctru.
 - `arm11/source/renderer.c`: textured clip-scene staging API
-  `renderer_set_clip_scene_textured()`; per-entry draw loop with texture bind,
-  wrap/filter, separate texcoord buffer, and untextured fallback for
-  `NO_DATA`/`UNSUPPORTED`/failed entries; whole-frame fallback on any allocation
-  or prepare failure; resource lifecycle fixed so the active texture set is
-  released only at commit or after `C3D_RenderTargetDelete()`; separate textured
-  shader uniform lookup for `clipfix`.
+  `renderer_set_clip_scene_textured()` with a bottom-screen staging-status
+  readout; per-entry draw loop with texture bind, wrap/filter, separate
+  texcoord buffer, and untextured fallback for `NO_DATA`/`UNSUPPORTED`/failed
+  entries; whole-frame fallback on any allocation or prepare failure; texture
+  unit 0 unbound before every free of a possibly-bound `C3D_Tex` set
+  (commit, clear, shutdown, and end-of-frame); `renderer_set_geometry()` now
+  clears the texture lifecycle so a v1/debug load after a textured v2 frame
+  frees the texture set; DEBUG draw branch commits the texture lifecycle and
+  handles `FREE_ACTIVE_NOW`; separate textured shader uniform lookup for
+  `clipfix`.
 - `arm11/include/renderer.h`: new staged API alongside the existing untextured
   functions; existing signatures unchanged.
 - `arm11/source/main.c`: switched to `twlhd_gx_interpret_ex()` so per-vertex
   texture latches are filled; at v2 load it calls `arena_needed` and, only when
   the frame actually carries texture data, `prepare()` + the new renderer API;
-  otherwise the existing `renderer_set_clip_scene()` path runs unchanged.
+  otherwise the existing `renderer_set_clip_scene()` path runs unchanged. Added
+  a silent-arena-fallback trace marker, a bottom-screen staging-status readout,
+  and a trace-ring display so one screenshot captures the whole texture-path
+  verdict.
 - `arm11/shaders/twlhd_clip_tex_vshader.v.pica`: clip shader variant that
   passes a separate `(u,v)` attribute to `texcoord0`; existing shaders untouched.
 - `tools/check_tex_shot.py` / `tools/test_check_tex_shot.py`: stdlib-only
@@ -456,10 +476,11 @@ What changed:
   tests, including negative cases for wrong cell period, square cells where
   non-square are expected, and mismatched reuse.
 - `docs/EMULATOR_VALIDATION.md`: documented checker command, rectangles,
-  tolerances, and the real checker output from the regenerated screenshots.
+  tolerances, root-cause diagnosis, and the real checker output from the
+  regenerated screenshots.
 - `docs/reports/5b2e2-mutation-report.md`: rerun with the final module.
-- Structural tests `tests/host/test_diag_config.c` re-pinned for the new
-  `draw_clip_textured_entries()` diagnostic-config lookup.
+- `arm11/Makefile`: added `-Wextra -Werror` to the ARM11 warning flags; fixed
+  the resulting `-Wmaybe-uninitialized` warning in `common/twlhd_v2_parse.c`.
 
 Compile-time/runtime switch:
 
