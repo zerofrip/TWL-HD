@@ -240,6 +240,19 @@ TwlhdPicaFrameResult twlhd_pica_frame_prepare(
     }
     if (vertex_count % 3u != 0u) return TWLHD_PICA_FRAME_ERR_COUNT;
 
+    /*
+     * An empty vertex array has no runs. Returning here keeps the write pass
+     * from treating i == j == vertex_count == 0 as a run boundary, which
+     * would read tex[0] and write entry_status[0]/entry_texture[0] (and
+     * textures[0] with a matching TXDS record) past zero capacities.
+     */
+    if (vertex_count == 0u) {
+        *out_entry_count = 0u;
+        *out_texture_count = 0u;
+        *out_arena_used = 0u;
+        return TWLHD_PICA_FRAME_OK;
+    }
+
     runs = frame_count_runs(tex, vertex_count);
     if (runs > plan_capacity || runs > entry_capacity ||
         vertex_count > texcoord_capacity) {

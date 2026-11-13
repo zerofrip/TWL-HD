@@ -1470,6 +1470,131 @@ static void test_out_of_bounds(void) {
 }
 
 /* ------------------------------------------------------------------------- */
+/* Round-6: vertex_count == 0 is an empty frame, not a run at index 0.        */
+/* ------------------------------------------------------------------------- */
+
+/*
+ * The write pass used to treat i == j == vertex_count == 0 as a run boundary:
+ * it classified tex[0] and wrote entry_status[0] / entry_texture[0] (and
+ * textures[0] plus arena bytes with a matching TXDS record) although every
+ * capacity was 0. tex[0] is a valid textured key with a matching record, so
+ * the old code really decoded and swizzled; the guards catch the writes.
+ */
+static void test_zero_vertex_guards(void) {
+    TwlhdGxTexVertex payload[1];
+    TwlhdV2View view;
+    uint8_t plan_copy[2][sizeof(g_oob_plan)];
+    uint8_t texs_copy[2][sizeof(g_oob_texs)];
+    uint8_t tc_copy[2][sizeof(g_oob_tc)];
+    uint8_t et_copy[2][sizeof(g_oob_et)];
+    uint8_t es_copy[2][sizeof(g_oob_es)];
+    uint8_t arena_copy[2][sizeof(g_oob_arena)];
+    uint32_t count_copy[2][3];
+    const size_t one = sizeof(TwlhdGxTexVertex);
+    uint32_t pass;
+
+    fill_tex_a();
+    set_vtx(&payload[0], 0.0f, 0.0f, PARAM_A, 0u);
+    CHECK_EQ_INT(write_and_parse(g_a_only, 1u, &view), TWLHD_V2_OK);
+
+    for (pass = 0; pass < 2u; pass++) {
+        int fill = pass == 0 ? 0x00 : 0xFF;
+        uint32_t entry_count = 0xDEADBEEFu;
+        uint32_t texture_count = 0xDEADBEEFu;
+        uint32_t arena_used = 0xDEADBEEFu;
+
+        /* One-element tex array: only tex[0] is payload, the rest is poison. */
+        memset(g_oob_tex, fill, sizeof(g_oob_tex));
+        memcpy(g_oob_tex + OOB_GUARD, payload, sizeof(payload));
+
+        memset(g_oob_plan, OOB_FILL, sizeof(g_oob_plan));
+        memset(g_oob_texs, OOB_FILL, sizeof(g_oob_texs));
+        memset(g_oob_tc, OOB_FILL, sizeof(g_oob_tc));
+        memset(g_oob_et, OOB_FILL, sizeof(g_oob_et));
+        memset(g_oob_es, OOB_FILL, sizeof(g_oob_es));
+        memset(g_oob_arena, OOB_FILL, sizeof(g_oob_arena));
+
+        CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                         OOB_TEX, 0u, &view, OOB_PLAN, 0u, OOB_TEXS, 0u,
+                         OOB_ARENA, 0u, OOB_TC, 0u, OOB_ET, OOB_ES, 0u,
+                         g_out.scratch, SCRATCH_BYTES, &entry_count,
+                         &texture_count, &arena_used),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(entry_count, 0u);
+        CHECK_EQ_INT(texture_count, 0u);
+        CHECK_EQ_INT(arena_used, 0u);
+
+        CHECK(guard_intact(g_oob_tex, one, fill));
+        CHECK(guard_intact(g_oob_plan, 0u, OOB_FILL));
+        CHECK(guard_intact(g_oob_texs, 0u, OOB_FILL));
+        CHECK(guard_intact(g_oob_tc, 0u, OOB_FILL));
+        CHECK(guard_intact(g_oob_et, 0u, OOB_FILL));
+        CHECK(guard_intact(g_oob_es, 0u, OOB_FILL));
+        CHECK(guard_intact(g_oob_arena, 0u, OOB_FILL));
+
+        memcpy(plan_copy[pass], g_oob_plan, sizeof(g_oob_plan));
+        memcpy(texs_copy[pass], g_oob_texs, sizeof(g_oob_texs));
+        memcpy(tc_copy[pass], g_oob_tc, sizeof(g_oob_tc));
+        memcpy(et_copy[pass], g_oob_et, sizeof(g_oob_et));
+        memcpy(es_copy[pass], g_oob_es, sizeof(g_oob_es));
+        memcpy(arena_copy[pass], g_oob_arena, sizeof(g_oob_arena));
+        count_copy[pass][0] = entry_count;
+        count_copy[pass][1] = texture_count;
+        count_copy[pass][2] = arena_used;
+    }
+
+    /* An over-read of the tex[1..] tail (0x00 vs 0xFF) would diverge here. */
+    CHECK(memcmp(plan_copy[0], plan_copy[1], sizeof(g_oob_plan)) == 0);
+    CHECK(memcmp(texs_copy[0], texs_copy[1], sizeof(g_oob_texs)) == 0);
+    CHECK(memcmp(tc_copy[0], tc_copy[1], sizeof(g_oob_tc)) == 0);
+    CHECK(memcmp(et_copy[0], et_copy[1], sizeof(g_oob_et)) == 0);
+    CHECK(memcmp(es_copy[0], es_copy[1], sizeof(g_oob_es)) == 0);
+    CHECK(memcmp(arena_copy[0], arena_copy[1], sizeof(g_oob_arena)) == 0);
+    CHECK(memcmp(count_copy[0], count_copy[1], sizeof(count_copy[0])) == 0);
+
+    /* arena_needed with zero vertices writes only *out_arena_bytes. */
+    {
+        TwlhdGxTexVertex tex_copy[1];
+        TwlhdV2View view_copy;
+        uint32_t needed = 0xDEADBEEFu;
+
+        memcpy(tex_copy, payload, sizeof(payload));
+        memcpy(&view_copy, &view, sizeof(view));
+
+        CHECK_EQ_INT(twlhd_pica_frame_arena_needed(OOB_TEX, 0u, &view,
+                                                   &needed),
+                     TWLHD_PICA_FRAME_OK);
+        CHECK_EQ_INT(needed, 0u);
+        CHECK(memcmp(OOB_TEX, tex_copy, sizeof(tex_copy)) == 0);
+        CHECK(memcmp(&view, &view_copy, sizeof(view)) == 0);
+    }
+
+    /* The documented NULL rule still wins for tex over an empty frame. */
+    {
+        uint32_t entry_count = 0xDEADBEEFu;
+        uint32_t texture_count = 0xDEADBEEFu;
+        uint32_t arena_used = 0xDEADBEEFu;
+        uint32_t needed = 0xDEADBEEFu;
+
+        CHECK_EQ_INT(twlhd_pica_frame_prepare(
+                         NULL, 0u, &view, OOB_PLAN, 0u, OOB_TEXS, 0u,
+                         OOB_ARENA, 0u, OOB_TC, 0u, OOB_ET, OOB_ES, 0u,
+                         g_out.scratch, SCRATCH_BYTES, &entry_count,
+                         &texture_count, &arena_used),
+                     TWLHD_PICA_FRAME_ERR_NULL);
+        CHECK_EQ_INT(entry_count, 0xDEADBEEFu);
+        CHECK_EQ_INT(texture_count, 0xDEADBEEFu);
+        CHECK_EQ_INT(arena_used, 0xDEADBEEFu);
+
+        CHECK_EQ_INT(twlhd_pica_frame_arena_needed(NULL, 0u, &view, &needed),
+                     TWLHD_PICA_FRAME_ERR_NULL);
+        CHECK_EQ_INT(needed, 0xDEADBEEFu);
+    }
+
+    test_report("pica-frame/zero-vertex-guards");
+}
+
+/* ------------------------------------------------------------------------- */
 /* Round-1 mutation survivors: exact boundaries and last-element cases.       */
 /* ------------------------------------------------------------------------- */
 
@@ -2051,6 +2176,7 @@ int main(void) {
     test_arena_needed_status();
     test_fmt5_palette_window();
     test_out_of_bounds();
+    test_zero_vertex_guards();
     test_size_bounds_1024();
     test_scratch_exact();
     test_texture_cap_256();

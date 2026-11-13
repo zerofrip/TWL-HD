@@ -359,7 +359,9 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   unique (`common/twlhd_v2_parse.c:358-366`, `docs/TWLHD_V2_FORMAT.md:296`).
   Missing/unsupported textures are reported per entry; NULL, capacity, arena
   and `count % 3` errors fail the whole call. `ERR_ARENA` is distinct and never
-  drops textures silently.
+  drops textures silently. `vertex_count == 0` is a valid empty frame (`OK`
+  with zero entries/textures/arena bytes); `tex` stays a required pointer and
+  still fails with `ERR_NULL`.
 - Memory budget (stated exactly in `docs/DS_GX_RESEARCH.md`, "Textured frame
   preparation (5B-2e-1)"): 4 MiB for one 1024x1024 RGBA8, 1 GiB worst-case
   arena (256 overlapping TXDS records), 8 MiB non-overlapping worst case,
@@ -374,18 +376,23 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   block mode, with mode-0/2 exact fits, mode-0/2 windows that fit 4 but not
   6/8 bytes, mode-1/3 exact fits vs 2 bytes short, the offender first and
   last, and `arena_needed == arena_used` in every case; guard bytes
-  before/after every output and a 0x00/0xFF input-tail two-pass compare).
+  before/after every output and a 0x00/0xFF input-tail two-pass compare;
+  `vertex_count == 0` with every capacity 0, a textured `tex[0]` that
+  matches a TXDS record and a poisoned one-element array, returning OK with
+  zero entries/textures/arena bytes and untouched guards, plus the
+  `tex == NULL` `ERR_NULL` rule for both entry points).
   `tests/host/pica_frame_cli.c` with the independent
   `tools/pica_frame_oracle.py` and `tools/test_pica_frame_golden.py`, all wired
   into `make test`.
-- Mutation evidence: `docs/reports/5b2e1-mutation-report.md` (233 mutants,
-  206 killed, 27 equivalent; runner
-  `python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4`). The runner
-  skips shift operators by design, so the format-5 mode shift
+- Mutation evidence: `docs/reports/5b2e1-mutation-report.md` (238 mutants,
+  211 killed, 27 equivalent; runner
+  `python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4`, 17/17 C labels).
+  The runner skips shift operators by design, so the format-5 mode shift
   (`word >> 14` -> `word << 14`, line 192) is verified manually: the C suite
   fails via the `arena_needed == 0` assertion while the golden stays green
   (the decoder re-checks the rule); `common/` is restored and
-  `git diff --exit-code common/` clean.
+  `git diff --exit-code common/` clean. The round-6 fix moved the source
+  lines below `common/twlhd_pica_frame.c:254` down by 13.
 - Not done: no renderer/arm11 consumer, no GPU or citro3d calls, no recorder
   change, no v2-format/decoder/interpreter change.
 
