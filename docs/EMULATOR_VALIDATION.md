@@ -242,32 +242,45 @@ on the generated texture frame returns `OK` with 4 plan entries, 3 unique
 textures and 1792 arena bytes; entry 3 shares texture index 0 with entry 0.
 
 The repeatable, scripted check is `tools/check_tex_shot.py` (stdlib only). It
-reads the P6 PPM, samples four fixed rectangles on the top screen, prints the
-distinct colours found in each rectangle, and checks them against the expected
-checker or solid colours within a per-channel tolerance.
+reads the P6 PPM, samples four fixed rectangles on the top screen, and performs
+two independent checks:
+
+1. **Colour check:** counts the distinct colours in each rectangle and checks
+them against the expected checker (textured frame: base colour + white) or
+solid colour (control frame: one colour) within a per-channel tolerance.
+
+2. **Structure check (textured frames only):** measures the checker cell period
+along x and y inside each quad, compares it with the period predicted from the
+measured quad size and the known texture size, checks that the non-square
+16x8 region has a clearly different x/y cell ratio from the square regions,
+and checks that the two 8x8 regions (UR and LL, which share a texture) have
+the same cell pattern.
 
 Sample rectangles (top screen 400x240, x left-to-right, y top-to-bottom):
 
-| region | x range | y range | textured expectation | control expectation |
-|---|---|---|---|---|
-| UL | 70-170 | 75-110 | green + white | solid green |
-| UR | 270-340 | 75-110 | red + white | solid grey |
-| LL | 70-170 | 150-185 | red + white | solid red |
-| LR | 270-340 | 150-185 | blue + white | solid blue |
+| region | x range | y range | textured expectation | control expectation | texture size |
+|---|---|---|---|---|---|
+| UL | 70-170 | 75-110 | green + white | solid green | 16x8 |
+| UR | 270-340 | 75-110 | red + white | solid grey | 8x8 |
+| LL | 70-170 | 150-185 | red + white | solid red | 8x8 |
+| LR | 270-340 | 150-185 | blue + white | solid blue | 16x16 |
 
-Tolerance: per-channel RGB distance `<= 40`. The software renderer's
-clip-space to screen mapping is not verified down to the sub-pixel level, so
-the comparison is colour-in-region and checker-vs-solid rather than a
-per-texel byte match.
+Tolerances:
+- per-channel RGB distance `<= 40` for colour checks;
+- measured cell period within `25 %` (or `1 px`, whichever is larger) of the
+  period predicted from the quad size / texture size;
+- non-square region ratio must differ from the average square-region ratio by
+  more than `0.15`;
+- reused-texture phase must match within the RGB tolerance.
 
 Run the checker after generating both screenshots:
 
     python3 tools/check_tex_shot.py /tmp/tex_shot_199.ppm --frame tex
     python3 tools/check_tex_shot.py /tmp/tex_ctl_shot_199.ppm --frame ctl
 
-A matching frame prints `OK` for all four regions and exits 0; a mismatch
-exits non-zero. Synthetic match/mismatch cases are in
-`tools/test_check_tex_shot.py` and run as part of `make test`.
+A matching textured frame prints `colour OK`, `structure OK`, `ratio OK` and
+`reuse OK` and exits 0; a mismatch exits non-zero. Synthetic match/mismatch
+cases are in `tools/test_check_tex_shot.py` and run as part of `make test`.
 
 ### Reference run (EMULATOR)
 
@@ -278,22 +291,25 @@ Reproduced in this sandbox, 2026-11-13, with the external core
 - `make azahar-host`: clean build, no warnings.
 - Both runs produced 400x480 PPM screenshots at frame 199 and frame `last`.
 - Textured frame `tex_shot_199.ppm` sha256:
-  `1745dd48a973c082b7d52d2c5144fa8ac1a03d987844088f26a1906d7765a7be`.
+  `648728e258bddca25bc4f1b2f46105b1da9799a924df36510b363748e240c53e`.
 - Control frame `tex_ctl_shot_199.ppm` sha256:
-  `a4873584f750eba6b3653e84d49aa31faeb2df6141aad42c91f42afdb4cfd25b`.
+  `648728e258bddca25bc4f1b2f46105b1da9799a924df36510b363748e240c53e`.
+- The two screenshots are byte-identical; the textured frame did not produce
+  the expected white checker texels in this run, so the stronger structure
+  check was not exercised on a real checker pattern.
 - `check_tex_shot.py` output for the textured screenshot:
 
-      UL OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
-      UR OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
-      LL OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
-      LR OK: 2 distinct colours: (0, 0, 255) (255, 255, 255)
+      UL colour FAIL: 1 distinct colours: (0, 255, 0)
+      UR colour FAIL: 1 distinct colours: (132, 132, 132)
+      LL colour FAIL: 1 distinct colours: (255, 0, 0)
+      LR colour FAIL: 1 distinct colours: (0, 0, 255)
 
 - `check_tex_shot.py` output for the control screenshot:
 
-      UL OK: 1 distinct colours: (0, 255, 0)
-      UR OK: 1 distinct colours: (132, 132, 132)
-      LL OK: 1 distinct colours: (255, 0, 0)
-      LR OK: 1 distinct colours: (0, 0, 255)
+      UL colour OK: 1 distinct colours: (0, 255, 0)
+      UR colour OK: 1 distinct colours: (132, 132, 132)
+      LL colour OK: 1 distinct colours: (255, 0, 0)
+      LR colour OK: 1 distinct colours: (0, 0, 255)
 
 ### Limits
 

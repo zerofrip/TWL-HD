@@ -235,6 +235,29 @@ static void test_alignment_fallback(void) {
     test_report("tex-draw-plan/alignment-fallback");
 }
 
+/* D(5b): arena_used == 1 with a NULL arena pointer is still rejected by the
+ * alignment guard (kills the `0 -> 1` mutant on the arena_used threshold). */
+static void test_arena_used_one_null(void) {
+    reset_all();
+
+    g_plan[0].first_vertex = 0u;
+    g_plan[0].vertex_count = 3u;
+    g_plan[0].untextured = 1;
+    g_entry_texture[0] = -1;
+    g_entry_status[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
+                     0u, NULL, 1u, 0u, 1024u, 1024u * 1024u * 4u,
+                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                 TWLHD_TEX_DRAW_FALLBACK_ALIGN);
+    CHECK_EQ_INT(g_result.all_untextured, 1);
+    CHECK_EQ_INT(g_result.entry_count, 0);
+    CHECK_EQ_INT(g_result.texture_count, 0);
+
+    test_report("tex-draw-plan/arena-used-one-null");
+}
+
 static void test_null_inputs(void) {
     reset_all();
 
@@ -324,6 +347,7 @@ static void test_out_of_bounds(void) {
     textures[0].wrap_t = TWLHD_PICA_WRAP_MIRRORED_REPEAT;
     textures[0].width = 8u;
     textures[0].height = 8u;
+    textures[0].offset = 0u;
 
     et[0] = 0;
     et[1] = -1;
@@ -360,6 +384,8 @@ static void test_strings(void) {
                  "FALLBACK_CAPACITY") == 0);
     CHECK(strcmp(twlhd_tex_draw_verdict_string(TWLHD_TEX_DRAW_FALLBACK_ALIGN),
                  "FALLBACK_ALIGN") == 0);
+    CHECK(strcmp(twlhd_tex_draw_verdict_string(TWLHD_TEX_DRAW_FALLBACK_RANGE),
+                 "FALLBACK_RANGE") == 0);
     test_report("tex-draw-plan/strings");
 }
 
@@ -392,12 +418,13 @@ static void test_slot_equals_count(void) {
     textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
     textures[0].width = 8u;
     textures[0].height = 8u;
+    textures[0].offset = 0u;
 
     et[0] = 1;   /* equal to texture_count */
     es[0] = TWLHD_PICA_FRAME_ENTRY_OK;
 
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
-                     plan, 1u, et, es, textures, 1u, g_arena, 0u, 1u,
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
                      1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
                  TWLHD_TEX_DRAW_NO_TEXTURE);
     CHECK_EQ_INT(result.all_untextured, 1);
@@ -427,10 +454,12 @@ static void test_texture_size_guard(void) {
     g_textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
     g_textures[0].width = 1024u;
     g_textures[0].height = 1024u;
+    g_textures[0].offset = 0u;
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
                      g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
-                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
-                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                     1u, g_arena, 1024u * 1024u * 4u, 1u, 1024u * 1024u * 4u,
+                     1024u * 1024u * 4u, 3u, 3u, g_out, MAX_ENTRIES,
+                     &g_result),
                  TWLHD_TEX_DRAW_OK);
 
     /* 2048 rejected for exceeding the 1024 maximum. */
@@ -438,8 +467,9 @@ static void test_texture_size_guard(void) {
     g_textures[0].height = 1024u;
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
                      g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
-                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
-                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                     1u, g_arena, 1024u * 1024u * 4u, 1u, 1024u * 1024u * 4u,
+                     1024u * 1024u * 4u, 3u, 3u, g_out, MAX_ENTRIES,
+                     &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
     CHECK_EQ_INT(g_result.all_untextured, 1);
     CHECK_EQ_INT(g_result.entry_count, 0);
@@ -450,8 +480,9 @@ static void test_texture_size_guard(void) {
     g_textures[0].height = 4u;
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
                      g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
-                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
-                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                     1u, g_arena, 1024u * 1024u * 4u, 1u, 1024u * 1024u * 4u,
+                     1024u * 1024u * 4u, 3u, 3u, g_out, MAX_ENTRIES,
+                     &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
 
     /* 24 rejected for not being a power of two. */
@@ -459,8 +490,9 @@ static void test_texture_size_guard(void) {
     g_textures[0].height = 24u;
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
                      g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
-                     1u, g_arena, 0u, 1u, 1024u, 1024u * 1024u * 4u,
-                     3u, 3u, g_out, MAX_ENTRIES, &g_result),
+                     1u, g_arena, 1024u * 1024u * 4u, 1u, 1024u * 1024u * 4u,
+                     1024u * 1024u * 4u, 3u, 3u, g_out, MAX_ENTRIES,
+                     &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
 
     /* Exactly the per-texture byte cap (8x8x4 = 256) accepted. */
@@ -468,14 +500,14 @@ static void test_texture_size_guard(void) {
     g_textures[0].height = 8u;
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
                      g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
-                     1u, g_arena, 0u, 1u, 1024u, 256u,
+                     1u, g_arena, 256u, 1u, 1024u, 256u,
                      3u, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_OK);
 
     /* One byte over the cap rejected. */
     CHECK_EQ_INT(twlhd_tex_draw_plan_build(
                      g_plan, 1u, g_entry_texture, g_entry_status, g_textures,
-                     1u, g_arena, 0u, 1u, 1024u, 255u,
+                     1u, g_arena, 256u, 1u, 1024u, 255u,
                      3u, 3u, g_out, MAX_ENTRIES, &g_result),
                  TWLHD_TEX_DRAW_FALLBACK_BUDGET);
     CHECK_EQ_INT(g_result.all_untextured, 1);
@@ -786,12 +818,177 @@ static void test_lifecycle_shutdown(void) {
     test_report("tex-draw-plan/lifecycle-shutdown");
 }
 
+/* D(6): draw-range guards.  end = first_vertex + vertex_count must fit in
+ * uint32, must not exceed the supplied vertex_count, and vertex_count must be
+ * a multiple of 3. */
+static void test_draw_range_guard(void) {
+    TwlhdPicaBindPlan *plan = (TwlhdPicaBindPlan *)(g_oob_plan + OOB_GUARD);
+    TwlhdPicaFrameTexture *textures =
+        (TwlhdPicaFrameTexture *)(g_oob_textures + OOB_GUARD);
+    int32_t *et = (int32_t *)(g_oob_et + OOB_GUARD);
+    TwlhdPicaFrameEntryStatus *es =
+        (TwlhdPicaFrameEntryStatus *)(g_oob_es + OOB_GUARD);
+    TwlhdTexDrawEntry *out = (TwlhdTexDrawEntry *)(g_oob_out + OOB_GUARD);
+    TwlhdTexDrawPlanResult result;
+
+    memset(g_oob_plan, OOB_FILL, sizeof(g_oob_plan));
+    memset(g_oob_textures, OOB_FILL, sizeof(g_oob_textures));
+    memset(g_oob_et, OOB_FILL, sizeof(g_oob_et));
+    memset(g_oob_es, OOB_FILL, sizeof(g_oob_es));
+    memset(g_oob_out, OOB_FILL, sizeof(g_oob_out));
+
+    textures[0].wrap_s = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    textures[0].width = 8u;
+    textures[0].height = 8u;
+    textures[0].offset = 0u;
+    et[0] = 0;
+    es[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    /* Exact boundary: end == vertex_count. */
+    plan[0].first_vertex = 3u;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 6u, 6u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* One step past: end == vertex_count + 1. */
+    plan[0].first_vertex = 4u;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 6u, 6u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_RANGE);
+    CHECK_EQ_INT(result.all_untextured, 1);
+    CHECK_EQ_INT(result.entry_count, 0);
+    CHECK_EQ_INT(result.texture_count, 0);
+
+    /* uint32 overflow of end. */
+    plan[0].first_vertex = 0xFFFFFFFDu;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 6u, 6u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_RANGE);
+
+    /* Exact fit at UINT32_MAX: end == UINT32_MAX must pass. */
+    plan[0].first_vertex = 0xFFFFFFFCu;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 0xFFFFFFFFu, 0xFFFFFFFFu,
+                     out, 1u, &result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* One step past UINT32_MAX. */
+    plan[0].first_vertex = 0xFFFFFFFDu;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 0xFFFFFFFFu, 0xFFFFFFFFu,
+                     out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_RANGE);
+
+    /* vertex_count not a multiple of 3. */
+    plan[0].first_vertex = 0u;
+    plan[0].vertex_count = 2u;
+    plan[0].untextured = 0;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 6u, 6u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_RANGE);
+
+    CHECK(guard_intact(g_oob_out, 1u * sizeof(TwlhdTexDrawEntry), OOB_FILL));
+
+    test_report("tex-draw-plan/draw-range-guard");
+}
+
+/* D(7): per-texture arena guard.  offset must be 128-byte aligned and
+ * offset + width*height*4 must not exceed arena_used; the product is computed
+ * in uint64_t so it cannot overflow before the comparison. */
+static void test_texture_arena_guard(void) {
+    TwlhdPicaBindPlan *plan = (TwlhdPicaBindPlan *)(g_oob_plan + OOB_GUARD);
+    TwlhdPicaFrameTexture *textures =
+        (TwlhdPicaFrameTexture *)(g_oob_textures + OOB_GUARD);
+    int32_t *et = (int32_t *)(g_oob_et + OOB_GUARD);
+    TwlhdPicaFrameEntryStatus *es =
+        (TwlhdPicaFrameEntryStatus *)(g_oob_es + OOB_GUARD);
+    TwlhdTexDrawEntry *out = (TwlhdTexDrawEntry *)(g_oob_out + OOB_GUARD);
+    TwlhdTexDrawPlanResult result;
+
+    memset(g_oob_plan, OOB_FILL, sizeof(g_oob_plan));
+    memset(g_oob_textures, OOB_FILL, sizeof(g_oob_textures));
+    memset(g_oob_et, OOB_FILL, sizeof(g_oob_et));
+    memset(g_oob_es, OOB_FILL, sizeof(g_oob_es));
+    memset(g_oob_out, OOB_FILL, sizeof(g_oob_out));
+
+    plan[0].first_vertex = 0u;
+    plan[0].vertex_count = 3u;
+    plan[0].untextured = 0;
+    et[0] = 0;
+    es[0] = TWLHD_PICA_FRAME_ENTRY_OK;
+
+    textures[0].wrap_s = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    textures[0].wrap_t = TWLHD_PICA_WRAP_CLAMP_TO_EDGE;
+    textures[0].width = 8u;
+    textures[0].height = 8u;
+
+    /* Exact boundary: offset 0 + 8*8*4 == 256 == arena_used. */
+    textures[0].offset = 0u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 256u, 1u,
+                     1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* One byte past: offset 0 + 256 > 255. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 255u, 1u,
+                     1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_ALIGN);
+    CHECK_EQ_INT(result.all_untextured, 1);
+    CHECK_EQ_INT(result.entry_count, 0);
+    CHECK_EQ_INT(result.texture_count, 0);
+
+    /* Aligned offset further into the arena: 128 + 256 <= 384. */
+    textures[0].offset = 128u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 384u, 1u,
+                     1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_OK);
+
+    /* One byte past with a non-zero aligned offset. */
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 383u, 1u,
+                     1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_ALIGN);
+
+    /* Misaligned offset. */
+    textures[0].offset = 1u;
+    CHECK_EQ_INT(twlhd_tex_draw_plan_build(
+                     plan, 1u, et, es, textures, 1u, g_arena, 1024u, 1u,
+                     1024u, 1024u * 1024u * 4u, 3u, 3u, out, 1u, &result),
+                 TWLHD_TEX_DRAW_FALLBACK_ALIGN);
+
+    CHECK(guard_intact(g_oob_textures,
+                       1u * sizeof(TwlhdPicaFrameTexture), OOB_FILL));
+    CHECK(guard_intact(g_oob_out, 1u * sizeof(TwlhdTexDrawEntry), OOB_FILL));
+
+    test_report("tex-draw-plan/texture-arena-guard");
+}
+
 int main(void) {
     test_basic_mapping();
     test_no_texture();
     test_failed_entries_untextured();
     test_budget_fallback();
     test_alignment_fallback();
+    test_arena_used_one_null();
     test_null_inputs();
     test_out_of_bounds();
     test_strings();
@@ -806,5 +1003,7 @@ int main(void) {
     test_lifecycle_clear_then_commit();
     test_lifecycle_flag_then_swap();
     test_lifecycle_shutdown();
+    test_draw_range_guard();
+    test_texture_arena_guard();
     return test_exit_code();
 }

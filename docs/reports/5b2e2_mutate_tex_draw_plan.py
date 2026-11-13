@@ -21,8 +21,8 @@ behaviour.
 Mechanism: the mutant text is written over `common/twlhd_tex_draw_plan.c`, the
 host test `tests/host/build/test_tex_draw_plan` is rebuilt with the repository
 host flags, the C test is run, and the original file is restored in a
-`finally:`. The run ends with a `git diff --exit-code common/` check. Identical
-mutant texts are deduplicated.
+`finally:`. The run ends by comparing the file's current text with the saved
+`original` text. Identical mutant texts are deduplicated.
 
 Parallel execution: pass `--jobs N` to run up to N workers. Each worker gets
 its own temporary copy of the repository, so mutants can be built and tested
@@ -334,10 +334,8 @@ def main():
             for line_no, desc in sorted(survivors, key=lambda x: (x[0], x[1])):
                 print(f"line {line_no} {desc} -> SURVIVED", flush=True)
 
-        same = subprocess.run(
-            ["git", "diff", "--exit-code", "--", "common/"],
-            cwd=ROOT, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        ).returncode == 0
+        current = TARGET.read_text(encoding="utf-8")
+        same = current == original
         print(flush=True)
         print(f"killed by test:   {counts['test']}", flush=True)
         print(f"killed by build:  {counts['build']}", flush=True)

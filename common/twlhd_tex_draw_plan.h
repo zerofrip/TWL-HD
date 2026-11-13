@@ -31,6 +31,9 @@ typedef enum {
     TWLHD_TEX_DRAW_FALLBACK_CAPACITY,
     /* The arena pointer is not 128-byte aligned (hardware assumption). */
     TWLHD_TEX_DRAW_FALLBACK_ALIGN,
+    /* A draw entry's vertex range overflows uint32, exceeds the supplied
+     * vertex_count, or is not a multiple of 3 (defensive). */
+    TWLHD_TEX_DRAW_FALLBACK_RANGE,
 } TwlhdTexDrawVerdict;
 
 /* Lifecycle actions returned by the pure state machine in

@@ -406,22 +406,24 @@ Status labels:
   builds.
 - **UNIT:** `make test` green, including the new
   `tests/host/test_tex_draw_plan` and `tools/test_check_tex_shot.py`; existing
-  structural tests (`test_blend_config`, `test_diag_config`) re-pinned where
-  the new code shifted counts. Mutation report
+  structural test `test_diag_config` re-pinned where the new code shifted
+  counts (`test_blend_config` did not change). Mutation report
   `docs/reports/5b2e2-mutation-report.md` covers
-  `common/twlhd_tex_draw_plan.c` (93 unique mutants, 68 killed by tests,
-  18 killed by `-Werror` build, 7 equivalent survivors).
+  `common/twlhd_tex_draw_plan.c` (105 unique mutants, 78 killed by tests,
+  20 killed by `-Werror` build, 7 equivalent survivors).
 - **EMULATOR:** generator script `tools/gen_tex_frames.py` and checker
   `tools/check_tex_shot.py` committed with a documented procedure; see
   `docs/EMULATOR_VALIDATION.md` for the exact commands. Reproduced in this
   sandbox with `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
-  (Azahar `9c38437`): the textured frame produced red/green/blue checker
-  patterns in the same regions where the untextured control frame produced
-  solid red/green/blue/grey quads, confirming texture binding and sampling.
-  The textured screenshot `tex_shot_199.ppm` has sha256
-  `1745dd48a973c082b7d52d2c5144fa8ac1a03d987844088f26a1906d7765a7be`;
-  the control screenshot has sha256
-  `a4873584f750eba6b3653e84d49aa31faeb2df6141aad42c91f42afdb4cfd25b`.
+  (Azahar `9c38437`). The regenerated screenshots have sha256
+  `648728e258bddca25bc4f1b2f46105b1da9799a924df36510b363748e240c53e`
+  for both `tex_shot_199.ppm` and `tex_ctl_shot_199.ppm`; they are
+  byte-identical. The strengthened checker rejects the textured screenshot
+  because it does not contain the expected white checker texels (it matches
+  the solid-colour control frame), so the structure check was not exercised
+  on a real checker pattern. The control screenshot passes the colour check.
+  Tolerance: per-channel RGB `<= 40`; structure tolerance `25 %` (or `1 px`)
+  of predicted cell period, ratio diff `> 0.15`.
   This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
 - **HARDWARE:** NOT RUN. A draft procedure is below; needs owner approval
   before any console action.
@@ -450,9 +452,11 @@ What changed:
 - `arm11/shaders/twlhd_clip_tex_vshader.v.pica`: clip shader variant that
   passes a separate `(u,v)` attribute to `texcoord0`; existing shaders untouched.
 - `tools/check_tex_shot.py` / `tools/test_check_tex_shot.py`: stdlib-only
-  screenshot checker and its synthetic PPM unit tests.
+  screenshot checker (colour + checker structure) and its synthetic PPM unit
+  tests, including negative cases for wrong cell period, square cells where
+  non-square are expected, and mismatched reuse.
 - `docs/EMULATOR_VALIDATION.md`: documented checker command, rectangles,
-  tolerance, and real checker output.
+  tolerances, and the real checker output from the regenerated screenshots.
 - `docs/reports/5b2e2-mutation-report.md`: rerun with the final module.
 - Structural tests `tests/host/test_diag_config.c` re-pinned for the new
   `draw_clip_textured_entries()` diagnostic-config lookup.
@@ -486,6 +490,7 @@ Rollback:
 1. Delete `arm11/shaders/twlhd_clip_tex_vshader.v.pica`,
    `common/twlhd_tex_draw_plan.c`, `common/twlhd_tex_draw_plan.h`,
    `tests/host/test_tex_draw_plan.c`, `tools/gen_tex_frames.py`,
+   `tools/check_tex_shot.py`, `tools/test_check_tex_shot.py`,
    `docs/reports/5b2e2_mutate_tex_draw_plan.py`,
    `docs/reports/5b2e2-mutation-report.md`.
 2. Revert `arm11/source/renderer.c`, `arm11/include/renderer.h`,

@@ -7,6 +7,13 @@ Reads a P6 PPM (stdlib only), samples four fixed rectangles on the top screen
 expected solid colour (control frame) or exactly two colours (textured frame:
 the expected base colour plus white).
 
+For textured frames it also validates the checker STRUCTURE: it measures the
+cell period along x and y inside each region, compares it with the period
+predicted from the measured quad size and the known texture size, checks that
+the non-square 16x8 region has a different x/y cell ratio than the square
+regions, and checks that the two 8x8 regions (UR and LL, which share a texture)
+have the same cell pattern.
+
 Usage:
     python3 tools/check_tex_shot.py <ppm> [--frame tex|ctl] [--tolerance N]
 
@@ -17,19 +24,23 @@ import argparse
 import sys
 
 TOLERANCE = 40
+STRUCTURE_TOLERANCE_FRAC = 0.25
 
 # Screen rectangles for the four quads produced by tools/gen_tex_frames.py.
 # Coordinates are in the 400x240 top screen, x left-to-right, y top-to-bottom.
 # These were tuned against the real Azahar screenshots so that every rectangle
 # lies fully inside one quad and never samples the background clear colour.
+# Each tuple also records the texture size in texels and the expected base
+# colour for the textured frame.
 REGIONS = [
-    ("UL", 70, 170, 75, 110, (0, 255, 0), (0, 255, 0)),    # green
-    ("UR", 270, 340, 75, 110, (255, 0, 0), (128, 128, 128)),  # tex red / ctl grey
-    ("LL", 70, 170, 150, 185, (255, 0, 0), (255, 0, 0)),   # red
-    ("LR", 270, 340, 150, 185, (0, 0, 255), (0, 0, 255)),  # blue
+    ("UL", 70, 170, 75, 110, (0, 255, 0), (0, 255, 0), (16, 8)),   # green
+    ("UR", 270, 340, 75, 110, (255, 0, 0), (128, 128, 128), (8, 8)),  # tex red / ctl grey
+    ("LL", 70, 170, 150, 185, (255, 0, 0), (255, 0, 0), (8, 8)),   # red
+    ("LR", 270, 340, 150, 185, (0, 0, 255), (0, 0, 255), (16, 16)),  # blue
 ]
 
 WHITE = (255, 255, 255)
+CLEAR = (16, 16, 24)
 
 
 def parse_ppm(path):
@@ -79,8 +90,8 @@ def add_colour(colours, colour, tolerance):
     colours.append(colour)
 
 
-def check_region(data, width, name, x0, x1, y0, y1,
-                 expected_tex, expected_ctl, frame, tolerance):
+def check_region_colours(data, width, name, x0, x1, y0, y1,
+                         expected_tex, expected_ctl, frame, tolerance):
     colours = []
     for y in range(y0, y1):
         for x in range(x0, x1):
@@ -104,8 +115,187 @@ def check_region(data, width, name, x0, x1, y0, y1,
 
     colour_text = " ".join(str(c) for c in colours)
     status = "OK" if ok else "FAIL"
-    print(f"{name} {status}: {len(colours)} distinct colours: {colour_text}")
+    print(f"{name} colour {status}: {len(colours)} distinct colours: {colour_text}")
     return ok
+
+
+def find_quad_bounds(data, width, height, cx, cy, bg, tolerance):
+    """Scan from (cx, cy) to find background pixels on all four sides.
+
+    Returns (x_left, x_right, y_top, y_bottom) where the quad pixels are
+    strictly inside those bounds.
+    """
+    x_left = cx
+    while x_left > 0 and not within_tolerance(pixel_at(data, width, x_left, cy), bg, tolerance):
+        x_left -= 1
+
+    x_right = cx
+    while x_right < width - 1 and not within_tolerance(pixel_at(data, width, x_right, cy), bg, tolerance):
+        x_right += 1
+
+    y_top = cy
+    while y_top > 0 and not within_tolerance(pixel_at(data, width, cx, y_top), bg, tolerance):
+        y_top -= 1
+
+    y_bottom = cy
+    while y_bottom < height - 1 and not within_tolerance(pixel_at(data, width, cx, y_bottom), bg, tolerance):
+        y_bottom += 1
+
+    return x_left + 1, x_right - 1, y_top + 1, y_bottom - 1
+
+
+def measure_period_x(data, width, qx0, qx1, y, tolerance):
+    """Measure the average distance between colour boundaries on one row.
+
+    The quad edges are treated as implicit boundaries so that a region with
+    only one internal transition still yields a period.
+    """
+    if qx1 <= qx0:
+        return None
+    boundaries = [qx0]
+    prev = pixel_at(data, width, qx0, y)
+    for x in range(qx0 + 1, qx1 + 1):
+        cur = pixel_at(data, width, x, y)
+        if not within_tolerance(cur, prev, tolerance):
+            boundaries.append(x)
+            prev = cur
+    boundaries.append(qx1)
+    if len(boundaries) < 3:
+        return None
+    intervals = [boundaries[i + 1] - boundaries[i]
+                 for i in range(len(boundaries) - 1)]
+    return sum(intervals) / len(intervals)
+
+
+def measure_period_y(data, width, x, qy0, qy1, tolerance):
+    """Measure the average distance between colour boundaries on one column."""
+    if qy1 <= qy0:
+        return None
+    boundaries = [qy0]
+    prev = pixel_at(data, width, x, qy0)
+    for y in range(qy0 + 1, qy1 + 1):
+        cur = pixel_at(data, width, x, y)
+        if not within_tolerance(cur, prev, tolerance):
+            boundaries.append(y)
+            prev = cur
+    boundaries.append(qy1)
+    if len(boundaries) < 3:
+        return None
+    intervals = [boundaries[i + 1] - boundaries[i]
+                 for i in range(len(boundaries) - 1)]
+    return sum(intervals) / len(intervals)
+
+
+def check_region_structure(data, width, height, name, x0, x1, y0, y1,
+                           tex_size, tolerance):
+    """Validate the checker cell period and phase for one textured region."""
+    cx = (x0 + x1) // 2
+    cy = (y0 + y1) // 2
+    qx0, qx1, qy0, qy1 = find_quad_bounds(data, width, height, cx, cy, CLEAR, tolerance)
+
+    quad_w = qx1 - qx0 + 1
+    quad_h = qy1 - qy0 + 1
+    if quad_w <= 0 or quad_h <= 0:
+        print(f"{name} structure FAIL: could not measure quad extents")
+        return None
+
+    tex_w, tex_h = tex_size
+    cells_x = tex_w // 4
+    cells_y = tex_h // 4
+    predicted_px_x = quad_w / cells_x
+    predicted_px_y = quad_h / cells_y
+
+    # Sample the middle row/column of the measured quad to get the cell
+    # period.  The quad edges are treated as implicit boundaries so that a
+    # region with only one internal transition still yields a period.
+    measured_px_x = measure_period_x(data, width, qx0, qx1, cy, tolerance)
+    measured_px_y = measure_period_y(data, width, cx, qy0, qy1, tolerance)
+
+    if measured_px_x is None or measured_px_y is None:
+        print(f"{name} structure FAIL: could not measure period")
+        return None
+
+    ok_x = abs(measured_px_x - predicted_px_x) <= max(
+        1, STRUCTURE_TOLERANCE_FRAC * predicted_px_x)
+    ok_y = abs(measured_px_y - predicted_px_y) <= max(
+        1, STRUCTURE_TOLERANCE_FRAC * predicted_px_y)
+
+    status = "OK" if (ok_x and ok_y) else "FAIL"
+    print(f"{name} structure {status}: "
+          f"quad={quad_w}x{quad_h} "
+          f"cells={cells_x}x{cells_y} "
+          f"predicted_period={predicted_px_x:.1f}x{predicted_px_y:.1f} "
+          f"measured_period={measured_px_x:.1f}x{measured_px_y:.1f}")
+
+    if not (ok_x and ok_y):
+        return None
+    return {
+        "measured_px": (measured_px_x, measured_px_y),
+        "predicted_px": (predicted_px_x, predicted_px_y),
+        "cells": (cells_x, cells_y),
+        "phase": pixel_at(data, width, qx0, qy0),
+    }
+
+
+def check_structure(data, width, height, tolerance):
+    """Run the structural checker on all four textured regions."""
+    results = {}
+    all_ok = True
+    for name, x0, x1, y0, y1, _expected_tex, _expected_ctl, tex_size in REGIONS:
+        info = check_region_structure(data, width, height, name, x0, x1, y0, y1,
+                                      tex_size, tolerance)
+        if info is None:
+            all_ok = False
+        else:
+            results[name] = info
+
+    if not all_ok or len(results) != len(REGIONS):
+        return False
+
+    # Ratio check: the 16x8 region (UL) must have a clearly different x/y cell
+    # ratio from the square regions.
+    square_ratio_sum = 0.0
+    square_count = 0
+    for name, *_rest, tex_size in REGIONS:
+        if tex_size[0] == tex_size[1]:
+            px_x, px_y = results[name]["measured_px"]
+            if px_y != 0:
+                square_ratio_sum += px_x / px_y
+                square_count += 1
+    if square_count == 0:
+        print("structure FAIL: no square regions for ratio baseline")
+        return False
+    square_ratio = square_ratio_sum / square_count
+
+    ul_px_x, ul_px_y = results["UL"]["measured_px"]
+    if ul_px_y == 0:
+        print("structure FAIL: UL vertical period is zero")
+        return False
+    ul_ratio = ul_px_x / ul_px_y
+
+    ratio_diff = abs(ul_ratio - square_ratio)
+    ratio_ok = ratio_diff > 0.15
+    status = "OK" if ratio_ok else "FAIL"
+    print(f"UL ratio {status}: UL={ul_ratio:.2f} square_avg={square_ratio:.2f} diff={ratio_diff:.2f}")
+    if not ratio_ok:
+        return False
+
+    # Reuse check: UR and LL share the same 8x8 texture, so their cell pattern
+    # (period and phase) must match within tolerance.
+    ur = results["UR"]
+    ll = results["LL"]
+    period_ok = (abs(ur["measured_px"][0] - ll["measured_px"][0]) <=
+                 max(1, STRUCTURE_TOLERANCE_FRAC * max(ur["measured_px"][0], 1)) and
+                 abs(ur["measured_px"][1] - ll["measured_px"][1]) <=
+                 max(1, STRUCTURE_TOLERANCE_FRAC * max(ur["measured_px"][1], 1)))
+    phase_ok = within_tolerance(ur["phase"], ll["phase"], tolerance)
+    reuse_ok = period_ok and phase_ok
+    status = "OK" if reuse_ok else "FAIL"
+    print(f"UR==LL reuse {status}: period={period_ok} phase={phase_ok}")
+    if not reuse_ok:
+        return False
+
+    return True
 
 
 def main(argv=None):
@@ -126,10 +316,14 @@ def main(argv=None):
         return 2
 
     all_ok = True
-    for name, x0, x1, y0, y1, expected_tex, expected_ctl in REGIONS:
-        if not check_region(data, width, name, x0, x1, y0, y1,
-                            expected_tex, expected_ctl, args.frame,
-                            args.tolerance):
+    for name, x0, x1, y0, y1, expected_tex, expected_ctl, _tex_size in REGIONS:
+        if not check_region_colours(data, width, name, x0, x1, y0, y1,
+                                    expected_tex, expected_ctl, args.frame,
+                                    args.tolerance):
+            all_ok = False
+
+    if args.frame == "tex" and all_ok:
+        if not check_structure(data, width, height, args.tolerance):
             all_ok = False
 
     return 0 if all_ok else 1

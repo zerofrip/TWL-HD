@@ -1,9 +1,12 @@
 # 5B-2e-2 mutation report: host-testable textured draw plan
 
 Status: **IMPLEMENTED**, BUILD/UNIT/EMULATOR. `make test` is green and the
-Azahar emulator screenshots reproduce with the procedure in
-docs/EMULATOR_VALIDATION.md; HARDWARE is not verified. This report contains only
-numbers and results produced by the run described below.
+Azahar emulator screenshots were regenerated with the procedure in
+docs/EMULATOR_VALIDATION.md. The strengthened checker rejects the regenerated
+textured screenshot because it renders as solid colours (the texture path falls
+back to the untextured path in this emulator run). HARDWARE is not verified.
+This report contains only numbers and results produced by the run described
+below.
 
 ## Method
 
@@ -50,39 +53,37 @@ A mutant is **KILLED** when the build or the C test fails; a `-Werror` build
 failure counts, because `make test` fails on it. The unmutated baseline is
 built and the test must pass before the run starts. Identical mutant texts are
 deduplicated. The script restores the original source in a `finally:` block
-and ends with `git diff --exit-code common/`. Because the file was modified as
-part of this repair, the final `git diff` check is non-zero even though the
-mutant edits were restored; no mutation state remains in the working tree.
+and ends by comparing the file's current text with the saved `original` text.
 
 ## Results
 
 | metric | count |
 | --- | --- |
-| unique mutants | 93 |
-| killed by `tests/host/build/test_tex_draw_plan` | 68 |
-| killed by `-Werror` build | 18 |
+| unique mutants | 105 |
+| killed by `tests/host/build/test_tex_draw_plan` | 78 |
+| killed by `-Werror` build | 20 |
 | survived | 7 |
-| total | 93 |
+| total | 105 |
 
 Kill distribution:
 
 | step | count | share |
 | --- | --- | --- |
-| C test | 68 | 73.1 % |
-| build | 18 | 19.4 % |
-| survived | 7 | 7.5 % |
+| C test | 78 | 74.3 % |
+| build | 20 | 19.0 % |
+| survived | 7 | 6.7 % |
 
 The runner command and final summary:
 
     $ python3 docs/reports/5b2e2_mutate_tex_draw_plan.py --jobs 4
     baseline: build OK, test OK
-    mutants: 93 unique
+    mutants: 105 unique
     ...
-    killed by test:   68
-    killed by build:  18
+    killed by test:   78
+    killed by build:  20
     survived:         7
-    total:            93
-    common/ restored: NO
+    total:            105
+    common/ restored: YES
 
 ## Pin table
 
@@ -91,17 +92,17 @@ Lines refer to `common/twlhd_tex_draw_plan.c` as of the run.
 | line | symbol / construct | role |
 | --- | --- | --- |
 | 13 | `TEX_DRAW_ALIGN_MASK` | 127 = alignment mask for the 128-byte arena assumption |
-| 24-108 | `twlhd_tex_draw_plan_build` | main draw-plan builder |
-| 39-43 | `out_result` initialisation | defensive defaults before validation |
-| 46-48 | NULL guard | reject missing required pointers |
-| 51-53 | empty-entry-count early return | `NO_TEXTURE` for zero entries |
-| 56-58 | budget guard | capacity/arena/texcoord overflow fallback |
-| 61-64 | alignment guard | `arena_used > 0` and 128-byte alignment check |
-| 67-75 | texture size loop | PICA power-of-two 8..1024 guard + per-texture byte cap |
-| 77-99 | per-entry mapping | slot/status -> draw descriptor, wrap/filter assignment |
-| 101-105 | result write | final verdict and counts |
-| 110-118 | `twlhd_tex_draw_verdict_string` | human-readable verdict names |
-| 121-183 | `twlhd_tex_lifecycle_*` | pure pending/active release state machine |
+| 24-120 | `twlhd_tex_draw_plan_build` | main draw-plan builder |
+| 39-44 | `out_result` initialisation | defensive defaults before validation |
+| 46-49 | NULL guard | reject missing required pointers |
+| 51-54 | empty-entry-count early return | `NO_TEXTURE` for zero entries |
+| 56-59 | budget guard | capacity/arena/texcoord overflow fallback |
+| 61-65 | alignment guard | `arena_used > 0` and 128-byte alignment check |
+| 67-80 | texture size loop | PICA power-of-two 8..1024 guard + per-texture byte cap + arena offset/bounds guard |
+| 82-111 | per-entry mapping | slot/status -> draw descriptor, wrap/filter assignment, draw-range guard |
+| 113-119 | result write | final verdict and counts |
+| 122-132 | `twlhd_tex_draw_verdict_string` | human-readable verdict names |
+| 134-196 | `twlhd_tex_lifecycle_*` | pure pending/active release state machine |
 
 ## Survivor triage
 
@@ -111,10 +112,10 @@ line after the preceding guards.
 
 | line | mutant | why it survives |
 | --- | --- | --- |
-| 70 | const 1024 -> 1025 (two occurrences) | `w > 1024u` -> `w > 1025u`. Any PICA power-of-two width/height larger than 1024 is at least 2048 and is still rejected; non-power-of-two values >1024 are rejected by the `(w & (w-1)) != 0` check before this comparison matters. Equivalent for all reachable inputs. |
-| 70 | const 8 -> 7 (two occurrences) | `w < 8u` -> `w < 7u`. The smallest valid power-of-two is 8, and any dimension `< 8` is also `< 7`; non-power-of-two values `>= 8` are rejected by the power-of-two check. Equivalent for all reachable inputs. |
-| 71 | const 1 -> 2 (two occurrences) | `(w & (w - 1u)) != 0u` -> `(w & (w - 2u)) != 0u`. For every power-of-two value `>= 8` both expressions are zero; non-power-of-two values are rejected earlier. Exhaustively verified for 8..1024. Equivalent for all reachable inputs. |
-| 160 | const 0 -> 1 | `s->active_ready = 0` inside `commit()` is immediately followed by `s->active_ready = 1` at line 162, so the assignment is overwritten before the function returns. The state machine action flags are identical either way. |
+| 71 | const 1024 -> 1025 (two occurrences) | `w > 1024u` -> `w > 1025u`. Any PICA power-of-two width/height larger than 1024 is at least 2048 and is still rejected; non-power-of-two values >1024 are rejected by the `(w & (w-1)) != 0` check before this comparison matters. Equivalent for all reachable inputs. |
+| 71 | const 8 -> 7 (two occurrences) | `w < 8u` -> `w < 7u`. The smallest valid power-of-two is 8, and any dimension `< 8` is also `< 7`; non-power-of-two values `>= 8` are rejected by the power-of-two check. Equivalent for all reachable inputs. |
+| 72 | const 1 -> 2 (two occurrences) | `(w & (w - 1u)) != 0u` -> `(w & (w - 2u)) != 0u`. For every power-of-two value `>= 8` both expressions are zero; non-power-of-two values are rejected earlier. Exhaustively verified for 8..1024. Equivalent for all reachable inputs. |
+| 173 | const 0 -> 1 | `s->active_ready = 0` inside `commit()` is immediately followed by `s->active_ready = 1` at line 175, so the assignment is overwritten before the function returns. The state-machine action flags are identical either way. |
 
 ### Corrected slot-bound argument
 
@@ -124,9 +125,8 @@ With `texture_count == 0`, the expression `texture_count - 1` wraps in unsigned
 arithmetic, but the actual mutation is on the cast `int32_t` comparison: the
 mutant accepts `slot == texture_count` and then dereferences
 `textures[slot]`, reading one element past the end of the texture array.
-In the final source the comparison lives at line 80 of
-`common/twlhd_tex_draw_plan.c` (the line shifted down after adding the
-power-of-two guard).
+In the final source the comparison lives at line 87 of
+`common/twlhd_tex_draw_plan.c`.
 
 The new test `test_slot_equals_count()` exercises exactly this case
 (`entry_texture[0] == texture_count == 1`, status OK, textured plan entry) and
@@ -173,65 +173,77 @@ triaged above.
 | 63 | op != -> == | KILLED(test) |
 | 67 | const 0 -> 1 | KILLED(test) |
 | 67 | op < -> <= | KILLED(test) |
-| 70 | const 1024 -> 1023 | KILLED(test) |
-| 70 | const 1024 -> 1023 | KILLED(test) |
-| 70 | const 8 -> 9 | KILLED(test) |
-| 70 | const 8 -> 9 | KILLED(test) |
-| 70 | op < -> <= | KILLED(test) |
-| 70 | op < -> <= | KILLED(test) |
-| 70 | op > -> >= | KILLED(test) |
-| 70 | op > -> >= | KILLED(test) |
-| 70 | op \|\| -> && | KILLED(build) |
-| 70 | op \|\| -> && | KILLED(build) |
-| 70 | op \|\| -> && | KILLED(build) |
-| 70 | op \|\| -> && | KILLED(build) |
-| 71 | const 0 -> 1 | KILLED(test) |
-| 71 | const 0 -> 1 | KILLED(test) |
-| 71 | const 1 -> 0 | KILLED(test) |
-| 71 | const 1 -> 0 | KILLED(test) |
-| 71 | op != -> == | KILLED(test) |
-| 71 | op != -> == | KILLED(test) |
+| 70 | const 4 -> 3 | KILLED(test) |
+| 70 | const 4 -> 5 | KILLED(test) |
+| 71 | const 1024 -> 1023 | KILLED(test) |
+| 71 | const 1024 -> 1023 | KILLED(test) |
+| 71 | const 8 -> 9 | KILLED(test) |
+| 71 | const 8 -> 9 | KILLED(test) |
+| 71 | op < -> <= | KILLED(test) |
+| 71 | op < -> <= | KILLED(test) |
+| 71 | op > -> >= | KILLED(test) |
+| 71 | op > -> >= | KILLED(test) |
 | 71 | op \|\| -> && | KILLED(build) |
 | 71 | op \|\| -> && | KILLED(build) |
-| 72 | const 4 -> 3 | KILLED(test) |
-| 72 | const 4 -> 5 | KILLED(test) |
-| 72 | op > -> >= | KILLED(test) |
-| 77 | const 0 -> 1 | KILLED(test) |
-| 77 | op < -> <= | KILLED(test) |
-| 80 | const 0 -> 1 | KILLED(test) |
-| 80 | op < -> <= | KILLED(test) |
-| 80 | op >= -> > | KILLED(test) |
-| 80 | op \|\| -> && | KILLED(build) |
-| 80 | op \|\| -> && | KILLED(build) |
-| 81 | op \|\| -> && | KILLED(build) |
-| 82 | op != -> == | KILLED(test) |
-| 86 | const 1 -> 0 | KILLED(test) |
-| 86 | const 1 -> 2 | KILLED(test) |
-| 97 | const 0 -> 1 | KILLED(test) |
-| 122 | const 0 -> 1 | KILLED(test) |
-| 129 | const 1 -> 0 | KILLED(test) |
-| 129 | const 1 -> 2 | KILLED(test) |
-| 130 | const 1 -> 0 | KILLED(test) |
-| 130 | const 1 -> 2 | KILLED(test) |
-| 138 | const 0 -> 1 | KILLED(test) |
-| 139 | const 0 -> 1 | KILLED(test) |
-| 141 | const 1 -> 0 | KILLED(test) |
-| 141 | const 1 -> 2 | KILLED(test) |
-| 153 | const 0 -> 1 | KILLED(test) |
-| 154 | const 0 -> 1 | KILLED(test) |
-| 162 | const 1 -> 0 | KILLED(test) |
-| 162 | const 1 -> 2 | KILLED(test) |
-| 163 | const 0 -> 1 | KILLED(test) |
-| 164 | const 1 -> 0 | KILLED(test) |
-| 164 | const 1 -> 2 | KILLED(test) |
-| 178 | const 0 -> 1 | KILLED(test) |
-| 179 | const 0 -> 1 | KILLED(test) |
-| 180 | const 0 -> 1 | KILLED(test) |
-| 181 | const 0 -> 1 | KILLED(test) |
-| 70 | const 1024 -> 1025 | SURVIVED |
-| 70 | const 1024 -> 1025 | SURVIVED |
-| 70 | const 8 -> 7 | SURVIVED |
-| 70 | const 8 -> 7 | SURVIVED |
-| 71 | const 1 -> 2 | SURVIVED |
-| 71 | const 1 -> 2 | SURVIVED |
-| 160 | const 0 -> 1 | SURVIVED |
+| 71 | op \|\| -> && | KILLED(build) |
+| 71 | op \|\| -> && | KILLED(build) |
+| 72 | const 0 -> 1 | KILLED(test) |
+| 72 | const 0 -> 1 | KILLED(test) |
+| 72 | const 1 -> 0 | KILLED(test) |
+| 72 | const 1 -> 0 | KILLED(test) |
+| 72 | op != -> == | KILLED(test) |
+| 72 | op != -> == | KILLED(test) |
+| 72 | op \|\| -> && | KILLED(build) |
+| 72 | op \|\| -> && | KILLED(build) |
+| 73 | op > -> >= | KILLED(test) |
+| 76 | const 0 -> 1 | KILLED(test) |
+| 76 | op != -> == | KILLED(test) |
+| 76 | op \|\| -> && | KILLED(test) |
+| 77 | op > -> >= | KILLED(test) |
+| 82 | const 0 -> 1 | KILLED(test) |
+| 82 | op < -> <= | KILLED(test) |
+| 87 | const 0 -> 1 | KILLED(test) |
+| 87 | op < -> <= | KILLED(test) |
+| 87 | op >= -> > | KILLED(test) |
+| 87 | op \|\| -> && | KILLED(build) |
+| 87 | op \|\| -> && | KILLED(build) |
+| 88 | op \|\| -> && | KILLED(build) |
+| 89 | op != -> == | KILLED(test) |
+| 91 | const 0 -> 1 | KILLED(test) |
+| 91 | const 3 -> 2 | KILLED(test) |
+| 91 | const 3 -> 4 | KILLED(test) |
+| 91 | op != -> == | KILLED(test) |
+| 91 | op > -> >= | KILLED(test) |
+| 91 | op \|\| -> && | KILLED(build) |
+| 91 | op \|\| -> && | KILLED(build) |
+| 92 | op > -> >= | KILLED(test) |
+| 98 | const 1 -> 0 | KILLED(test) |
+| 98 | const 1 -> 2 | KILLED(test) |
+| 109 | const 0 -> 1 | KILLED(test) |
+| 135 | const 0 -> 1 | KILLED(test) |
+| 142 | const 1 -> 0 | KILLED(test) |
+| 142 | const 1 -> 2 | KILLED(test) |
+| 143 | const 1 -> 0 | KILLED(test) |
+| 143 | const 1 -> 2 | KILLED(test) |
+| 151 | const 0 -> 1 | KILLED(test) |
+| 152 | const 0 -> 1 | KILLED(test) |
+| 154 | const 1 -> 0 | KILLED(test) |
+| 154 | const 1 -> 2 | KILLED(test) |
+| 166 | const 0 -> 1 | KILLED(test) |
+| 167 | const 0 -> 1 | KILLED(test) |
+| 175 | const 1 -> 0 | KILLED(test) |
+| 175 | const 1 -> 2 | KILLED(test) |
+| 176 | const 0 -> 1 | KILLED(test) |
+| 177 | const 1 -> 0 | KILLED(test) |
+| 177 | const 1 -> 2 | KILLED(test) |
+| 191 | const 0 -> 1 | KILLED(test) |
+| 192 | const 0 -> 1 | KILLED(test) |
+| 193 | const 0 -> 1 | KILLED(test) |
+| 194 | const 0 -> 1 | KILLED(test) |
+| 71 | const 1024 -> 1025 | SURVIVED |
+| 71 | const 1024 -> 1025 | SURVIVED |
+| 71 | const 8 -> 7 | SURVIVED |
+| 71 | const 8 -> 7 | SURVIVED |
+| 72 | const 1 -> 2 | SURVIVED |
+| 72 | const 1 -> 2 | SURVIVED |
+| 173 | const 0 -> 1 | SURVIVED |
