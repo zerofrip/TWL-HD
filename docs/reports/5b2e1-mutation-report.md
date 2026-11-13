@@ -2,7 +2,7 @@
 
 Status: **IMPLEMENTED**, BUILD/UNIT only. `make test` and the targeted golden
 suite are green; nothing EMULATOR or HARDWARE is verified. This report contains
-only numbers and results produced by the run described below.
+only numbers and results produced by the runs described below.
 
 ## Method
 
@@ -47,13 +47,13 @@ The compiler is the default `HOST_CC = cc`; the detected host flags are
 
 A mutant is **KILLED** when at least one of those steps fails: a `-Werror`
 build failure counts, because `make test` fails on it. The unmutated baseline
-is built and both steps must pass before the run starts (15/15 C labels and 1
-golden test with 9 subTests). Identical mutant texts are deduplicated. The
+is built and both steps must pass before the run starts (16/16 C labels and 1
+golden test with 10 subTests). Identical mutant texts are deduplicated. The
 script restores the original source in a `finally:` block, keeps its scratch
 copy of each mutant in a temporary directory, and ends with
 `git diff --exit-code common/`, which must be clean.
 
-Run commit: `df2630897ff6bf939d633caeab8fa4b94b655b81` (the run was made from
+Run commit: `4a8e1118d484c1043a8eb4f2a152e1cc9183be67` (the run was made from
 this checkout with a clean `common/`).
 
 The mutant set is regenerated from the reworked source, so the round-3 sizing
@@ -83,6 +83,65 @@ Kill distribution:
 The two golden kills are palette-entry miscounts (`frame_fixed_palette_entries`
 constant mutations at line 80/81) that change the decoded colour of the 8x8 I4
 golden texture enough to fail the oracle's byte-exact comparison.
+
+## Round 5: format-5 palette-window gap
+
+An independent mutation run found a gap the committed mutant set cannot reach:
+swapping the shift in `frame_mode_palette_bytes((uint32_t)word >> 14)` (line
+192) to `<< 14` made the mode argument garbage, so the switch almost always
+took `default: return 4u` and mode-0 (6-byte) and mode-2 (8-byte) blocks were
+checked against 4 bytes only. No test had a mode-0 or mode-2 block whose
+palette window ended within 4-7 bytes of `palette_size`, so the mutant
+survived.
+
+Added tests (no change to `common/`):
+
+- `tests/host/test_pica_frame.c`: one new function
+  `test_fmt5_palette_window()` (label `pica-frame/fmt5-palette-window`, so the
+  C suite now reports 16 labels) pinning the window rule per block mode for
+  `arena_needed` AND `prepare`, with `arena_needed == arena_used` and
+  identical per-entry status in every case: mode 0 at offset 4 exact fit
+  (10) vs 2 bytes short (8); mode 2 at offset 4 exact fit (12) vs a window
+  that fits 4 but not 8 (8); modes 1 and 3 at offset 4 exact fit (8) vs 2
+  bytes short (6); and the same mode-2 offender as the LAST and as the FIRST
+  of the four blocks.
+- `tools/test_pica_frame_golden.py`: `_make_entry`/`_build_frame` take a
+  per-entry format-5 index word and palette size, and the frame list gains a
+  frame with a mode-0 exact fit (6), a mode-2 exact fit (8), and a mode-2
+  window that fits 4 but not 8 (8; the oracle's pre-scan raises
+  `ERR_PALETTE_RANGE`, so that entry is the suite's first `UNSUPPORTED`
+  result). The golden suite ran 1 test with 10 subTests.
+
+The shift swap is **outside the committed mutant set by design**: the runner's
+`OP_RE` (`docs/reports/5b2e1_mutate_pica_frame.py:55`) matches `<<`, `>>` and
+`->` only so they can be skipped, and `OP_SWAP` has no entry for them. The
+shift mutant is therefore verified manually, with `common/` restored
+afterwards:
+
+    make -j2 tests/host/build/test_pica_frame tests/host/build/pica_frame_cli
+    ./tests/host/build/test_pica_frame
+    PICA_FRAME_CLI=$PWD/tests/host/build/pica_frame_cli \
+      python3 -B -I -m unittest discover -s tools -p test_pica_frame_golden.py
+
+With `>> 14` changed to `<< 14` on line 192 the C suite fails
+(`FAIL pica-frame/fmt5-palette-window (4 failed checks)`, each
+`tests/host/test_pica_frame.c:941: expected 0u == 0, got 256` from the
+`arena_needed == 0` assertion), while the golden suite still passes because
+the real decoder re-checks the same rule in the write pass. After restoring
+the file, `git diff --exit-code common/` is clean and the C suite is green
+again.
+
+The full rerun on the final code, from the repository root:
+
+    python3 docs/reports/5b2e1_mutate_pica_frame.py --jobs 4
+
+It reports "baseline: build OK, test OK, golden OK", "mutants: 233 unique",
+`killed by test: 175`, `killed by golden: 2`, `killed by build: 29`,
+`survived: 27`, `total: 233`, "common/ restored: YES". The totals and the
+survivor list are unchanged from the table above; all 27 survivors remain
+equivalent, and the parity argument for the `frame_mode_palette_bytes`
+constants (lines 93-95; item 4 below) is unchanged and still correct. The
+manual `>> -> <<` kill is not counted in those totals.
 
 ## Pin table
 
