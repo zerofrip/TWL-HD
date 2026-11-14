@@ -410,9 +410,8 @@ def describe():
           % FRAME_NAME)
     print("colour-0: TEXIMAGE_PARAM bit 29 clear; formats 2/3/4 never use "
           "palette index 0 as a visible colour")
-    print("orientation: emulator-observed; decoded row 0 is the BOTTOM screen "
-          "edge of the quad (see docs/EMULATOR_VALIDATION.md, multi-format "
-          "frame subsection)")
+    print("orientation: corrected; decoded row 0 is the TOP screen edge of "
+          "the quad (memory tile row 0 = image top row)")
     for index, spec in enumerate(QUAD_SPECS):
         fmt = spec["format"]
         print("quad %d: fmt %d %s %dx%d param=0x%08X screen=(%d,%d)-(%d,%d)"

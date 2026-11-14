@@ -56,11 +56,14 @@ FRAME_NAMES = (
 
 # 2x2 quad grid scaled to fill most of the DS clip box. Values are raw clip
 # * 4096 (same convention as tools/hw/gen_lit_frames.py).
+# Order is (top-left, top-right, bottom-right, bottom-left) so that the
+# standard [0,1]^2 texcoords put (s=0,t=0) at the top-left vertex, matching
+# DS semantics after the corrected top-down PICA memory layout.
 QUADS = (
-    ((-3840, -2560), (-640, -2560), (-640, -320), (-3840, -320)),
-    ((640, -2560), (3840, -2560), (3840, -320), (640, -320)),
-    ((-3840, 320), (-640, 320), (-640, 2560), (-3840, 2560)),
-    ((640, 320), (3840, 320), (3840, 2560), (640, 2560)),
+    ((-3840, -320), (-640, -320), (-640, -2560), (-3840, -2560)),
+    ((640, -320), (3840, -320), (3840, -2560), (640, -2560)),
+    ((-3840, 2560), (-640, 2560), (-640, 320), (-3840, 320)),
+    ((640, 2560), (3840, 2560), (3840, 320), (640, 320)),
 )
 
 # Texture descriptors used by the four runs. The first and last run reuse

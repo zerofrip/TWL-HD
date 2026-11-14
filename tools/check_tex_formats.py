@@ -10,11 +10,9 @@ generator data (tools/gen_tex_format_frames.py). The expectation therefore
 does not depend on the C decoder.
 
 Each quad is checked with whole-quad shifts dx, dy in {-1, 0, 1}; the best
-shift is reported. The texel-row orientation is pinned once, as the emulator
-shows it: decoded row 0 is the BOTTOM screen edge of the quad. The DS derivation
-in docs/DS_GX_RESEARCH.md predicts row 0 at the top; the Azahar probe disagrees
-for every quad, which is reported as a finding in
-docs/EMULATOR_VALIDATION.md rather than tuned away (no flip search).
+shift is reported. The texel-row orientation is pinned: decoded row 0 is the
+TOP screen edge of the quad, matching the corrected PICA memory layout
+(memory tile row 0 = image top row). There is no flip search.
 
 Palettes are rich, so the checker does not snap colours; it uses a per-channel
 tolerance (default 24, JPEG-capture friendly).
@@ -111,8 +109,8 @@ def check_quad(data, width, top, spec, expected, tolerance):
                 for tx in range(tex_w):
                     x = _cell_centre(left, box_w, tex_w, tx) + dx
                     got = _mean3(data, width, top, x, y)
-                    # Decoded row 0 is the bottom screen edge (emulator pin).
-                    want = expected[(tex_h - 1 - ty) * tex_w + tx]
+                    # Decoded row 0 is the top screen edge (corrected pin).
+                    want = expected[ty * tex_w + tx]
                     deviation = max(abs(got[i] - want[i]) for i in range(3))
                     if deviation > worst:
                         worst = deviation

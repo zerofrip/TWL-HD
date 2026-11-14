@@ -10,6 +10,10 @@ DS texture decode and the PICA swizzle are reused from the existing oracles
 (tex_decode_oracle.decode / pica_tex_oracle.swizzle), exactly as the C module
 reuses twlhd_tex_decode / twlhd_pica_tex_swizzle_rgba8.
 
+The PICA swizzle stores memory tile rows top-down (image row 0 = memory tile
+row 0); the v coordinate is kept as v = 1 - t/height so that DS t=0 (top row)
+samples memory row 0.
+
 Inputs are the *parsed* view: records with canonical offsets, the TXDT and
 PLDT byte blobs, and the interpreter's per-vertex (s, t, teximage_param,
 pltt_base) list. Output is the same text the C CLI prints after "# result", so

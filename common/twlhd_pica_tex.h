@@ -62,8 +62,13 @@ typedef struct {
  * Convert a row-major, top-down RGBA8 image (bytes R,G,B,A) into PICA200
  * RGBA8 texture memory: 8x8 tiles in row-major tile order, Morton (Z) order
  * inside each tile, texel bytes stored A,B,G,R (Azahar color.h:195-199,
- * Panda3DS textures.cpp:175-182) and tile rows stored bottom-up relative to
- * the image (Azahar texture_codec.h:577-604 and :892-897).
+ * Panda3DS textures.cpp:175-182) and tile rows stored top-down (memory tile
+ * row 0 is the image top row: Azahar's linear buffer is bottom-up for OpenGL
+ * (texture_codec.h:892-897), so its tile walk starts tile row 0 at linear row
+ * height-8 and DecodeTile (:577-604) maps in-tile row y to linear row 7-y
+ * within the tile; because the tile base is at linear row height-8, tile row 0
+ * lands on linear row height-1, i.e. the image top row.
+ * Panda3DS indexes memory by v directly (textures.cpp:94-107)).
  *
  * src: width*height*4 bytes. dst: width*height*4 bytes, fully overwritten.
  * src and dst must not overlap. width and height must both be powers of two
@@ -98,10 +103,10 @@ TwlhdPicaTexResult twlhd_pica_wrap_from_teximage(uint32_t teximage_param,
  *     u = s / width
  *     v = 1 - t / height
  *
- * The V flip is the one absorbed by the swizzle: PICA v=0 samples the first
- * tile row, which the swizzle fills with the bottom rows of the DS image
- * (see the swizzle comment), so t=0 (DS top row) maps to v=1. Sampling the
- * swizzled texture with these coordinates reproduces the DS image upright.
+ * PICA v=0 samples the last memory row (image bottom), v=1 samples memory
+ * row 0 (image top). DS t=0 is the top row, so it maps to v=1; DS t=height-1
+ * is the bottom row, so it maps to v=0. Sampling the swizzled texture with
+ * these coordinates reproduces the DS image upright.
  *
  * tex[i] must describe main-buffer vertex i; out[i] receives its coordinate.
  * count vertices are written; width/height must be powers of two in 8..1024;

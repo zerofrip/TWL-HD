@@ -58,18 +58,20 @@ static int guard_intact(const uint8_t *base, size_t used, int fill) {
 
 /*
  * Destination texel index inside one 8x8 tile for source row y and column x.
- * Hand-written from the Z-order table in Azahar utils.h:29-38: the top source
- * row lands on the 42..63 indexes because PICA tile rows are stored bottom-up.
+ * Hand-written from the Z-order table in Azahar utils.h:12-16: Morton X offset
+ * = {0,1,4,5,16,17,20,21}, Y offset = {0,2,8,10,32,34,40,42}; texel index =
+ * X[x&7] + Y[y&7]. Memory tile rows are image rows top-down, so source row 0
+ * lands on Morton indexes 0..21 and source row 7 on 42..63.
  */
 static const uint32_t kMorton8x8[8][8] = {
-    {42, 43, 46, 47, 58, 59, 62, 63},
-    {40, 41, 44, 45, 56, 57, 60, 61},
-    {34, 35, 38, 39, 50, 51, 54, 55},
-    {32, 33, 36, 37, 48, 49, 52, 53},
-    {10, 11, 14, 15, 26, 27, 30, 31},
-    {8, 9, 12, 13, 24, 25, 28, 29},
-    {2, 3, 6, 7, 18, 19, 22, 23},
     {0, 1, 4, 5, 16, 17, 20, 21},
+    {2, 3, 6, 7, 18, 19, 22, 23},
+    {8, 9, 12, 13, 24, 25, 28, 29},
+    {10, 11, 14, 15, 26, 27, 30, 31},
+    {32, 33, 36, 37, 48, 49, 52, 53},
+    {34, 35, 38, 39, 50, 51, 54, 55},
+    {40, 41, 44, 45, 56, 57, 60, 61},
+    {42, 43, 46, 47, 58, 59, 62, 63},
 };
 
 static uint32_t lcg_state;
@@ -106,25 +108,25 @@ static void test_swizzle_8x8_literals(void) {
                  TWLHD_PICA_TEX_OK);
 
     /* Explicit literal corner checks: index and all four bytes. (0,0). */
-    CHECK_EQ_INT(g_swizzled[42u * 4u + 0u], 192);
-    CHECK_EQ_INT(g_swizzled[42u * 4u + 1u], 64);
-    CHECK_EQ_INT(g_swizzled[42u * 4u + 2u], 128);
-    CHECK_EQ_INT(g_swizzled[42u * 4u + 3u], 0);
-    /* (7,0) -> texel 63. */
-    CHECK_EQ_INT(g_swizzled[63u * 4u + 0u], 199);
-    CHECK_EQ_INT(g_swizzled[63u * 4u + 1u], 71);
-    CHECK_EQ_INT(g_swizzled[63u * 4u + 2u], 135);
-    CHECK_EQ_INT(g_swizzled[63u * 4u + 3u], 7);
-    /* (0,7) -> texel 0. */
-    CHECK_EQ_INT(g_swizzled[0u], 248);
-    CHECK_EQ_INT(g_swizzled[1u], 120);
-    CHECK_EQ_INT(g_swizzled[2u], 184);
-    CHECK_EQ_INT(g_swizzled[3u], 56);
-    /* (7,7) -> texel 21. */
-    CHECK_EQ_INT(g_swizzled[21u * 4u + 0u], 255);
-    CHECK_EQ_INT(g_swizzled[21u * 4u + 1u], 127);
-    CHECK_EQ_INT(g_swizzled[21u * 4u + 2u], 191);
-    CHECK_EQ_INT(g_swizzled[21u * 4u + 3u], 63);
+    CHECK_EQ_INT(g_swizzled[0u], 192);
+    CHECK_EQ_INT(g_swizzled[1u], 64);
+    CHECK_EQ_INT(g_swizzled[2u], 128);
+    CHECK_EQ_INT(g_swizzled[3u], 0);
+    /* (7,0) -> texel 21. */
+    CHECK_EQ_INT(g_swizzled[21u * 4u + 0u], 199);
+    CHECK_EQ_INT(g_swizzled[21u * 4u + 1u], 71);
+    CHECK_EQ_INT(g_swizzled[21u * 4u + 2u], 135);
+    CHECK_EQ_INT(g_swizzled[21u * 4u + 3u], 7);
+    /* (0,7) -> texel 42. */
+    CHECK_EQ_INT(g_swizzled[42u * 4u + 0u], 248);
+    CHECK_EQ_INT(g_swizzled[42u * 4u + 1u], 120);
+    CHECK_EQ_INT(g_swizzled[42u * 4u + 2u], 184);
+    CHECK_EQ_INT(g_swizzled[42u * 4u + 3u], 56);
+    /* (7,7) -> texel 63. */
+    CHECK_EQ_INT(g_swizzled[63u * 4u + 0u], 255);
+    CHECK_EQ_INT(g_swizzled[63u * 4u + 1u], 127);
+    CHECK_EQ_INT(g_swizzled[63u * 4u + 2u], 191);
+    CHECK_EQ_INT(g_swizzled[63u * 4u + 3u], 63);
 
     /* First 16 pixels (top two rows): exact destination texel indexes. */
     for (y = 0; y < 2u; y++) {
@@ -167,24 +169,26 @@ static void test_swizzle_8x8_literals(void) {
 }
 
 static void test_swizzle_nonsquare(void) {
-    /* 16x8: two tiles per tile row; (8,0) is tile 1 index 42 -> 106. */
+    /* 16x8: two tiles per tile row; (0,0)->tile0 idx0, (8,0)->tile1 idx0,
+     * (0,7)->tile0 idx42, (15,7)->tile1 idx63 (global 127). */
     memset(g_src, 0x5A, sizeof(g_src));
     memset(g_swizzled, 0, sizeof(g_swizzled));
     CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(g_src, 16u, 8u, g_swizzled, 512u),
                  TWLHD_PICA_TEX_OK);
-    CHECK_EQ_INT(g_swizzled[42u * 4u + 0u], 0x5A);
-    CHECK_EQ_INT(g_swizzled[106u * 4u + 0u], 0x5A);
-    CHECK_EQ_INT(g_swizzled[127u * 4u + 0u], 0x5A);
     CHECK_EQ_INT(g_swizzled[0u], 0x5A);
+    CHECK_EQ_INT(g_swizzled[64u * 4u + 0u], 0x5A);
+    CHECK_EQ_INT(g_swizzled[127u * 4u + 0u], 0x5A);
+    CHECK_EQ_INT(g_swizzled[42u * 4u + 0u], 0x5A);
 
-    /* 8x16: two tile rows; source (0,0) is in tile row 1 at index 64+42. */
+    /* 8x16: two tile rows; (0,0)->idx0, (0,7)->idx42, (0,8)->tile1 idx0
+     * (global 64), (0,15)->tile1 idx42 (global 106). */
     memset(g_swizzled, 0, sizeof(g_swizzled));
     CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(g_src, 8u, 16u, g_swizzled, 512u),
                  TWLHD_PICA_TEX_OK);
-    CHECK_EQ_INT(g_swizzled[106u * 4u + 0u], 0x5A);
-    CHECK_EQ_INT(g_swizzled[42u * 4u + 0u], 0x5A);
-    CHECK_EQ_INT(g_swizzled[21u * 4u + 0u], 0x5A);
     CHECK_EQ_INT(g_swizzled[0u], 0x5A);
+    CHECK_EQ_INT(g_swizzled[42u * 4u + 0u], 0x5A);
+    CHECK_EQ_INT(g_swizzled[64u * 4u + 0u], 0x5A);
+    CHECK_EQ_INT(g_swizzled[106u * 4u + 0u], 0x5A);
     test_report("pica-tex/swizzle-nonsquare");
 }
 
@@ -758,6 +762,99 @@ static void test_texcoord_out_of_bounds(void) {
     test_report("pica-tex/oob-texcoord");
 }
 
+static void test_orientation_rows(void) {
+    /* 8x8 image: row 0 solid red (255,0,0,255), row 7 solid blue
+     * (0,0,255,255), all other rows black. With top-down tile rows, memory
+     * tile row 0 (image rows 0..7) occupies the whole image and its in-tile
+     * rows match image rows. Row 0 texels are Morton indexes 0..21, row 7
+     * texels are 42..63. */
+    uint32_t x;
+    memset(g_src, 0, sizeof(g_src));
+    for (x = 0; x < 8u; x++) {
+        uint32_t p = x * 4u;
+        g_src[p + 0u] = 255; /* R */
+        g_src[p + 1u] = 0;   /* G */
+        g_src[p + 2u] = 0;   /* B */
+        g_src[p + 3u] = 255; /* A */
+    }
+    for (x = 0; x < 8u; x++) {
+        uint32_t p = (7u * 8u + x) * 4u;
+        g_src[p + 0u] = 0;
+        g_src[p + 1u] = 0;
+        g_src[p + 2u] = 255;
+        g_src[p + 3u] = 255;
+    }
+    memset(g_swizzled, 0x5B, sizeof(g_swizzled));
+    CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(g_src, 8u, 8u, g_swizzled,
+                                              MAX_IMAGE_BYTES),
+                 TWLHD_PICA_TEX_OK);
+
+    /* Row 0 (red) -> memory texels 0..21, stored A,B,G,R = 255,0,0,255. */
+    for (x = 0; x < 8u; x++) {
+        uint32_t dest = kMorton8x8[0][x];
+        const uint8_t *p = g_swizzled + dest * 4u;
+        CHECK_EQ_INT(p[0], 255);
+        CHECK_EQ_INT(p[1], 0);
+        CHECK_EQ_INT(p[2], 0);
+        CHECK_EQ_INT(p[3], 255);
+    }
+    /* Row 7 (blue) -> memory texels 42..63, stored A,B,G,R = 255,255,0,0. */
+    for (x = 0; x < 8u; x++) {
+        uint32_t dest = kMorton8x8[7][x];
+        const uint8_t *p = g_swizzled + dest * 4u;
+        CHECK_EQ_INT(p[0], 255);
+        CHECK_EQ_INT(p[1], 255);
+        CHECK_EQ_INT(p[2], 0);
+        CHECK_EQ_INT(p[3], 0);
+    }
+    test_report("pica-tex/orientation-rows");
+}
+
+static void test_orientation_endtoend(void) {
+    /* Same red-row-0 / blue-row-7 image; swizzle it, then compute the texcoord
+     * for DS (s,t)=(0,0). The renderer gives vertex t=0 the coordinate v=1,
+     * and PICA v=1 samples memory row 0, which is the red row. */
+    TwlhdGxTexVertex tex[1];
+    TwlhdPicaTexCoord out[1];
+    uint32_t x;
+
+    memset(g_src, 0, sizeof(g_src));
+    for (x = 0; x < 8u; x++) {
+        uint32_t p = x * 4u;
+        g_src[p + 0u] = 255;
+        g_src[p + 1u] = 0;
+        g_src[p + 2u] = 0;
+        g_src[p + 3u] = 255;
+    }
+    for (x = 0; x < 8u; x++) {
+        uint32_t p = (7u * 8u + x) * 4u;
+        g_src[p + 0u] = 0;
+        g_src[p + 1u] = 0;
+        g_src[p + 2u] = 255;
+        g_src[p + 3u] = 255;
+    }
+    memset(g_swizzled, 0, sizeof(g_swizzled));
+    CHECK_EQ_INT(twlhd_pica_tex_swizzle_rgba8(g_src, 8u, 8u, g_swizzled,
+                                              MAX_IMAGE_BYTES),
+                 TWLHD_PICA_TEX_OK);
+
+    tex[0].s = 0.0f;
+    tex[0].t = 0.0f;
+    tex[0].teximage_param = 0u;
+    tex[0].pltt_base = 0u;
+    CHECK_EQ_INT(twlhd_pica_texcoords_from_gx(tex, 1u, 8u, 8u, out, 1u),
+                 TWLHD_PICA_TEX_OK);
+    CHECK_NEAR(out[0].u, 0.0, 1e-6);
+    CHECK_NEAR(out[0].v, 1.0, 1e-6);
+
+    /* v=1 addresses memory row 0; texel (0,0) is at Morton index 0. */
+    CHECK_EQ_INT(g_swizzled[0u], 255); /* A */
+    CHECK_EQ_INT(g_swizzled[1u], 0);   /* B */
+    CHECK_EQ_INT(g_swizzled[2u], 0);   /* G */
+    CHECK_EQ_INT(g_swizzled[3u], 255); /* R */
+    test_report("pica-tex/orientation-endtoend");
+}
+
 int main(void) {
     test_swizzle_8x8_literals();
     test_swizzle_nonsquare();
@@ -772,5 +869,7 @@ int main(void) {
     test_bind_plan();
     test_swizzle_out_of_bounds();
     test_texcoord_out_of_bounds();
+    test_orientation_rows();
+    test_orientation_endtoend();
     return test_exit_code();
 }

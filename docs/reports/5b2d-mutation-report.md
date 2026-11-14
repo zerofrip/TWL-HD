@@ -369,6 +369,40 @@ not powers of two, and exhaustive checking of `v & (v - 2u) == 0` over
 [8, 1024] yields exactly the powers of two. `+ 0u` and `- 0u` are the same
 unsigned arithmetic. None of these can change accepted sizes, indexes, or output.
 
+### Orientation fix addendum (5B-2d repair round)
+
+Rerun command: `python3 docs/reports/5b2d2_mutate_pica_tex.py --jobs 4`.
+
+The row flip in `common/twlhd_pica_tex.c` was removed (memory tile rows are now
+image rows top-down). The runner targets only `common/twlhd_pica_tex.c` and
+uses the same artifacts as `make test`:
+
+* `tests/host/build/test_pica_tex` — run directly;
+* `tests/host/build/pica_tex_cli` + `tools/test_pica_tex_golden.py`.
+
+**Results: 202 unique mutants, 197 killed, 5 equivalent survivors.**
+
+| Set | Unique sources | Killed by test | Killed by build | Equivalent survivors |
+|---|---|---:|---:|---:|---:|
+| systematic | 200 | 187 | 10 | 5 |
+| targeted | 2 | 2 | 0 | 0 |
+
+Targeted mutants (the systematic ±1/op-swap generator cannot produce the
+`height-1-y` row flip):
+
+| Mutant | Killing step | New test that kills it |
+|---|---|---|---|
+| `swizzle-restore-vflip` | KILLED | `test_pica_tex` | `pica-tex/orientation-rows`: row 0 red must land on Morton indexes 0..21 |
+| `unswizzle-restore-vflip` | KILLED | `test_pica_tex` | `pica-tex/roundtrip-*`: unswizzling with a restored flip does not round-trip |
+
+Equivalent survivors:
+
+* `line 27 const 8 -> 9`: `kMortonX[8]` -> `[9]`: element 8 is never read (`x & 7u` <= 7).
+* `line 29 const 8 -> 9`: `kMortonY[8]` -> `[9]`: element 8 is never read (`y & 7u` <= 7).
+* `line 33 const 8 -> 7`: `v >= 8u` -> `v >= 7u`: 7 is not a power of two, so the pow2 term already rejects it; accepted set unchanged.
+* `line 33 const 1024 -> 1025`: `v <= 1024u` -> `v <= 1025u`: 1025 is not a power of two and no power of two lies in (1024,1025], so accepted set unchanged.
+* `line 33 const 1 -> 2`: `(v & (v - 1u))` -> `(v & (v - 2u))`: exhaustive over v in [8,1024] shows exactly the powers of two satisfy both forms.
+
 ### Other notes
 
 * The counting-loop `i += 4u` mutant is killed by the A A A B B capacity-1 case: it undercounts to one run, passes the gate, and the write loop then overruns the 1-entry caller buffer under ASan. The write-loop `i += 4u` mutant is killed by the same layout at capacity 4 (`first_vertex`/`vertex_count`).
