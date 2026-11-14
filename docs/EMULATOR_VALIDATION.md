@@ -499,13 +499,20 @@ Azahar `texture_codec.h:892-897` processes the GL bottom-up linear buffer so
 that its tile walk starts tile row 0 at linear row `height - 8`, and
 `DecodeTile` (:577-604) maps in-tile row `y` to linear row `7 - y` within the
 tile. Because the tile base is at linear row `height - 8`, tile row 0 lands on
-linear row `height - 1`, i.e. the image top row. Panda3DS indexes memory by
-`v` directly (`textures.cpp:94-107`) and uploads row 0 first, which with GL's
-bottom-up data layout is the image top. Fix (A): removed the row flip in the
-swizzle and unswizzle, kept `v = 1 - t/height`; `tools/gen_tex_frames.py` was
-also corrected because its `QUADS` corner order had been compensating for the
-old flip (it now lists corners top-left, top-right, bottom-right, bottom-left,
-matching `tools/gen_tex_format_frames.py`).
+linear row `height - 1`, i.e. the image top row. Panda3DS's
+`Texture::decodeTexture` (`textures.cpp:250-263`) walks `v` top-to-bottom over
+texture memory and passes rows to `glTexSubImage2D` in that order; the first
+row given to `glTexSubImage2D` is the bottom row (v=0) of the GL texture, so
+memory row 0 lands at GL v=0/bottom. Panda3DS therefore points to the **old**
+orientation while Azahar's tile walk points to the new one — the sources are
+ambiguous/conflicting. Fix (A) rests on the Azahar tile-walk reading plus the
+emulator observation that the old code rendered textures vertically mirrored
+plus Run 19 hardware matching that old mirrored output. Fix (A): removed the
+row flip in the swizzle and unswizzle, kept `v = 1 - t/height`;
+`tools/gen_tex_frames.py` was also corrected because its `QUADS` corner order
+had been compensating for the old flip (it now lists corners top-left,
+top-right, bottom-right, bottom-left, matching
+`tools/gen_tex_format_frames.py`).
 
 The standard textured frame (`tools/check_tex_shot.py --frame tex`) now passes
 including the new top-left cell phase check; the fixed screenshot is
