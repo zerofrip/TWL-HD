@@ -265,8 +265,10 @@ solid colour (control frame: one colour) within a per-channel tolerance.
 along x and y inside each quad, compares it with the period predicted from the
 measured quad size and the known texture size, checks that the non-square
 16x8 region has a clearly different x/y cell ratio from the square regions,
-and checks that the two 8x8 regions (UR and LL, which share a texture) have
-the same cell pattern.
+checks that the two 8x8 regions (UR and LL, which share a texture) have the
+same cell pattern, and checks that the top-left checker cell of every region
+matches the texture's base colour (a vertically mirrored render shows white
+there instead).
 
 Sample rectangles (top screen 400x240, x left-to-right, y top-to-bottom):
 
@@ -283,7 +285,9 @@ Tolerances:
   period predicted from the quad size / texture size;
 - non-square region ratio must differ from the average square-region ratio by
   more than `0.15`;
-- reused-texture phase must match within the RGB tolerance.
+- reused-texture phase must match within the RGB tolerance;
+- top-left cell phase must match the expected base colour within the RGB
+  tolerance (5x5 mean, robust to the known ~1 px hardware shift).
 
 Run the checker after generating both screenshots:
 
@@ -436,9 +440,9 @@ texel cell with a 3x3 mean and compares against the oracle's expected RGB with
 a per-channel tolerance (default 24, JPEG-capture friendly). Whole-quad shifts
 `dx, dy in {-1, 0, 1}` are tried and the best is reported. It exits non-zero
 if any cell, or a whole quad, is missing or outside tolerance. The expected
-texel-row orientation is pinned once: **decoded row 0 is the bottom screen edge
-of the quad**, as the emulator shows it (see the finding below). There is no
-flip search.
+texel-row orientation is pinned: **decoded row 0 is the top screen edge of the
+quad**, matching the corrected PICA memory layout (memory tile row 0 = image
+top row). There is no flip search.
 
 Emulator run (same procedure as the 5B-2e-2 reference run above; the core was
 rebuilt from Azahar `9c38437` at the path below and the ARM11 3dsx is the
@@ -456,7 +460,10 @@ current normal build):
         --out /tmp/fmt_shot --sd-root /tmp/fmt_sd
     python3 tools/check_tex_formats.py /tmp/fmt_shot_199.ppm
 
-Real output (`sha256 b59899148c1ea7a34202caccf0776a084f0fc022f4f12cf608e33b96ad5ad48c`):
+Before the fix (old build with the bottom-up swizzle, `sha256
+b59899148c1ea7a34202caccf0776a084f0fc022f4f12cf608e33b96ad5ad48c`), every
+quad showed decoded row 0 at the bottom screen edge. The old
+`tools/check_tex_formats.py` pinned that mirrored orientation and reported:
 
     quad 0 fmt=1 A3I5 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(44, 11, 107, 110) OK
     quad 1 fmt=2 I2 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(116, 11, 179, 110) OK
@@ -467,20 +474,49 @@ Real output (`sha256 b59899148c1ea7a34202caccf0776a084f0fc022f4f12cf608e33b96ad5
     quad 6 fmt=7 16bpp 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(188, 131, 251, 230) OK
     quad 7 fmt=3 I4 16x16 cells=256/256 worst=0 shift=(0,0) bbox=(260, 131, 355, 230) OK
 
-FINDING (orientation, not a per-format decode error): with the pinned pin the
-checker is exact, but the pin contradicts the derivation in
-`docs/DS_GX_RESEARCH.md` ("V-axis derivation"), which predicts decoded row 0 at
-the **top** quad edge for `v = 1 - t/height`. In Azahar every quad shows
-decoded row 0 at the **bottom** edge, i.e. textures render vertically mirrored.
-This was confirmed with a probe before pinning: on quad 0 the screen-top texel
-band is decoded row 7 (pattern index `(tx + 14) % 8`) and the bottom band is
-row 0, while columns are not mirrored. The checker expectation was pinned to
-the emulator-observed orientation so it validates the decoder/palette work
-(all eight formats otherwise match byte-exactly, worst deviation 0); no
-tolerance was widened and no expected colour was swapped. The flip itself is
-not fixed here (`arm11/` and `common/` are out of scope for this task); the
-maintainer decides whether the swizzle direction or the prepared `v` needs the
-follow-up.
+With the corrected build the same procedure produces
+`/tmp/fmt_shot_199.ppm` (`sha256
+2794811712560fc5707489137f9604606aefdfe74c83f1409d5c5f725840ad8e`) and the
+new top-pin checker reports:
+
+    quad 0 fmt=1 A3I5 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(44, 11, 107, 110) OK
+    quad 1 fmt=2 I2 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(116, 11, 179, 110) OK
+    quad 2 fmt=3 I4 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(188, 11, 251, 110) OK
+    quad 3 fmt=4 I8 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(260, 11, 355, 110) OK
+    quad 4 fmt=5 4x4 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(44, 131, 107, 230) OK
+    quad 5 fmt=6 A5I3 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(116, 131, 179, 230) OK
+    quad 6 fmt=7 16bpp 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(188, 131, 251, 230) OK
+    quad 7 fmt=3 I4 16x16 cells=256/256 worst=0 shift=(0,0) bbox=(260, 131, 355, 230) OK
+
+FINDING and FIX (orientation): textures were rendering vertically mirrored in
+both Azahar and Run 19 hardware because `common/twlhd_pica_tex.c` stored PICA
+texture memory with a vertical row flip (`vy = height-1-y`) while keeping
+`v = 1 - t/height`. The top vertices (`t=0`, `v=1`) therefore sampled memory
+row 0, which the old swizzle filled with the image bottom row, so decoded row 0
+appeared at the bottom quad edge. Re-reading the sources showed the old
+interpretation of Azahar's "linear buffer is bottom-up" comment was wrong:
+Azahar `texture_codec.h:892-897` processes the GL bottom-up linear buffer so
+that its tile walk starts tile row 0 at linear row `height - 8`, and
+`DecodeTile` (:577-604) maps in-tile row `y` to linear row `7 - y` within the
+tile. Because the tile base is at linear row `height - 8`, tile row 0 lands on
+linear row `height - 1`, i.e. the image top row. Panda3DS indexes memory by
+`v` directly (`textures.cpp:94-107`) and uploads row 0 first, which with GL's
+bottom-up data layout is the image top. Fix (A): removed the row flip in the
+swizzle and unswizzle, kept `v = 1 - t/height`; `tools/gen_tex_frames.py` was
+also corrected because its `QUADS` corner order had been compensating for the
+old flip (it now lists corners top-left, top-right, bottom-right, bottom-left,
+matching `tools/gen_tex_format_frames.py`).
+
+The standard textured frame (`tools/check_tex_shot.py --frame tex`) now passes
+including the new top-left cell phase check; the fixed screenshot is
+`/tmp/tex_shot_199.ppm` (`sha256
+1da0f3f63af5085667645cc9684f572b56861f3c9b69ba0946f1caaddbfff049`). The old
+mirrored standard-frame screenshot would fail the new phase check (top-left
+cell is white instead of the base colour).
+
+**Remaining caveat:** HARDWARE re-verification of the corrected orientation has
+NOT been run. Run 19 captured the SAME mirrored pattern as the old emulator
+output, so it validated the existence of the mirror but not the fix.
 
 UNIT evidence: `tools/test_tex_formats.py` (run by `make test`) covers
 determinism, the v2 parser, byte-exact `tex_decode_cli` agreement with the

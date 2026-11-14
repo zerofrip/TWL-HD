@@ -59,10 +59,10 @@ def _ensure_cli(target):
 def _expected_colour(index, tx, ty):
     """Expected screen RGB for screen cell (tx, ty) of one quad.
 
-    Decoded row 0 is the bottom screen edge (emulator-pinned orientation).
+    Decoded row 0 is the top screen edge (corrected orientation).
     """
     spec = gen.QUAD_SPECS[index]
-    return EXPECTED[index][(spec["height"] - 1 - ty) * spec["width"] + tx][:3]
+    return EXPECTED[index][ty * spec["width"] + tx][:3]
 
 
 def image_bytes(colour_at, dx=0, dy=0, skip=(), height=HEIGHT):
@@ -349,7 +349,7 @@ class CheckerTest(unittest.TestCase):
         def wrong(index, tx, ty):
             if index == 3:
                 # I4 decoding of the I8 bytes, still in screen orientation.
-                return as_i4[(7 - ty) * 8 + tx][:3]
+                return as_i4[ty * 8 + tx][:3]
             return _expected_colour(index, tx, ty)
 
         with tempfile.TemporaryDirectory() as tmp:

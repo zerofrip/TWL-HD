@@ -88,6 +88,25 @@ def checker_callback(x, y):
     return BG
 
 
+def flipped_checker_callback(x, y):
+    """Vertically mirror every quad's checker: phase check fails, period passes."""
+    for _name, qx0, qx1, qy0, qy1, colour, tex_size in QUADS:
+        if qx0 <= x < qx1 and qy0 <= y < qy1:
+            tex_w, tex_h = tex_size
+            cells_x = tex_w // 4
+            cells_y = tex_h // 4
+            quad_w = qx1 - qx0
+            quad_h = qy1 - qy0
+            cell_w = quad_w / cells_x
+            cell_h = quad_h / cells_y
+            cx = int((x - qx0) / cell_w)
+            cy = cells_y - 1 - int((y - qy0) / cell_h)
+            if (cx + cy) & 1:
+                return WHITE
+            return colour
+    return BG
+
+
 class TestCheckTexShot(unittest.TestCase):
     def run_script(self, path, args):
         cmd = [sys.executable, "-B", "-I", SCRIPT, path] + args
@@ -120,6 +139,10 @@ class TestCheckTexShot(unittest.TestCase):
             self.assertIn("UR structure OK", out)
             self.assertIn("LL structure OK", out)
             self.assertIn("LR structure OK", out)
+            self.assertIn("UL phase OK", out)
+            self.assertIn("UR phase OK", out)
+            self.assertIn("LL phase OK", out)
+            self.assertIn("LR phase OK", out)
             self.assertIn("UL ratio OK", out)
             self.assertIn("UR==LL reuse OK", out)
 
@@ -201,7 +224,7 @@ class TestCheckTexShot(unittest.TestCase):
                 f"unexpected output:\n{out}")
 
     def test_ur_differs_from_ll_fails(self):
-        """UR and LL reuse the texture, so a shifted phase in UR breaks reuse."""
+        """UR and LL reuse the texture, so a shifted phase in UR breaks it."""
         def shifted_ur(x, y):
             for name, qx0, qx1, qy0, qy1, colour, tex_size in QUADS:
                 if qx0 <= x < qx1 and qy0 <= y < qy1:
@@ -227,6 +250,7 @@ class TestCheckTexShot(unittest.TestCase):
             make_ppm(path, shifted_ur)
             rc, out, _ = self.run_script(path, ["--frame", "tex"])
             self.assertNotEqual(rc, 0)
+            # The shifted UR top-left cell differs from LL, so reuse fails.
             self.assertIn("UR==LL reuse FAIL", out)
 
     def test_modulate_with_base_colour_fails(self):
@@ -266,6 +290,19 @@ class TestCheckTexShot(unittest.TestCase):
             rc, out, _ = self.run_script(path, ["--frame", "tex"])
             self.assertNotEqual(rc, 0)
             self.assertIn("FAIL", out)
+
+    def test_vertically_flipped_phase_fails(self):
+        """A vertical mirror keeps period/ratio/reuse valid but flips phase."""
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "flipped.ppm")
+            make_ppm(path, flipped_checker_callback)
+            rc, out, _ = self.run_script(path, ["--frame", "tex"])
+            self.assertNotEqual(rc, 0)
+            self.assertIn("phase FAIL", out)
+            # Period/ratio/reuse checks are still OK; only phase fails.
+            self.assertIn("UL structure OK", out)
+            self.assertIn("UL ratio OK", out)
+            self.assertIn("UR==LL reuse OK", out)
 
 
 if __name__ == "__main__":

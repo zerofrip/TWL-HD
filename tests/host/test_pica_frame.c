@@ -43,16 +43,18 @@ static const unsigned FIVE_TO_EIGHT[32] = {
     0x5A, 0x63, 0x6B, 0x73, 0x7B, 0x84, 0x8C, 0x94, 0x9C, 0xA5, 0xAD,
     0xB5, 0xBD, 0xC6, 0xCE, 0xD6, 0xDE, 0xE7, 0xEF, 0xF7, 0xFF};
 
-/* Hand-written PICA destination texel index for source row y, column x. */
+/* Hand-written PICA destination texel index for source row y, column x.
+ * Morton X = {0,1,4,5,16,17,20,21}, Y = {0,2,8,10,32,34,40,42};
+ * index = X[x&7] + Y[y&7]. Memory tile rows are image rows top-down. */
 static const uint32_t kMorton8x8[8][8] = {
-    {42, 43, 46, 47, 58, 59, 62, 63},
-    {40, 41, 44, 45, 56, 57, 60, 61},
-    {34, 35, 38, 39, 50, 51, 54, 55},
-    {32, 33, 36, 37, 48, 49, 52, 53},
-    {10, 11, 14, 15, 26, 27, 30, 31},
-    {8, 9, 12, 13, 24, 25, 28, 29},
-    {2, 3, 6, 7, 18, 19, 22, 23},
     {0, 1, 4, 5, 16, 17, 20, 21},
+    {2, 3, 6, 7, 18, 19, 22, 23},
+    {8, 9, 12, 13, 24, 25, 28, 29},
+    {10, 11, 14, 15, 26, 27, 30, 31},
+    {32, 33, 36, 37, 48, 49, 52, 53},
+    {34, 35, 38, 39, 50, 51, 54, 55},
+    {40, 41, 44, 45, 56, 57, 60, 61},
+    {42, 43, 46, 47, 58, 59, 62, 63},
 };
 
 static uint8_t g_tex_a[128];  /* 8x8 format 7: 2 bytes per texel */
@@ -239,15 +241,15 @@ static void expect_a_bytes(const FrameOut *out) {
             CHECK_EQ_INT(p[3], FIVE_TO_EIGHT[r5]);
         }
     }
-    /* Explicit literals: (0,0) -> texel 42, (7,0) -> texel 63. */
-    CHECK_EQ_INT(out->arena[42u * 4u + 0u], 255u);
-    CHECK_EQ_INT(out->arena[42u * 4u + 1u], 0u);
-    CHECK_EQ_INT(out->arena[42u * 4u + 2u], 0u);
-    CHECK_EQ_INT(out->arena[42u * 4u + 3u], 0u);
-    CHECK_EQ_INT(out->arena[63u * 4u + 0u], 255u);
-    CHECK_EQ_INT(out->arena[63u * 4u + 1u], FIVE_TO_EIGHT[3]);
-    CHECK_EQ_INT(out->arena[63u * 4u + 2u], FIVE_TO_EIGHT[21]);
-    CHECK_EQ_INT(out->arena[63u * 4u + 3u], FIVE_TO_EIGHT[7]);
+    /* Explicit literals: (0,0) -> texel 0, (7,0) -> texel 21. */
+    CHECK_EQ_INT(out->arena[0u * 4u + 0u], 255u);
+    CHECK_EQ_INT(out->arena[0u * 4u + 1u], 0u);
+    CHECK_EQ_INT(out->arena[0u * 4u + 2u], 0u);
+    CHECK_EQ_INT(out->arena[0u * 4u + 3u], 0u);
+    CHECK_EQ_INT(out->arena[21u * 4u + 0u], 255u);
+    CHECK_EQ_INT(out->arena[21u * 4u + 1u], FIVE_TO_EIGHT[3]);
+    CHECK_EQ_INT(out->arena[21u * 4u + 2u], FIVE_TO_EIGHT[21]);
+    CHECK_EQ_INT(out->arena[21u * 4u + 3u], FIVE_TO_EIGHT[7]);
 }
 
 static void expect_b_bytes(const FrameOut *out) {
@@ -265,11 +267,11 @@ static void expect_b_bytes(const FrameOut *out) {
             CHECK_EQ_INT(p[3], FIVE_TO_EIGHT[k * 2u]);
         }
     }
-    /* (0,0) -> tile column 0 texel 42; index 0 is R=0,G=255,B=0. */
-    CHECK_EQ_INT(out->arena[256u + 42u * 4u + 0u], 255u);
-    CHECK_EQ_INT(out->arena[256u + 42u * 4u + 1u], 0u);
-    CHECK_EQ_INT(out->arena[256u + 42u * 4u + 2u], 255u);
-    CHECK_EQ_INT(out->arena[256u + 42u * 4u + 3u], 0u);
+    /* (0,0) -> tile column 0 texel 0; index 0 is R=0,G=255,B=0. */
+    CHECK_EQ_INT(out->arena[256u + 0u * 4u + 0u], 255u);
+    CHECK_EQ_INT(out->arena[256u + 0u * 4u + 1u], 0u);
+    CHECK_EQ_INT(out->arena[256u + 0u * 4u + 2u], 255u);
+    CHECK_EQ_INT(out->arena[256u + 0u * 4u + 3u], 0u);
 }
 
 static void test_prepare_basic(void) {
@@ -1676,18 +1678,18 @@ static void test_size_bounds_1024(void) {
     CHECK_EQ_INT(textures[1].width, 8u);
     CHECK_EQ_INT(textures[1].height, 1024u);
 
-    /* PICA texel 42 is source (0,0) for both shapes; texel 63 is (7,0).
-     * The 8x1024 layout puts source row 1023 in tile row 0 (texel 42) and
-     * source row 0 in tile row 127 (texel 8170). */
-    CHECK_EQ_INT(arena[42u * 4u + 0u], 255u);
-    CHECK_EQ_INT(arena[42u * 4u + 1u], 0u);
-    CHECK_EQ_INT(arena[42u * 4u + 2u], 0u);
-    CHECK_EQ_INT(arena[42u * 4u + 3u], 255u);
-    CHECK_EQ_INT(arena[63u * 4u + 3u], 255u);
-    CHECK_EQ_INT(arena[32768u + 42u * 4u + 0u], 255u);
-    CHECK_EQ_INT(arena[32768u + 42u * 4u + 1u], 0u);
-    CHECK_EQ_INT(arena[32768u + 42u * 4u + 2u], 255u);
-    CHECK_EQ_INT(arena[32768u + 42u * 4u + 3u], 0u);
+    /* PICA texel 0 is source (0,0) for both shapes; texel 21 is (7,0).
+     * The 8x1024 layout puts source row 0 in tile row 0 (texel 0) and
+     * source row 1023 in tile row 127 (texel 8170). */
+    CHECK_EQ_INT(arena[0u * 4u + 0u], 255u);
+    CHECK_EQ_INT(arena[0u * 4u + 1u], 0u);
+    CHECK_EQ_INT(arena[0u * 4u + 2u], 0u);
+    CHECK_EQ_INT(arena[0u * 4u + 3u], 255u);
+    CHECK_EQ_INT(arena[21u * 4u + 3u], 255u);
+    CHECK_EQ_INT(arena[32768u + 0u * 4u + 0u], 255u);
+    CHECK_EQ_INT(arena[32768u + 0u * 4u + 1u], 0u);
+    CHECK_EQ_INT(arena[32768u + 0u * 4u + 2u], 255u);
+    CHECK_EQ_INT(arena[32768u + 0u * 4u + 3u], 0u);
     CHECK_EQ_INT(arena[32768u + 8170u * 4u + 2u], 255u);
 
     test_report("pica-frame/size-bounds-1024");
@@ -1937,11 +1939,11 @@ static void fmt_frame_ok(const TwlhdV2TexEntry *entry, uint32_t param,
     CHECK_EQ_INT(g_out.entry_texture[0], 0);
     CHECK_EQ_INT(g_out.textures[0].width, 8u);
     CHECK_EQ_INT(g_out.textures[0].height, 8u);
-    /* Source texel (0,0) -> PICA texel 42 (A,B,G,R). */
-    CHECK_EQ_INT(g_out.arena[42u * 4u + 0u], first_alpha);
-    CHECK_EQ_INT(g_out.arena[42u * 4u + 1u], 0u);
-    CHECK_EQ_INT(g_out.arena[42u * 4u + 2u], 0u);
-    CHECK_EQ_INT(g_out.arena[42u * 4u + 3u], first_red);
+    /* Source texel (0,0) -> PICA texel 0 (A,B,G,R). */
+    CHECK_EQ_INT(g_out.arena[0u * 4u + 0u], first_alpha);
+    CHECK_EQ_INT(g_out.arena[0u * 4u + 1u], 0u);
+    CHECK_EQ_INT(g_out.arena[0u * 4u + 2u], 0u);
+    CHECK_EQ_INT(g_out.arena[0u * 4u + 3u], first_red);
 }
 
 static void test_format_index_matrix(void) {

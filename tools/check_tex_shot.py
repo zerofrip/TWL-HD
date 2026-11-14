@@ -186,8 +186,21 @@ def measure_period_y(data, width, x, qy0, qy1, tolerance):
     return sum(intervals) / len(intervals)
 
 
+def _mean5(data, width, top, x, y):
+    """5x5 mean centred at (x,y), clipped to the image."""
+    total = [0, 0, 0]
+    count = 0
+    for py in range(max(0, y - 2), min(top, y + 3)):
+        for px in range(max(0, x - 2), min(width, x + 3)):
+            pixel = pixel_at(data, width, px, py)
+            for channel in range(3):
+                total[channel] += pixel[channel]
+            count += 1
+    return tuple(int(round(total[channel] / count)) for channel in range(3))
+
+
 def check_region_structure(data, width, height, name, x0, x1, y0, y1,
-                           tex_size, tolerance):
+                           expected_colour, tex_size, tolerance):
     """Validate the checker cell period and phase for one textured region."""
     cx = (x0 + x1) // 2
     cy = (y0 + y1) // 2
@@ -229,11 +242,22 @@ def check_region_structure(data, width, height, name, x0, x1, y0, y1,
 
     if not (ok_x and ok_y):
         return None
+
+    # Phase sample: the top-left checker cell should be the base colour. The
+    # check itself is performed in check_structure() after ratio/reuse so that
+    # a flipped render shows period/ratio/reuse are otherwise valid.
+    cell_w = quad_w / cells_x
+    cell_h = quad_h / cells_y
+    phase_x = int(qx0 + 0.5 * cell_w)
+    phase_y = int(qy0 + 0.5 * cell_h)
+    phase_got = _mean5(data, width, height, phase_x, phase_y)
+
     return {
         "measured_px": (measured_px_x, measured_px_y),
         "predicted_px": (predicted_px_x, predicted_px_y),
         "cells": (cells_x, cells_y),
-        "phase": pixel_at(data, width, qx0, qy0),
+        "phase": phase_got,
+        "expected_colour": expected_colour,
     }
 
 
@@ -241,9 +265,9 @@ def check_structure(data, width, height, tolerance):
     """Run the structural checker on all four textured regions."""
     results = {}
     all_ok = True
-    for name, x0, x1, y0, y1, _expected_tex, _expected_ctl, tex_size in REGIONS:
+    for name, x0, x1, y0, y1, expected_tex, _expected_ctl, tex_size in REGIONS:
         info = check_region_structure(data, width, height, name, x0, x1, y0, y1,
-                                      tex_size, tolerance)
+                                      expected_tex, tex_size, tolerance)
         if info is None:
             all_ok = False
         else:
@@ -288,14 +312,26 @@ def check_structure(data, width, height, tolerance):
                  max(1, STRUCTURE_TOLERANCE_FRAC * max(ur["measured_px"][0], 1)) and
                  abs(ur["measured_px"][1] - ll["measured_px"][1]) <=
                  max(1, STRUCTURE_TOLERANCE_FRAC * max(ur["measured_px"][1], 1)))
-    phase_ok = within_tolerance(ur["phase"], ll["phase"], tolerance)
-    reuse_ok = period_ok and phase_ok
+    reuse_phase_ok = within_tolerance(ur["phase"], ll["phase"], tolerance)
+    reuse_ok = period_ok and reuse_phase_ok
     status = "OK" if reuse_ok else "FAIL"
-    print(f"UR==LL reuse {status}: period={period_ok} phase={phase_ok}")
+    print(f"UR==LL reuse {status}: period={period_ok} phase={reuse_phase_ok}")
     if not reuse_ok:
         return False
 
-    return True
+    # Phase check: the top-left checker cell of every region must be the base
+    # colour. A vertically mirrored render puts white there instead.
+    all_phase_ok = True
+    for name, *_rest, tex_size in REGIONS:
+        expected = results[name]["expected_colour"]
+        got = results[name]["phase"]
+        phase_ok = within_tolerance(got, expected, tolerance)
+        status = "OK" if phase_ok else "FAIL"
+        print(f"{name} phase {status}: got={got} want={expected}")
+        if not phase_ok:
+            all_phase_ok = False
+
+    return all_phase_ok
 
 
 def main(argv=None):
