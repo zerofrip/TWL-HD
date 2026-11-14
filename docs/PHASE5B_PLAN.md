@@ -806,10 +806,11 @@ Details and hashes: `hwtest-staging/RUN2_RESULTS.md` (Run 19) and `RUN19_PROCEDU
   picture on the real console and the checker phase at the top-left cell of
   each quad is the base colour. On hardware, old-code + compensated-frame
   therefore equals the emulator's old-code + compensated-frame picture;
-  hardware evidence for the orientation rule itself is still missing. The
-  earlier "orientation OK" / "orientation/V verified" wording in Run 19
-  reporting was in fact right; it was the later "corrected interpretation"
-  that called it wrong. The orientation bug was fixed in
+  hardware evidence for the orientation rule itself is still missing. Only
+  the upright picture of that compensated frame was observed on hardware:
+  "orientation OK" was right for that frame, but "orientation/V verified"
+  overclaimed, because the V-axis rule itself is not verified on hardware
+  (Run 20, NOT yet run). The orientation bug was fixed in
   `common/twlhd_pica_tex.c` (remove row flip, keep `v = 1 - t/height`), and
   `tools/check_tex_shot.py` now has a top-left cell phase check. The choice of
   fix (A) rests on the Azahar tile-walk reading (`texture_codec.h:892-897`,
@@ -834,7 +835,7 @@ Details and hashes: `hwtest-staging/RUN2_RESULTS.md` (Run 19) and `RUN19_PROCEDU
 - The original `/twlhd_frame.bin` (1128 B, sha256 `2decd74d...`) was restored
   with read-back.
 
-**Run 19 open item resolved (BUILD/UNIT, 2026-11-14):** "make check_tex_shot.py sample cell centres / accept NTR captures" — the checker now accepts the 400x240 top-screen captures, has a `--snap` option for the JPEG capture, and compares the UR/LL texture cells cell-by-cell around a +-1 px bbox shift; the real capture runs are recorded in `docs/EMULATOR_VALIDATION.md` under "Hardware captures (Run 19)". The Run 19 capture's phase is OK, not white as the bullet above states: build `f89d3bd` used the bottom-up `tools/gen_tex_frames.py` corner order, which compensated the old renderer's row flip (raw pixels, same result with the pristine `e29aa33` checker), and the old-mirror phase FAIL is demonstrated on a derived per-quad mirror of those hardware pixels in the same subsection.
+**Run 19 open item resolved (BUILD/UNIT, 2026-11-14):** "make check_tex_shot.py sample cell centres / accept NTR captures" — the checker now accepts the 400x240 top-screen captures, has a `--snap` option for the JPEG capture, and compares the UR/LL texture cells cell-by-cell around a +-1 px bbox shift; the real capture runs are recorded in `docs/EMULATOR_VALIDATION.md` under "Hardware captures (Run 19)". The Run 19 capture passes phase (compensated frame, see the ORIENTATION bullet above): build `f89d3bd` used the bottom-up `tools/gen_tex_frames.py` corner order, which compensated the old renderer's row flip (raw pixels, same result with the pristine `e29aa33` checker), and the old-mirror phase FAIL is demonstrated on a derived per-quad mirror of those hardware pixels in the same subsection.
 
 ## 5B-2e-2 hardware run (original draft)
 
