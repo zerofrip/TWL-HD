@@ -312,12 +312,12 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 
 #### Status 5B-2d — host-side PICA texture preparation (RGBA8)
 
-Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+Implemented; orientation corrected in this repair round, **EMULATOR** now confirms the corrected orientation, **HARDWARE** has not yet re-verified it:
 
 - `common/twlhd_pica_tex.[ch]`: allocation-free host preparation of a decoded
   RGBA8 image for the PICA200. `twlhd_pica_tex_swizzle_rgba8()` /
   `..._unswizzle_rgba8()` produce/consume 8x8 Morton tiles with A,B,G,R texel
-  bytes and bottom-up tile rows (facts and `file:line` citations in
+  bytes and top-down tile rows (facts and `file:line` citations in
   `docs/DS_GX_RESEARCH.md`, "PICA texture upload (5B-2d)");
   `twlhd_pica_wrap_from_teximage()` maps DS TEXIMAGE_PARAM bits 16-19 to the
   PICA wrap values 0-3; `twlhd_pica_texcoords_from_gx()` normalises DS texel
@@ -335,8 +335,11 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   untextured, and guard-byte harnesses), `tests/host/pica_tex_cli.c` plus the
   independent oracle `tools/pica_tex_oracle.py` and golden cross-check
   `tools/test_pica_tex_golden.py`, all wired into `make test`.
-- Mutation evidence: `docs/reports/5b2d-mutation-report.md` (260 unique
-  mutants, 251 killed, 9 equivalent).
+- Mutation evidence: `docs/reports/5b2d-mutation-report.md` (orientation-fix
+  addendum: 202 unique mutants, 187 killed by test, 0 killed by golden,
+  10 killed by build, 5 equivalent survivors; targeted
+  `swizzle-restore-vflip` and `unswizzle-restore-vflip` both killed by
+  `pica-tex/orientation-rows`).
 - Not done: no renderer/arm11 consumer, no GPU calls, no recorder-side texture
   capture, no v2-format change, no second texture format (RGBA8 only), and no
   hardware verification of the layout, alignment, size limits or sampler
@@ -565,6 +568,34 @@ Rollback:
    `TWLHD_DISABLE_TEXTURE_PATH` or loading untextured frames gives the old path
    without reverting code.
 
+#### Status 5B-2e-2 follow-up: multi-format frames
+
+`common/twlhd_pica_tex.c` changed in the orientation-fix round; `arm11/` was not changed.
+
+- **BUILD:** no product build change. `tools/gen_tex_format_frames.py` writes
+  `twlhd_frame_v2_formats.bin` (8 quads: formats 1 A3I5, 2 I2, 3 I4, 4 I8,
+  5 4x4 with block modes 0-3, 6 A5I3, 7 16bpp, plus a 16x16 I4 quad).
+- **UNIT:** `make test` green, including the new `tools/test_tex_formats.py`
+  (determinism, v2 parse, byte-exact `tex_decode_cli` vs the Python oracle,
+  `twlhd_pica_frame_prepare()` with 8 entries / 8 textures, checker
+  perfect/noise/shift pass and permuted/mirrored/wrong-format/missing fails,
+  hand-computed literal colours per format). No existing assertion weakened.
+- **EMULATOR:** `tools/check_tex_formats.py` on the Azahar host screenshot at
+  frame 199 matches all 8 quads exactly (worst channel deviation 0) once the
+  checker was corrected to expect decoded row 0 at the top quad edge. Reference
+  commands and verbatim output are in `docs/EMULATOR_VALIDATION.md`, subsection
+  "Multi-format frame (5B-2e-2 follow-up)".
+- **FINDING and FIX (orientation):** textures were rendering vertically
+  mirrored: decoded row 0 appeared at the bottom quad edge because
+  `common/twlhd_pica_tex.c` was storing tile rows bottom-up. The Azahar
+  sources (`texture_codec.h:892-897`, `:577-604`) actually store memory tile
+  rows top-down; the old reading of the "bottom-up linear buffer" comment was
+  wrong. Fix (A): removed the `vy = height-1-y` row flip in the swizzle and
+  unswizzle and kept `v = 1 - t/height`. The multi-format checker now pins
+  decoded row 0 at the top edge. HARDWARE re-verification of the corrected
+  orientation has NOT been run.
+- **HARDWARE NOT RUN.**
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in
@@ -768,10 +799,21 @@ Details and hashes: `hwtest-staging/RUN2_RESULTS.md` (Run 19) and `RUN19_PROCEDU
   checker edges), whole top screen mean abs diff 4.38 per channel. The
   hardware picture is shifted about 1 px up/left relative to the emulator
   (cause not identified: rasteriser rule or capture).
+- **ORIENTATION (corrected interpretation):** the Run 19 hardware pictures
+  were vertically mirrored relative to DS semantics: the checker phase at the
+  top-left cell of each quad was white, not the base colour, matching the
+  emulator's mirrored output with the old bottom-up swizzle. The earlier
+  "orientation OK" / "orientation/V verified" wording in Run 19 reporting was
+  wrong; only cell period/structure and reuse were actually validated. The
+  orientation bug was fixed in `common/twlhd_pica_tex.c` (remove row flip,
+  keep `v = 1 - t/height`), and `tools/check_tex_shot.py` now has a top-left
+  cell phase check. A HARDWARE re-run with the corrected build is required to
+  confirm the fixed orientation on real hardware.
 - The script's "UR==LL reuse" sub-check printed FAIL on the snapped hardware
   image (it compares the colour of one corner pixel per quad, which a 1 px
   shift and JPEG edges flip); the cell-centre comparison is the reuse evidence.
-  OPEN ITEM: make check_tex_shot.py sample cell centres.
+  `tools/check_tex_shot.py` now samples a 5x5 mean at the top-left cell centre
+  for its phase check, which is robust to the known ~1 px shift.
 - Over-budget frame (3 x 1024x1024, arena 12 MiB > 8 MiB cap): no hang, no
   garbage; picture equals the emulator fallback (4743 white pixels on both,
   mean abs diff 0.71).

@@ -610,16 +610,28 @@ table is used below, it does not document the texture memory layout).
   identical `xOffsets`/`yOffsets` and tile offset
   `(u & ~7) * 8 + (v & ~7) * width`
   (`src/core/renderer_gl/textures.cpp:94-107`). No source disagrees.
-- **VERIFIED tile rows are stored bottom-up.** Azahar's decode says "Row y of
-  the tile lands on linear row 7 - y"
-  (`texture_codec.h:577-604`) and the tile walk starts tile row 0 at linear row
-  `height - 8`
-  (`((height - 8 - y) * width + x) * bpp`, `texture_codec.h:892-897`) because
-  "In OpenGL the texture origin is in the bottom left corner ... we read/write
-  the linear buffer from the bottom up" (`:892-894`). Panda3DS decodes `v=0`
-  first (`textures.cpp:250-261`) and uploads it as row 0 of
-  `glTexSubImage2D` (`:263`), i.e. the bottom row of the GL texture.
-  So PICA tile row 0 is the bottom of the image.
+- **CONFLICTING SOURCES; chosen: tile rows are stored top-down (Azahar tile walk + EMULATOR + Run 19 observation).** Azahar's linear buffer is
+  bottom-up for OpenGL (`texture_codec.h:892-897`: "we read/write the linear
+  buffer from the bottom up"), so its tile walk starts tile row 0 at linear row
+  `height - 8` (`((height - 8 - y) * width + x) * bpp`, `:892-897`) and
+  `DecodeTile` (:577-604) maps in-tile row `y` to linear row `7 - y` within the
+  tile. Because the tile base is already at linear row `height - 8`, tile row
+  `0` lands on linear row `height - 1`, i.e. the image top row. The first PICA
+  tile row therefore holds the top 8 rows of the image.
+  Panda3DS's decode loop (`textures.cpp:250-263`) walks `v` top-to-bottom over
+  the texture data and passes rows to `glTexSubImage2D` in that order. The first
+  row supplied to `glTexSubImage2D` becomes the bottom row (v=0) of the OpenGL
+  texture, so memory row 0 lands at GL v=0/bottom. This points to the **old**
+  orientation (memory row 0 at the image bottom) unless Panda3DS compensates
+  with a shader-side v flip, which the visible code does not show. The sources
+  therefore conflict: Azahar's tile walk says memory tile row 0 is the image
+  top row, while Panda3DS's upload order says memory row 0 is the GL bottom
+  row. The corrected orientation used here rests on Azahar's tile-walk reading
+  (`texture_codec.h:892-897`, `:577-604`) plus the emulator observation that
+  the old code rendered textures vertically mirrored
+  (`docs/EMULATOR_VALIDATION.md`, "FINDING and FIX (orientation)") plus Run 19
+  hardware matching that old mirrored output (`docs/PHASE5B_PLAN.md`,
+  "5B-2e-2 hardware run").
 - **VERIFIED PICA wrap register values.** `ClampToEdge = 0`,
   `ClampToBorder = 1`, `Repeat = 2`, `MirroredRepeat = 3`
   (Azahar `src/video_core/pica/regs_texturing.h:27-31`; the register fields are
@@ -638,16 +650,44 @@ table is used below, it does not document the texture memory layout).
 
 Let image row `y` be the decoded RGBA8 row (`y=0` is the top row, matching DS
 `t=0`). The tile/Morton facts above place image row `y` at in-memory tile row
-`height-1-y` (bottom-up). PICA samples `v=0` at in-memory row 0, so the GPU
-sees the DS bottom row at `v=0` and the DS top row at `v=1`. For DS texel-space
-`t` (grows downward from the top) the normalised coordinate is therefore
+`y` (top-down): memory row 0 is the image top row.
+
+The sampling side is not unanimous. Azahar's surface upload path maps PICA
+memory tile row 0 to the top row of the OpenGL texture
+(`texture_codec.h:892-897`: linear buffer is GL bottom-up, tile base starts at
+linear row `height - 8`; `:577-604`: `DecodeTile` maps in-tile row `y` to
+linear row `7 - y`), and its fragment shader generator samples `texcoord0`
+directly with `textureLod` / `texture` (`glsl_fs_shader_gen.cpp:1716`,
+`:1736`) with no v-axis flip. Therefore, in Azahar, GL `v=1` samples memory
+row 0. Panda3DS's `Texture::decodeTexture` loop
+(`src/core/renderer_gl/textures.cpp:250-263`) walks `v` top-to-bottom over the
+texture memory and passes rows to `glTexSubImage2D` in that order; the first
+row supplied is the GL bottom row, so Panda3DS places memory row 0 at GL
+`v=0`. No compensating v flip is visible in the Panda3DS code shown here.
+The sources are ambiguous/conflicting on whether memory row 0 is sampled at
+`v=1` (Azahar) or `v=0` (Panda3DS). The statement "PICA samples `v=1` at
+in-memory row 0" is therefore supported by Azahar's upload-plus-shader path
+but not by Panda3DS's upload path; the final choice of `v = 1 - t/height`
+with no row flip in the swizzle rests on (a) the Azahar tile-walk reading,
+(b) the emulator observation that the old code rendered textures vertically
+mirrored (`docs/EMULATOR_VALIDATION.md`, "FINDING and FIX (orientation)"),
+and (c) Run 19 hardware matching that old mirrored output
+(`docs/PHASE5B_PLAN.md`, "5B-2e-2 hardware run").
+
+For DS texel-space `t` (grows downward from the top) the normalised coordinate
+is therefore
 
     u = s / width,      v = 1 - t / height
 
-With no extra flip. Hand-computed literals in `tests/host/test_pica_tex.c`
-(8x8: top row lands on Morton indexes 42..63, which is exactly the Azahar
-diagram read bottom-up) and the independent oracle
+with no extra flip. Hand-computed literals in `tests/host/test_pica_tex.c`
+(8x8: source row 0 lands on Morton indexes 0..21) and the independent oracle
 `tools/pica_tex_oracle.py` encode the same choice.
+
+`libctru` / `citro3d` headers contain no "flip" or "bottom" remarks on the
+RGBA8 layout, and 3dbrew was not reachable from the sandbox; the choice of fix
+(A: remove the row flip in the swizzle, keep `v = 1 - t/height`) is forced by
+the emulator and Run 19 hardware observation that the old code rendered
+textures vertically mirrored.
 
 ### Deliberate scope choices
 
@@ -716,7 +756,7 @@ plain `memcpy` of the already-Mortonised RGBA8 bytes prepared by
 
 **Justification:** The prepared bytes are already in the PICA200 RGBA8 layout
 (8x8 tiles, Morton order inside a tile, A,B,G,R component order, tile rows
-bottom-up — section "PICA texture upload (5B-2d)"). A raw copy keeps that
+top-down — section "PICA texture upload (5B-2d)"). A raw copy keeps that
 layout exactly. Because `C3D_TexLoadImage`'s internal behaviour is **UNVERIFIED**
 (only the header is installed), feeding prepared bytes through an API that may
 swizzle again risks a double-swizzle corruption. The raw-copy path is fully
