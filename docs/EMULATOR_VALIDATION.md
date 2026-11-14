@@ -540,6 +540,139 @@ pass/fail cases and hand-computed literal colours per format.
 a stdin description, so the test feeds it the generator's records and three
 vertices per quad and asserts `result=OK`.
 
+### Behaviour frame (translucency, colour 0, wrap)
+
+**BUILD/UNIT/EMULATOR evidence; HARDWARE NOT RUN.** This frame exercises the
+three texture behaviours not previously shown on screen: translucent texels
+(A3I5/A5I3 alpha below full), colour-0 transparency (TEXIMAGE_PARAM bit 29 on
+formats 2/3/4) and the DS wrap bits 16-19 (repeat / clamp / mirrored repeat /
+flip-only clamp). `tools/check_tex_behaviour.py` compares every sampled cell
+against colours computed independently from `tools/tex_decode_oracle.py` plus
+its own wrap function; expectations were NOT adjusted after the run.
+
+Generator and checker:
+
+    python3 tools/gen_tex_behaviour_frames.py /tmp/beh_frames
+    python3 tools/gen_tex_behaviour_frames.py --describe   # layout + expected
+    python3 tools/check_tex_behaviour.py /tmp/beh_shot_199.ppm [--tolerance 28]
+
+`twlhd_frame_v2_behaviour.bin` (2776 bytes, sha256
+`22cc1db3ce4275130d56323aea67278d3098d92368f9ccc4918195cc21f9ac93`) holds eight
+non-overlapping quads in a 4x2 grid of the 400x240 top screen, white vertex
+colour, polygon alpha 31:
+
+| quad | role | texture |
+|---|---|---|
+| 0 | A3I5 alpha | alpha 7/5/3/0 in column pairs, rows identical |
+| 1 | A5I3 alpha | alpha 31/20/10/0 in column pairs, rows identical |
+| 2 | I4 key0 on | bit 29 set; index 0 transparent, index 1 cyan |
+| 3 | I4 key0 off | same bytes/palette, bit 29 clear; index 0 white |
+| 4 | repeat ST | bits 16,17; texcoords 0..2 both axes |
+| 5 | clamp ST | bits 16-19 clear; texcoords -0.5..1.5 |
+| 6 | mirror ST | bits 16-19; texcoords 0..2 |
+| 7 | flip-only clamp | bits 18,19 only (DS flip without repeat = clamp) |
+
+Q4-Q7 share one asymmetric opaque 8x8 16bpp ramp: R = x*4, G = y*4, a unique
+marker B=31 at (0,0) and B=16 at (7,7). Translucent expectations are
+`texel_rgb*a + clear*(1-a)` with `clear = (16,16,24)` and the oracle's 0..255
+alpha; colour-0 texels decode to alpha 0 and therefore also blend to clear.
+Wrap expectations use the DS-wrapped texel coordinate computed from the DS
+t/s texel coordinate (repeat = mod, mirrored repeat = triangle about h, clamp =
+min/max), with decoded row 0 pinned at the top quad edge. Cells are mapped from
+the generator's known rect, not from a bbox search, because transparent texels
+render exactly clear and would shrink the bbox (the bbox is still reported).
+
+Emulator run (same procedure as the multi-format frame above; the ARM11 3dsx
+is the current normal build):
+
+    make azahar-host
+    make -C arm11
+    python3 tools/gen_tex_behaviour_frames.py /tmp/beh_frames
+    mkdir -p /tmp/beh_sd
+    cp /tmp/beh_frames/twlhd_frame_v2_behaviour.bin /tmp/beh_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/beh_shot --sd-root /tmp/beh_sd
+    python3 tools/check_tex_behaviour.py /tmp/beh_shot_199.ppm
+
+`/tmp/beh_shot_199.ppm` is 400x480, sha256
+`0d58504c1b54d6499035aee58fa9111a54c3d47948acfe577b7f9d7f0c936a3e`. Verbatim
+checker output (exit 1):
+
+    quad 0 role=A3I5 alpha cells=64/64 worst=0 shift=(0,0) bbox=(44, 11, 91, 110) OK
+    quad 1 role=A5I3 alpha cells=64/64 worst=0 shift=(0,0) bbox=(116, 11, 163, 110) OK
+    quad 2 role=I4 key0 on cells=64/64 worst=0 shift=(0,0) bbox=(188, 11, 251, 110) OK
+    quad 3 role=I4 key0 off cells=64/64 worst=0 shift=(0,0) bbox=(260, 11, 355, 110) OK
+    quad 4 role=repeat ST cells=128/256 worst=255 shift=(0,0) bbox=(44, 131, 107, 230) FAIL
+      cell(0,8) expected=(0, 0, 255) measured=(0, 231, 0)
+      cell(1,8) expected=(33, 0, 0) measured=(33, 231, 0)
+      cell(2,8) expected=(66, 0, 0) measured=(66, 231, 0)
+      cell(3,8) expected=(99, 0, 0) measured=(99, 231, 0)
+      cell(4,8) expected=(132, 0, 0) measured=(132, 231, 0)
+      cell(5,8) expected=(165, 0, 0) measured=(165, 231, 0)
+      cell(6,8) expected=(198, 0, 0) measured=(198, 231, 0)
+      cell(7,8) expected=(231, 0, 0) measured=(231, 231, 132)
+      ... more mismatches omitted
+    quad 5 role=clamp ST cells=256/256 worst=0 shift=(0,0) bbox=(116, 131, 179, 230) OK
+    quad 6 role=mirror ST cells=144/256 worst=255 shift=(0,0) bbox=(188, 131, 251, 230) FAIL
+      cell(0,9) expected=(0, 198, 0) measured=(0, 231, 0)
+      cell(1,9) expected=(33, 198, 0) measured=(33, 231, 0)
+      cell(2,9) expected=(66, 198, 0) measured=(66, 231, 0)
+      cell(3,9) expected=(99, 198, 0) measured=(99, 231, 0)
+      cell(4,9) expected=(132, 198, 0) measured=(132, 231, 0)
+      cell(5,9) expected=(165, 198, 0) measured=(165, 231, 0)
+      cell(6,9) expected=(198, 198, 0) measured=(198, 231, 0)
+      cell(7,9) expected=(231, 198, 0) measured=(231, 231, 132)
+      ... more mismatches omitted
+    quad 7 role=flip-only clamp cells=256/256 worst=0 shift=(0,0) bbox=(260, 131, 355, 230) OK
+    exit 1
+
+**PASSING roles.** Q0/Q1 (A3I5 and A5I3 translucency, alpha 7/5/3/0 and
+31/20/10/0) match the blend prediction exactly, worst channel deviation 0 —
+the alpha-0 pairs render as clear, so translucency and the 0..255 alpha
+expansion agree on screen. Q2 (I4 with bit 29 set) renders every index-0 texel
+as clear, so colour-0 transparency is applied by the decode/blend path. Q3
+(bit 29 clear) shows the bright palette colour at index 0. Q5 (clamp) and Q7
+(flip-only clamp) match: DS flip without repeat behaves as clamp.
+
+**FINDING (emulator): negative texture coordinates sample one texel off.**
+Q4 (REPEAT) matches 128/256 cells and Q6 (MIRRORED_REPEAT) 144/256. In both,
+every failing cell has DS `t > height`, i.e. PICA `v = 1 - t/h < 0`; the S axis
+(`u` up to 2, always positive and > 1) repeats/mirrors correctly, and all rows
+with `v >= 0` pass. In the negative half the measured texel row is one row
+away from the prediction, not the same row: Q4 at `t=8.5` predicts row 0 but
+measures row 7, at `t=9.5` predicts 1 measures 0, ... at `t=15.5` predicts 7
+measures 6; Q6 at `t=9.5` predicts row 6 but measures 7, at `t=10.5` predicts 5
+measures 6, ... at `t=15.5` predicts 0 measures 1. That is the signature of a
+texel index that truncates a negative coordinate toward zero instead of
+flooring it before applying the wrap mode (truncation equals floor for the
+positive half, so only `v < 0` is shifted).
+
+Layer diagnosis: **emulator (Azahar software rasterizer)**, not the DS rule,
+the prepare path or the renderer blend/TexEnv. Evidence: (1)
+`pica_frame_cli` on the same records reports `texture 4 ... wrap_s=2 wrap_t=2`
+and `texture 6 ... wrap_s=3 wrap_t=3` (`twlhd_pica_wrap_from_teximage`), and
+the vertex 12-14 `v` values are `1.0, 1.0, -1.0`, i.e. the negative half comes
+from the DS `t > h` texcoords through the pinned `v = 1 - t/h` mapping; (2) the
+renderer passes those wrap codes straight to `C3D_TexSetWrap`; (3) the positive
+half of the same axes wraps correctly. A real PICA200 `GPU_REPEAT` /
+`GPU_MIRRORED_REPEAT` floors the wrapped coordinate, so this is an emulator
+sampling error to re-check on hardware (see below), not an expectation change.
+No tolerance or expected colour was altered.
+
+**HARDWARE NOT RUN** for this behaviour frame: wrap on negative coordinates,
+translucency and colour-0 on a real console remain unverified.
+
+UNIT evidence: `tools/test_tex_behaviour.py` (run by `make test`) covers the
+generator determinism (2776 bytes), v2 parse (`result=OK`), `pica_frame_cli`
+prepare (`entry_count=8`, `texture_count=8`, wrap codes 2/0/3/0 for Q4-Q7),
+the checker's perfect/noise/1-px-shift pass cases, the mandated fail cases
+(translucent drawn opaque, colour-0 not applied, repeat drawn clamped, mirror
+drawn as repeat, flip-only drawn as mirrored, vertically flipped wrap quad,
+missing quad) and hand-computed literal blend/wrap colours.
+
 ## Hardware captures (Run 19)
 
 **HARDWARE OBSERVED (Run 19, 2026-11-14), re-checked with the current
