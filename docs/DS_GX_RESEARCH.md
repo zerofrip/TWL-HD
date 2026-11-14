@@ -610,7 +610,7 @@ table is used below, it does not document the texture memory layout).
   identical `xOffsets`/`yOffsets` and tile offset
   `(u & ~7) * 8 + (v & ~7) * width`
   (`src/core/renderer_gl/textures.cpp:94-107`). No source disagrees.
-- **VERIFIED tile rows are stored top-down.** Azahar's linear buffer is
+- **CONFLICTING SOURCES; chosen: tile rows are stored top-down (Azahar tile walk + EMULATOR + Run 19 observation).** Azahar's linear buffer is
   bottom-up for OpenGL (`texture_codec.h:892-897`: "we read/write the linear
   buffer from the bottom up"), so its tile walk starts tile row 0 at linear row
   `height - 8` (`((height - 8 - y) * width + x) * bpp`, `:892-897`) and
