@@ -780,6 +780,36 @@ is relative, and a numeric in-console readout would settle whether the blend
 is truly ineffective or only appears so in photos. Requires its own approval
 before any code (section 6).
 
+## 5B-2e-2 Run 20 (2026-11-14): texture orientation fix and all seven DS formats on hardware
+
+**HARDWARE OBSERVED (Run 20, 2026-11-14 16:11-16:15, owner-approved, assistant-executed
+under CONSOLE_ACCESS_POLICY.md).** Build main `e29aa33` (`twlhd-arm11-tex2.3dsx`,
+sha256 `f5e3c89b...`), same method as Runs 18/19. Details and hashes:
+`hwtest-staging/RUN2_RESULTS.md` (Run 20), `RUN20_PROCEDURE.md`.
+
+- Control frame: `tools/check_tex_shot.py --frame ctl --snap` PASS.
+- Standard textured frame (DS-correct corner order): `--frame tex --snap` PASS,
+  including the PHASE check (top-left cell colour) in all four regions.
+- Multi-format frame (fmt 1 A3I5, 2 I2, 3 I4, 4 I8, 5 4x4 with block modes 0-3,
+  6 A5I3, 7 16bpp, plus a 16x16 I4): `tools/check_tex_formats.py` at its default
+  tolerance 24: quads 0-6 pass every cell (worst per-channel deviation 3..5),
+  decoded row 0 at the TOP of each quad (the corrected orientation). Quad 7
+  (16x16 I4, cells of about 6 px) passes 254/256 cells, worst deviation 26 > 24 on
+  two cells, so the script exits 1 at the default tolerance; with
+  `--tolerance 28` it passes 256/256. Interpretation: JPEG chroma blur at small
+  cells, not a mis-render (a mirrored or permuted render deviates by 100+ levels).
+  OPEN ITEM: the default tolerance of `check_tex_formats.py` is slightly tight
+  for 16x16 cells on a JPEG capture.
+- Over-budget frame: no hang; capture colour counts identical to Run 19.
+- Original `/twlhd_frame.bin` restored with read-back OK.
+- Result: on the real console the corrected orientation and all seven DS texture
+  formats render as the independent oracle predicts (full-alpha texels). This
+  closes the "Run 20 NOT yet run" caveats above. NOT shown: translucent texels
+  (A3I5/A5I3 alpha < full), colour-0 transparency, wrap/clamp on screen,
+  texture-matrix modes 2/3, performance, large-texture memory behaviour, and
+  DS-hardware accuracy of the equations. The bottom screen is black in the NTR
+  capture, so the build-id line cannot be read (3dsx sha256 verified before upload).
+
 ## 5B-2e-2 hardware run (EXECUTED 2026-11-14 as Run 19; the text below is the original draft)
 
 **HARDWARE OBSERVED (Run 19, 2026-11-14, owner-approved, assistant-executed under
