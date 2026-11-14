@@ -565,6 +565,30 @@ Rollback:
    `TWLHD_DISABLE_TEXTURE_PATH` or loading untextured frames gives the old path
    without reverting code.
 
+#### Status 5B-2e-2 follow-up: multi-format frames
+
+Tooling + docs only; no `arm11/` or `common/` change.
+
+- **BUILD:** no product build change. `tools/gen_tex_format_frames.py` writes
+  `twlhd_frame_v2_formats.bin` (8 quads: formats 1 A3I5, 2 I2, 3 I4, 4 I8,
+  5 4x4 with block modes 0-3, 6 A5I3, 7 16bpp, plus a 16x16 I4 quad).
+- **UNIT:** `make test` green, including the new `tools/test_tex_formats.py`
+  (determinism, v2 parse, byte-exact `tex_decode_cli` vs the Python oracle,
+  `twlhd_pica_frame_prepare()` with 8 entries / 8 textures, checker
+  perfect/noise/shift pass and permuted/mirrored/wrong-format/missing fails,
+  hand-computed literal colours per format). No existing assertion weakened.
+- **EMULATOR:** `tools/check_tex_formats.py` on the Azahar host screenshot at
+  frame 199 matches all 8 quads exactly (worst channel deviation 0). Reference
+  commands and verbatim output are in `docs/EMULATOR_VALIDATION.md`, subsection
+  "Multi-format frame (5B-2e-2 follow-up)".
+- **FINDING (orientation):** textures render vertically mirrored in Azahar:
+  decoded row 0 appears at the bottom quad edge, while the "V-axis derivation"
+  in `docs/DS_GX_RESEARCH.md` predicts the top edge. The checker pins the
+  emulator-observed orientation; no tolerance was widened and the flip is not
+  fixed (out of scope). Maintainer follow-up decides whether the swizzle
+  direction or the prepared `v` is wrong.
+- **HARDWARE NOT RUN.**
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in

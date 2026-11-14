@@ -384,6 +384,112 @@ Reproduced in this sandbox, 2026-11-14, with the external core
 - No depth, blending or wrap-mode behaviour is verified beyond the chosen
   MODULATE + NEAREST path.
 
+### Multi-format frame (5B-2e-2 follow-up)
+
+**BUILD/UNIT/EMULATOR evidence; HARDWARE NOT RUN.** This subsection adds one
+frame that exercises every DS texture format the renderer can decode (1 A3I5,
+2 I2, 3 I4, 4 I8, 5 compressed 4x4 with block modes 0-3, 6 A5I3, 7 16bpp
+reference) plus a 16x16 I4 quad, and a checker that compares every texel cell
+against colours computed by the independent Python oracle
+(`tools/tex_decode_oracle.py`).
+
+Generator and frame:
+
+    python3 tools/gen_tex_format_frames.py /tmp/fmt_frames
+    python3 tools/gen_tex_format_frames.py --describe   # quad -> format -> grid
+
+`twlhd_frame_v2_formats.bin` (3136 bytes) holds eight non-overlapping quads in
+a 4x2 grid of the 400x240 top screen with white vertex colours, so MODULATE
+shows the texels unchanged:
+
+| quad | format | size | texture |
+|---|---|---|---|
+| 0 | 1 A3I5 | 8x8 | 8-colour cycle, alpha 7 |
+| 1 | 2 I2 | 8x8 | palette entries 1-3 (index 0 unused) |
+| 2 | 3 I4 | 8x8 | 15-colour cycle (index 0 unused) |
+| 3 | 4 I8 | 8x8 | 15-colour cycle (index 0 unused) |
+| 4 | 5 4x4 | 8x8 | one block per mode 0/1/2/3, distinct palette windows |
+| 5 | 6 A5I3 | 8x8 | 8-colour cycle, alpha 31 |
+| 6 | 7 16bpp | 8x8 | 8-colour cycle, bit 15 set |
+| 7 | 3 I4 | 16x16 | 15-colour diagonal ramp |
+
+Every texel is fully opaque (palette bit 15 set; the decoder masks it for
+formats 1-6). Colour-0 choice: TEXIMAGE_PARAM bit 29 is clear **and** palette
+index 0 is never a visible colour in formats 2/3/4; formats 1/5/6/7 do use
+palette entry 0 (they ignore KeyColor0). The four 4x4 blocks use palette
+windows at byte offsets 0/8/12/20 and never reference the transparent slot 3
+of modes 0/1.
+
+Clip coordinates are derived from the desired top-screen rectangles with the
+emulator-observed mapping: the DS viewport is pillar-boxed into the central
+320 pixels, so `x_screen = 200 + 160 * (x_clip / 4096)` and
+`y_screen = (1 - y_clip / 4096) * 120`. The 320-wide region also keeps every
+vertex inside `x_clip = +-4096`, so PICA does not clip the quads.
+
+Checker:
+
+    python3 tools/check_tex_formats.py /tmp/fmt_shot_199.ppm [--tolerance 24]
+
+It accepts a 400x240 PPM or a 400x480 PPM (top screen = upper 240 rows), finds
+each quad's bounding box inside its grid cell, samples the centre of every
+texel cell with a 3x3 mean and compares against the oracle's expected RGB with
+a per-channel tolerance (default 24, JPEG-capture friendly). Whole-quad shifts
+`dx, dy in {-1, 0, 1}` are tried and the best is reported. It exits non-zero
+if any cell, or a whole quad, is missing or outside tolerance. The expected
+texel-row orientation is pinned once: **decoded row 0 is the bottom screen edge
+of the quad**, as the emulator shows it (see the finding below). There is no
+flip search.
+
+Emulator run (same procedure as the 5B-2e-2 reference run above; the core was
+rebuilt from Azahar `9c38437` at the path below and the ARM11 3dsx is the
+current normal build):
+
+    make azahar-host
+    make -C arm11
+    python3 tools/gen_tex_format_frames.py /tmp/fmt_frames
+    mkdir -p /tmp/fmt_sd
+    cp /tmp/fmt_frames/twlhd_frame_v2_formats.bin /tmp/fmt_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/fmt_shot --sd-root /tmp/fmt_sd
+    python3 tools/check_tex_formats.py /tmp/fmt_shot_199.ppm
+
+Real output (`sha256 b59899148c1ea7a34202caccf0776a084f0fc022f4f12cf608e33b96ad5ad48c`):
+
+    quad 0 fmt=1 A3I5 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(44, 11, 107, 110) OK
+    quad 1 fmt=2 I2 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(116, 11, 179, 110) OK
+    quad 2 fmt=3 I4 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(188, 11, 251, 110) OK
+    quad 3 fmt=4 I8 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(260, 11, 355, 110) OK
+    quad 4 fmt=5 4x4 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(44, 131, 107, 230) OK
+    quad 5 fmt=6 A5I3 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(116, 131, 179, 230) OK
+    quad 6 fmt=7 16bpp 8x8 cells=64/64 worst=0 shift=(0,0) bbox=(188, 131, 251, 230) OK
+    quad 7 fmt=3 I4 16x16 cells=256/256 worst=0 shift=(0,0) bbox=(260, 131, 355, 230) OK
+
+FINDING (orientation, not a per-format decode error): with the pinned pin the
+checker is exact, but the pin contradicts the derivation in
+`docs/DS_GX_RESEARCH.md` ("V-axis derivation"), which predicts decoded row 0 at
+the **top** quad edge for `v = 1 - t/height`. In Azahar every quad shows
+decoded row 0 at the **bottom** edge, i.e. textures render vertically mirrored.
+This was confirmed with a probe before pinning: on quad 0 the screen-top texel
+band is decoded row 7 (pattern index `(tx + 14) % 8`) and the bottom band is
+row 0, while columns are not mirrored. The checker expectation was pinned to
+the emulator-observed orientation so it validates the decoder/palette work
+(all eight formats otherwise match byte-exactly, worst deviation 0); no
+tolerance was widened and no expected colour was swapped. The flip itself is
+not fixed here (`arm11/` and `common/` are out of scope for this task); the
+maintainer decides whether the swizzle direction or the prepared `v` needs the
+follow-up.
+
+UNIT evidence: `tools/test_tex_formats.py` (run by `make test`) covers
+determinism, the v2 parser, byte-exact `tex_decode_cli` agreement with the
+oracle, `twlhd_pica_frame_prepare()` (8 entries, 8 textures), the checker's
+pass/fail cases and hand-computed literal colours per format.
+`pica_frame_cli` cannot read a v2 frame file: it builds a synthetic frame from
+a stdin description, so the test feeds it the generator's records and three
+vertices per quad and asserts `result=OK`.
+
 ## Licensing posture (not legal advice)
 
 DeSmuME (GPL-2.0-or-later) is used only as an external program. TWL-HD (Apache-2.0) neither links nor vendors it. Separate repositories alone are
