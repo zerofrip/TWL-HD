@@ -659,11 +659,22 @@ from the DS `t > h` texcoords through the pinned `v = 1 - t/h` mapping; (2) the
 renderer passes those wrap codes straight to `C3D_TexSetWrap`; (3) the positive
 half of the same axes wraps correctly. A real PICA200 `GPU_REPEAT` /
 `GPU_MIRRORED_REPEAT` floors the wrapped coordinate, so this is an emulator
-sampling error to re-check on hardware (see below), not an expectation change.
-No tolerance or expected colour was altered.
+sampling error, not an expectation change. No tolerance or expected colour was
+altered.
 
-**HARDWARE NOT RUN** for this behaviour frame: wrap on negative coordinates,
-translucency and colour-0 on a real console remain unverified.
+**HARDWARE OBSERVED (Run 21, 2026-11-14 16:49-16:51, owner-approved):** the same
+frame on the real New 3DS (`twlhd-arm11-tex2.3dsx`, main `e29aa33`, arm11
+unchanged through `d3279ed`; `tools/check_tex_behaviour.py` at its default
+tolerance 28 on the 400x240 NTR capture) passes EVERY cell of ALL eight quads:
+Q0 A3I5 64/64 (worst 2), Q1 A5I3 64/64 (3), Q2 colour-0 on 64/64 (3), Q3 colour-0
+off 64/64 (3), Q4 REPEAT 256/256 (26), Q5 CLAMP 256/256 (23), Q6 MIRRORED_REPEAT
+256/256 (22), Q7 flip-only 256/256 (4). The worst deviations 22-26 in Q4-Q6 are
+JPEG blur on small cells and stay inside the tolerance. So the negative-
+coordinate off-by-one is an Azahar emulator error: the real PICA200 floors the
+coordinate and renders the predicted wrap, and no change to `common/` or
+`arm11/` is needed. Details: `hwtest-staging/RUN2_RESULTS.md` (Run 21). Not
+shown on hardware: texture-matrix modes 2/3, other palette bases, performance,
+large-texture memory behaviour.
 
 UNIT evidence: `tools/test_tex_behaviour.py` (run by `make test`) covers the
 generator determinism (2776 bytes), v2 parse (`result=OK`), `pica_frame_cli`

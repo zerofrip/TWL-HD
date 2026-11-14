@@ -626,7 +626,14 @@ Rollback:
   predicted on the emulator. (2) flip-without-repeat behaves as clamp as the DS
   rule says. (3) repeat/mirrored repeat sample negative texture coordinates one
   texel off on the emulator (Q4 128/256, Q6 144/256 cells).
-- **HARDWARE NOT RUN.**
+- **HARDWARE OBSERVED (Run 21, 2026-11-14, owner-approved):** all eight quads
+  pass every cell on the real New 3DS (A3I5/A5I3 translucency, colour-0
+  transparency on/off, REPEAT, CLAMP, MIRRORED_REPEAT, flip-only = clamp),
+  including the negative-`v` half where the EMULATOR is off by one texel. The
+  emulator discrepancy (finding 3 above) is therefore an Azahar sampling error;
+  the TWL-HD prepare path and renderer need no change. Not shown: texture-matrix
+  modes 2/3, other palette bases, performance, large-texture memory behaviour.
+  Details: `hwtest-staging/RUN2_RESULTS.md` (Run 21).
 
 ## 4. Where the DS GX equations must come from
 
