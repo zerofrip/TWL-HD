@@ -825,6 +825,8 @@ Details and hashes: `hwtest-staging/RUN2_RESULTS.md` (Run 19) and `RUN19_PROCEDU
 - The original `/twlhd_frame.bin` (1128 B, sha256 `2decd74d...`) was restored
   with read-back.
 
+**Run 19 open item resolved (BUILD/UNIT, 2026-11-14):** "make check_tex_shot.py sample cell centres / accept NTR captures" — the checker now accepts the 400x240 top-screen captures, has a `--snap` option for the JPEG capture, and compares the UR/LL texture cells cell-by-cell around a +-1 px bbox shift; the real capture runs are recorded in `docs/EMULATOR_VALIDATION.md` under "Hardware captures (Run 19)". The Run 19 capture's phase is OK, not white as the bullet above states: build `f89d3bd` used the bottom-up `tools/gen_tex_frames.py` corner order, which compensated the old renderer's row flip (raw pixels, same result with the pristine `e29aa33` checker), and the old-mirror phase FAIL is demonstrated on a derived per-quad mirror of those hardware pixels in the same subsection.
+
 ## 5B-2e-2 hardware run (original draft)
 
 This section is a **DRAFT** only. No SD/console/network scripts are created by
