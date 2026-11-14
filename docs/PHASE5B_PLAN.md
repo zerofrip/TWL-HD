@@ -312,7 +312,7 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 
 #### Status 5B-2d — host-side PICA texture preparation (RGBA8)
 
-Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
+Implemented; orientation corrected in this repair round, **EMULATOR** now confirms the corrected orientation, **HARDWARE** has not yet re-verified it:
 
 - `common/twlhd_pica_tex.[ch]`: allocation-free host preparation of a decoded
   RGBA8 image for the PICA200. `twlhd_pica_tex_swizzle_rgba8()` /
@@ -336,7 +336,8 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   independent oracle `tools/pica_tex_oracle.py` and golden cross-check
   `tools/test_pica_tex_golden.py`, all wired into `make test`.
 - Mutation evidence: `docs/reports/5b2d-mutation-report.md` (orientation-fix
-  addendum: 202 unique mutants, 197 killed, 5 equivalent; targeted
+  addendum: 202 unique mutants, 187 killed by test, 0 killed by golden,
+  10 killed by build, 5 equivalent survivors; targeted
   `swizzle-restore-vflip` and `unswizzle-restore-vflip` both killed by
   `pica-tex/orientation-rows`).
 - Not done: no renderer/arm11 consumer, no GPU calls, no recorder-side texture
@@ -569,7 +570,7 @@ Rollback:
 
 #### Status 5B-2e-2 follow-up: multi-format frames
 
-Tooling + docs only; no `arm11/` or `common/` change.
+`common/twlhd_pica_tex.c` changed in the orientation-fix round; `arm11/` was not changed.
 
 - **BUILD:** no product build change. `tools/gen_tex_format_frames.py` writes
   `twlhd_frame_v2_formats.bin` (8 quads: formats 1 A3I5, 2 I2, 3 I4, 4 I8,

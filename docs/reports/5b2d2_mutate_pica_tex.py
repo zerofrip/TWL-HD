@@ -131,6 +131,7 @@ def display(value):
 
 # Targeted mutants that the systematic generator cannot produce:
 # (description, old substring, new substring). The replacement must be unique.
+TARGETED_DESCS = {"swizzle-restore-vflip", "unswizzle-restore-vflip"}
 TARGETED = [
     ("swizzle-restore-vflip",
      """    for (y = 0; y < height; y++) {
@@ -203,8 +204,11 @@ def mutants(text):
 
     # Add targeted mutants by unique substring replacement.
     for desc, old, new in TARGETED:
-        if text.count(old) != 1:
-            continue
+        old_count = text.count(old)
+        if old_count != 1:
+            raise ValueError(
+                f"targeted mutant {desc!r}: substring appears {old_count} times, expected exactly 1"
+            )
         new_text = text.replace(old, new, 1)
         if new_text in seen or new_text == text:
             continue
@@ -261,7 +265,7 @@ def run_one_mutant(root, original, line_no, desc, new_text):
 def worker(args):
     """Process one chunk of mutants in a private repository copy."""
     worker_index, chunk, original, source_root = args
-    temp_root = Path(tempfile.mkdtemp(prefix=f"mutate_pica_frame_w{worker_index}_"))
+    temp_root = Path(tempfile.mkdtemp(prefix=f"mutate_pica_tex_w{worker_index}_"))
     try:
         # Copy the working tree (including uncommitted changes and build
         # artifacts) so each worker is independent.
@@ -280,6 +284,7 @@ def worker(args):
         counts = {"test": 0, "golden": 0, "build": 0, "survived": 0}
         survivors = []
         killed = []
+        targeted_steps = {}
         for line_no, desc, new_text in chunk:
             step, m_line, m_desc = run_one_mutant(
                 temp_root, original, line_no, desc, new_text)
@@ -287,19 +292,25 @@ def worker(args):
             if step is None:
                 counts["survived"] += 1
                 survivors.append((m_line, m_desc))
+                if desc in TARGETED_DESCS:
+                    targeted_steps[desc] = None
             else:
                 counts[step] += 1
                 killed.append((m_line, m_desc, step))
-        return {"counts": counts, "survivors": survivors, "killed": killed}
+                if desc in TARGETED_DESCS:
+                    targeted_steps[desc] = step
+        return {"counts": counts, "survivors": survivors, "killed": killed,
+                "targeted_steps": targeted_steps}
     finally:
         shutil.rmtree(temp_root, ignore_errors=True)
 
 
 def run_sequential(original):
     """Original single-process path, kept for --jobs 1."""
-    scratch = Path(tempfile.mkdtemp(prefix="mutate_pica_frame_"))
+    scratch = Path(tempfile.mkdtemp(prefix="mutate_pica_tex_"))
     counts = {"test": 0, "golden": 0, "build": 0, "survived": 0}
     survivors = []
+    targeted_steps = {}
     try:
         write_target(ROOT, original)
         if not build(ROOT):
@@ -333,11 +344,15 @@ def run_sequential(original):
             if step is None:
                 counts["survived"] += 1
                 survivors.append((line_no, desc))
+                if desc in TARGETED_DESCS:
+                    targeted_steps[desc] = None
                 print(f"line {line_no} {desc} -> SURVIVED", flush=True)
             else:
                 counts[step] += 1
+                if desc in TARGETED_DESCS:
+                    targeted_steps[desc] = step
                 print(f"line {line_no} {desc} -> KILLED({step})", flush=True)
-        return counts, survivors, len(all_mutants)
+        return counts, survivors, len(all_mutants), targeted_steps
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
@@ -366,14 +381,19 @@ def main():
             return 2
         print("baseline: build OK, test OK, golden OK", flush=True)
 
-        all_mutants = mutants(original)
+        try:
+            all_mutants = mutants(original)
+        except ValueError as exc:
+            print(f"FATAL: {exc}", file=sys.stderr, flush=True)
+            return 3
         print(f"mutants: {len(all_mutants)} unique", flush=True)
 
+        targeted_steps = {}
         if args.jobs <= 1:
             result = run_sequential(original)
             if result is None:
                 return 2
-            counts, survivors, total = result
+            counts, survivors, total, targeted_steps = result
         else:
             chunks = [[] for _ in range(args.jobs)]
             for i, m in enumerate(all_mutants):
@@ -401,6 +421,7 @@ def main():
                 for k, v in r["counts"].items():
                     counts[k] += v
                 survivors.extend(r["survivors"])
+                targeted_steps.update(r.get("targeted_steps", {}))
             if errors:
                 for e in errors:
                     print(e, flush=True)
@@ -427,6 +448,10 @@ def main():
         print(f"killed by build:  {counts['build']}", flush=True)
         print(f"survived:         {counts['survived']}", flush=True)
         print(f"total:            {total}", flush=True)
+        for desc, _, _ in TARGETED:
+            step = targeted_steps.get(desc)
+            status = "SURVIVED" if step is None else f"KILLED({step})"
+            print(f"targeted {desc}: {status}", flush=True)
         if survivors:
             print("survivors:", flush=True)
             for line_no, desc in sorted(survivors, key=lambda x: (x[0], x[1])):

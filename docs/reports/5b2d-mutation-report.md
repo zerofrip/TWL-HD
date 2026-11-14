@@ -382,15 +382,37 @@ uses the same artifacts as `make test`:
 
 **Results: 202 unique mutants, 197 killed, 5 equivalent survivors.**
 
-| Set | Unique sources | Killed by test | Killed by build | Equivalent survivors |
+Verbatim runner totals:
+
+```text
+killed by test:   187
+killed by golden: 0
+killed by build:  10
+survived:         5
+total:            202
+targeted swizzle-restore-vflip: KILLED(test)
+targeted unswizzle-restore-vflip: KILLED(test)
+survivors:
+  line 27 const 8 -> 9
+  line 29 const 8 -> 9
+  line 33 const 1 -> 2
+  line 33 const 1024 -> 1025
+  line 33 const 8 -> 7
+common/ restored: YES
+```
+
+Per-set split (systematic + targeted = total):
+
+| Set | Unique sources | Killed by test | Killed by golden | Killed by build | Survivors |
 |---|---|---:|---:|---:|---:|
-| systematic | 200 | 187 | 10 | 5 |
-| targeted | 2 | 2 | 0 | 0 |
+| systematic | 200 | 185 | 0 | 10 | 5 |
+| targeted | 2 | 2 | 0 | 0 | 0 |
+| total | 202 | 187 | 0 | 10 | 5 |
 
 Targeted mutants (the systematic ±1/op-swap generator cannot produce the
 `height-1-y` row flip):
 
-| Mutant | Killing step | New test that kills it |
+| Mutant | Result | Killing step | New test that kills it |
 |---|---|---|---|
 | `swizzle-restore-vflip` | KILLED | `test_pica_tex` | `pica-tex/orientation-rows`: row 0 red must land on Morton indexes 0..21 |
 | `unswizzle-restore-vflip` | KILLED | `test_pica_tex` | `pica-tex/roundtrip-*`: unswizzling with a restored flip does not round-trip |
