@@ -489,7 +489,7 @@ new top-pin checker reports:
     quad 7 fmt=3 I4 16x16 cells=256/256 worst=0 shift=(0,0) bbox=(260, 131, 355, 230) OK
 
 FINDING and FIX (orientation): textures were rendering vertically mirrored in
-both Azahar and Run 19 hardware because `common/twlhd_pica_tex.c` stored PICA
+Azahar (emulator) because `common/twlhd_pica_tex.c` stored PICA
 texture memory with a vertical row flip (`vy = height-1-y`) while keeping
 `v = 1 - t/height`. The top vertices (`t=0`, `v=1`) therefore sampled memory
 row 0, which the old swizzle filled with the image bottom row, so decoded row 0
@@ -506,8 +506,13 @@ row given to `glTexSubImage2D` is the bottom row (v=0) of the GL texture, so
 memory row 0 lands at GL v=0/bottom. Panda3DS therefore points to the **old**
 orientation while Azahar's tile walk points to the new one — the sources are
 ambiguous/conflicting. Fix (A) rests on the Azahar tile-walk reading plus the
-emulator observation that the old code rendered textures vertically mirrored
-plus Run 19 hardware matching that old mirrored output. Fix (A): removed the
+emulator observation of the multi-format frame whose corners follow DS
+semantics (`t=0` at the top vertices); Panda3DS partly conflicts. Hardware
+evidence for the orientation rule itself is still missing: Run 19 hardware
+showed the upright picture of a frame whose bottom-up corner order
+(build `f89d3bd`) compensated the old renderer's row flip, i.e. on hardware
+old-code + compensated-frame equals the emulator's old-code +
+compensated-frame picture. Fix (A): removed the
 row flip in the swizzle and unswizzle, kept `v = 1 - t/height`;
 `tools/gen_tex_frames.py` was also corrected because its `QUADS` corner order
 had been compensating for the old flip (it now lists corners top-left,
@@ -521,9 +526,11 @@ including the new top-left cell phase check; the fixed screenshot is
 mirrored standard-frame screenshot would fail the new phase check (top-left
 cell is white instead of the base colour).
 
-**Remaining caveat:** HARDWARE re-verification of the corrected orientation has
-NOT been run. Run 19 captured the SAME mirrored pattern as the old emulator
-output, so it validated the existence of the mirror but not the fix.
+**Remaining caveat:** HARDWARE verification of the corrected orientation with a
+DS-correct frame: Run 20, NOT yet run. Run 19 hardware showed the upright
+picture of a frame whose bottom-up corner order compensated the old renderer's
+row flip (build `f89d3bd`), so the hardware evidence for the orientation rule
+itself is still missing.
 
 UNIT evidence: `tools/test_tex_formats.py` (run by `make test`) covers
 determinism, the v2 parser, byte-exact `tex_decode_cli` agreement with the

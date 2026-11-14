@@ -799,16 +799,25 @@ Details and hashes: `hwtest-staging/RUN2_RESULTS.md` (Run 19) and `RUN19_PROCEDU
   checker edges), whole top screen mean abs diff 4.38 per channel. The
   hardware picture is shifted about 1 px up/left relative to the emulator
   (cause not identified: rasteriser rule or capture).
-- **ORIENTATION (corrected interpretation):** the Run 19 hardware pictures
-  were vertically mirrored relative to DS semantics: the checker phase at the
-  top-left cell of each quad was white, not the base colour, matching the
-  emulator's mirrored output with the old bottom-up swizzle. The earlier
-  "orientation OK" / "orientation/V verified" wording in Run 19 reporting was
-  wrong; only cell period/structure and reuse were actually validated. The
-  orientation bug was fixed in `common/twlhd_pica_tex.c` (remove row flip,
-  keep `v = 1 - t/height`), and `tools/check_tex_shot.py` now has a top-left
-  cell phase check. A HARDWARE re-run with the corrected build is required to
-  confirm the fixed orientation on real hardware.
+- **ORIENTATION (further corrected, 2026-11-14):** the Run 19 hardware
+  pictures were NOT vertically mirrored relative to DS semantics. Run 19 ran
+  build `f89d3bd`, whose bottom-up `tools/gen_tex_frames.py` corner order
+  compensated the old renderer's row flip, so the old renderer drew an upright
+  picture on the real console and the checker phase at the top-left cell of
+  each quad is the base colour. On hardware, old-code + compensated-frame
+  therefore equals the emulator's old-code + compensated-frame picture;
+  hardware evidence for the orientation rule itself is still missing. The
+  earlier "orientation OK" / "orientation/V verified" wording in Run 19
+  reporting was in fact right; it was the later "corrected interpretation"
+  that called it wrong. The orientation bug was fixed in
+  `common/twlhd_pica_tex.c` (remove row flip, keep `v = 1 - t/height`), and
+  `tools/check_tex_shot.py` now has a top-left cell phase check. The choice of
+  fix (A) rests on the Azahar tile-walk reading (`texture_codec.h:892-897`,
+  `:577-604`) and on the EMULATOR observation of the multi-format frame (its
+  corners follow DS semantics, `t=0` at the top vertices); Panda3DS
+  (`textures.cpp:250-263`) partly conflicts.
+  **HARDWARE verification of the corrected orientation with a DS-correct
+  frame: Run 20, NOT yet run.**
 - The script's "UR==LL reuse" sub-check printed FAIL on the snapped hardware
   image (it compares the colour of one corner pixel per quad, which a 1 px
   shift and JPEG edges flip); the cell-centre comparison is the reuse evidence.
