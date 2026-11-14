@@ -596,6 +596,38 @@ Rollback:
   orientation has NOT been run.
 - **HARDWARE NOT RUN.**
 
+#### Status 5B-2e-2 follow-up: behaviour frame
+
+`common/twlhd_pica_tex.c` unchanged; `arm11/` unchanged. New tools only
+(`tools/gen_tex_behaviour_frames.py`, `tools/check_tex_behaviour.py`,
+`tools/test_tex_behaviour.py`).
+
+- **BUILD:** no product build change. `tools/gen_tex_behaviour_frames.py`
+  writes `twlhd_frame_v2_behaviour.bin` (2776 bytes): 8 quads showing A3I5 and
+  A5I3 alpha below full, I4 colour-0 transparency on/off (TEXIMAGE_PARAM bit
+  29), and repeat/clamp/mirrored-repeat/flip-only-clamp via DS bits 16-19.
+- **UNIT:** `make test` green, including `tools/test_tex_behaviour.py`
+  (determinism, v2 parse, `pica_frame_cli` prepare with 8 entries / 8 textures
+  and the wrap codes REPEAT/CLAMP/MIRRORED/CLAMP, checker pass cases at +-15
+  noise and 1 px shift, all seven mandated fail cases, hand-computed literal
+  blend and wrap colours). No existing assertion weakened.
+- **EMULATOR:** Q0-Q3 (translucency, colour-0 transparency on/off),
+  Q5 (clamp) and Q7 (flip-only clamp) match exactly (worst deviation 0). Q4
+  (repeat) and Q6 (mirrored repeat) match only the positive-coordinate half;
+  every DS `t > height` cell (PICA `v < 0`) is sampled one texel row away from
+  the prediction. Diagnosis: the Azahar software rasterizer truncates a
+  negative texel coordinate toward zero instead of flooring it before the wrap
+  (prepare/wrap codes and `v = 1 - t/h` are unit-verified; the positive half of
+  the same axes wraps correctly). Expectations and tolerances were NOT
+  adjusted. Commands and verbatim output are in
+  `docs/EMULATOR_VALIDATION.md`, subsection "Behaviour frame (translucency,
+  colour 0, wrap)".
+- **FINDINGS:** (1) A3I5/A5I3 alpha and colour-0 transparency render as
+  predicted on the emulator. (2) flip-without-repeat behaves as clamp as the DS
+  rule says. (3) repeat/mirrored repeat sample negative texture coordinates one
+  texel off on the emulator (Q4 128/256, Q6 144/256 cells).
+- **HARDWARE NOT RUN.**
+
 ## 4. Where the DS GX equations must come from
 
 All DS-side equations are **TO BE VERIFIED** before use. Sources to read, in
