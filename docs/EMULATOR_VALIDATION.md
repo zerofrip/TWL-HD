@@ -489,7 +489,7 @@ new top-pin checker reports:
     quad 7 fmt=3 I4 16x16 cells=256/256 worst=0 shift=(0,0) bbox=(260, 131, 355, 230) OK
 
 FINDING and FIX (orientation): textures were rendering vertically mirrored in
-both Azahar and Run 19 hardware because `common/twlhd_pica_tex.c` stored PICA
+Azahar (emulator) because `common/twlhd_pica_tex.c` stored PICA
 texture memory with a vertical row flip (`vy = height-1-y`) while keeping
 `v = 1 - t/height`. The top vertices (`t=0`, `v=1`) therefore sampled memory
 row 0, which the old swizzle filled with the image bottom row, so decoded row 0
@@ -506,8 +506,13 @@ row given to `glTexSubImage2D` is the bottom row (v=0) of the GL texture, so
 memory row 0 lands at GL v=0/bottom. Panda3DS therefore points to the **old**
 orientation while Azahar's tile walk points to the new one — the sources are
 ambiguous/conflicting. Fix (A) rests on the Azahar tile-walk reading plus the
-emulator observation that the old code rendered textures vertically mirrored
-plus Run 19 hardware matching that old mirrored output. Fix (A): removed the
+emulator observation of the multi-format frame whose corners follow DS
+semantics (`t=0` at the top vertices); Panda3DS partly conflicts. Hardware
+evidence for the orientation rule itself is still missing: Run 19 hardware
+showed the upright picture of a frame whose bottom-up corner order
+(build `f89d3bd`) compensated the old renderer's row flip, i.e. on hardware
+old-code + compensated-frame equals the emulator's old-code +
+compensated-frame picture. Fix (A): removed the
 row flip in the swizzle and unswizzle, kept `v = 1 - t/height`;
 `tools/gen_tex_frames.py` was also corrected because its `QUADS` corner order
 had been compensating for the old flip (it now lists corners top-left,
@@ -521,9 +526,11 @@ including the new top-left cell phase check; the fixed screenshot is
 mirrored standard-frame screenshot would fail the new phase check (top-left
 cell is white instead of the base colour).
 
-**Remaining caveat:** HARDWARE re-verification of the corrected orientation has
-NOT been run. Run 19 captured the SAME mirrored pattern as the old emulator
-output, so it validated the existence of the mirror but not the fix.
+**Remaining caveat:** HARDWARE verification of the corrected orientation with a
+DS-correct frame: Run 20, NOT yet run. Run 19 hardware showed the upright
+picture of a frame whose bottom-up corner order compensated the old renderer's
+row flip (build `f89d3bd`), so the hardware evidence for the orientation rule
+itself is still missing.
 
 UNIT evidence: `tools/test_tex_formats.py` (run by `make test`) covers
 determinism, the v2 parser, byte-exact `tex_decode_cli` agreement with the
@@ -532,6 +539,149 @@ pass/fail cases and hand-computed literal colours per format.
 `pica_frame_cli` cannot read a v2 frame file: it builds a synthetic frame from
 a stdin description, so the test feeds it the generator's records and three
 vertices per quad and asserts `result=OK`.
+
+## Hardware captures (Run 19)
+
+**HARDWARE OBSERVED (Run 19, 2026-11-14), re-checked with the current
+`tools/check_tex_shot.py`; BUILD/UNIT only.** The Run 19 captures are P6 PPM
+400x240 top-screen-only images (verified header: `P6\n400 240\n255\n`), while
+the pre-existing checker demanded 400x480. The script now accepts a 400x240
+top-screen capture (or the old 400x480 with the top screen in the upper 240
+rows) and has a `--snap` option that replaces every top-screen pixel with the
+nearest colour of a fixed palette before any check: `(0,255,0)`, `(255,0,0)`,
+`(0,0,255)`, `(255,255,255)`, `(16,16,24)` clear, `(132,132,132)` and
+`(128,128,128)` control grey, `(0,0,0)` (squared RGB distance, ties to the
+earlier entry). The UR==LL reuse check now samples texel cell centres with a
+3x3 majority and searches a +-1 px sample shift.
+
+Control frame:
+
+    $ python3 tools/check_tex_shot.py \
+        /home/one/3ds/hwtest-staging/ntr_live/run19/ctl_top_0.ppm --frame ctl --snap
+    UL colour OK: 1 distinct colours: (0, 255, 0)
+    UR colour OK: 1 distinct colours: (132, 132, 132)
+    LL colour OK: 1 distinct colours: (255, 0, 0)
+    LR colour OK: 1 distinct colours: (0, 0, 255)
+    exit 0
+
+Textured frame:
+
+    $ python3 tools/check_tex_shot.py \
+        /home/one/3ds/hwtest-staging/ntr_live/run19/tex_top_0.ppm --frame tex --snap
+    UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
+    UR colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+    LL colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
+    LR colour OK: 2 distinct colours: (0, 0, 255) (255, 255, 255)
+    UL structure OK: quad=125x66 cells=4x2 predicted_period=31.2x33.0 measured_period=31.0x32.5
+    UR structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+    LL structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+    LR structure OK: quad=125x66 cells=4x4 predicted_period=31.2x16.5 measured_period=31.0x16.2
+    UL ratio OK: UL=0.95 square_avg=1.91 diff=0.95
+    UR==LL reuse OK: period=True cells=4/4 shift=(0,0)
+    UL phase OK: got=(0, 255, 0) want=(0, 255, 0)
+    UR phase OK: got=(255, 0, 0) want=(255, 0, 0)
+    LL phase OK: got=(255, 0, 0) want=(255, 0, 0)
+    LR phase OK: got=(0, 0, 255) want=(0, 0, 255)
+    exit 0
+
+Note on the phase line: this Run 19 capture does **not** fail phase. Direct
+pixel sampling shows the base colour in the top-left cell centre of every quad
+(green/red/red/blue above), i.e. the captured picture is upright, and the
+pristine `e29aa33` checker reports the same `phase OK` lines on a padded copy
+(so this is not an artefact of the new code). Reason: Run 19 ran build
+`f89d3bd`, whose `tools/gen_tex_frames.py` used the bottom-up corner order
+(`git show f89d3bd:tools/gen_tex_frames.py`:
+`((-3840,-2560),(-640,-2560),(-640,-320),(-3840,-320))`, texture `t=0` at the
+bottom-left vertex). That order compensated the old renderer's row flip, so the
+old renderer with the Run 19 frame is upright on screen; the mirror only became
+visible with the top-down corner order that `e29aa33` introduced. The phase
+check was not weakened: it still rejects a vertically mirrored checker
+(`test_vertically_flipped_phase_fails`).
+
+To show the phase check catching the old mirror on real hardware pixels, the
+old renderer's picture for the corrected (top-down) frame is derived from the
+capture by mirroring each quad vertically inside its measured bounding box
+(the only difference between the two frame corner orders). The derivation is
+reproducible, stdlib only, no repository fixture:
+
+    $ python3 - <<'PY'
+    import sys
+    sys.path.insert(0, "tools")
+    import check_tex_shot as c
+    w, h, data = c.parse_ppm(
+        "/home/one/3ds/hwtest-staging/ntr_live/run19/tex_top_0.ppm")
+    src = bytes(data)
+    for _name, x0, x1, y0, y1, *_rest in c.REGIONS:
+        qx0, qx1, qy0, qy1 = c.find_quad_bounds(
+            src, w, h, (x0 + x1) // 2, (y0 + y1) // 2, c.CLEAR, c.TOLERANCE)
+        for y in range(qy0, qy1 + 1):
+            for x in range(qx0, qx1 + 1):
+                s = ((qy0 + qy1 - y) * w + x) * 3
+                d = (y * w + x) * 3
+                data[d:d + 3] = src[s:s + 3]
+    open("/tmp/run19_tex_mirrored.ppm", "wb").write(
+        b"P6\n%d %d\n255\n" % (w, h) + bytes(data))
+    PY
+
+The derived image (sha256
+`cb57ff9806967f60c529a9e953627de8de3d63382dd4737b6fba3adbb7cbf824`, /tmp only)
+keeps the same quad bounds and periods and fails exactly and only on phase:
+
+    $ python3 tools/check_tex_shot.py /tmp/run19_tex_mirrored.ppm --frame tex --snap
+    UL colour OK: 2 distinct colours: (255, 255, 255) (0, 255, 0)
+    UR colour OK: 2 distinct colours: (255, 255, 255) (255, 0, 0)
+    LL colour OK: 2 distinct colours: (255, 255, 255) (255, 0, 0)
+    LR colour OK: 2 distinct colours: (255, 255, 255) (0, 0, 255)
+    UL structure OK: quad=125x66 cells=4x2 predicted_period=31.2x33.0 measured_period=31.0x32.5
+    UR structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+    LL structure OK: quad=125x66 cells=2x2 predicted_period=62.5x33.0 measured_period=62.0x32.5
+    LR structure OK: quad=125x66 cells=4x4 predicted_period=31.2x16.5 measured_period=31.0x16.2
+    UL ratio OK: UL=0.95 square_avg=1.91 diff=0.95
+    UR==LL reuse OK: period=True cells=4/4 shift=(0,0)
+    UL phase FAIL: got=(255, 255, 255) want=(0, 255, 0)
+    UR phase FAIL: got=(255, 255, 255) want=(255, 0, 0)
+    LL phase FAIL: got=(255, 255, 255) want=(255, 0, 0)
+    LR phase FAIL: got=(255, 255, 255) want=(0, 0, 255)
+    exit 1
+
+The over-budget capture is not a tex/ctl picture (`over_top_0.ppm` is clear
+colour plus one white region), so it is not compared with this checker; it is
+compared separately against the emulator fallback as recorded in
+`docs/PHASE5B_PLAN.md` ("4743 white pixels on both, mean abs diff 0.71"). For
+the record it fails the tex check as expected:
+
+    $ python3 tools/check_tex_shot.py \
+        /home/one/3ds/hwtest-staging/ntr_live/run19/over_top_0.ppm --frame tex --snap
+    UL colour FAIL: 1 distinct colours: (16, 16, 24)
+    UR colour FAIL: 1 distinct colours: (16, 16, 24)
+    LL colour FAIL: 2 distinct colours: (16, 16, 24) (255, 255, 255)
+    LR colour FAIL: 1 distinct colours: (16, 16, 24)
+    exit 1
+
+Emulator regeneration with the current (fixed) build was possible:
+
+    make azahar-host
+    make -C arm11
+    python3 tools/gen_tex_frames.py /tmp/tex_frames
+    mkdir -p /tmp/tex_sd
+    cp /tmp/tex_frames/twlhd_frame_v2_tex.bin /tmp/tex_sd/twlhd_frame.bin
+    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+      tools/azahar_host/build/azahar_host \
+        --game arm11/twlhd-arm11.3dsx \
+        --frames 200 --press A:60-63 --shot 199 \
+        --out /tmp/tex_shot --sd-root /tmp/tex_sd
+    python3 tools/check_tex_shot.py /tmp/tex_shot_199.ppm --frame tex
+
+The regenerated emulator screenshot (`/tmp/tex_shot_199.ppm`, sha256
+`ca1aac5708bebf0235540201ba62545f4f618af6db69ccb82f36fb151dcd9626`) passes
+every line including `UL/UR/LL/LR phase OK`, with the same quad bounds and cell
+periods as the Run 19 hardware capture. The control capture
+(`/tmp/tex_ctl_shot_199.ppm`, sha256
+`e4789ed7617ae9d66d1624d49884f9ad2b0ab2107c2963e18a57b339fa59ae7f`) passes
+`--frame ctl` (exit 0). UNIT evidence: `tools/test_check_tex_shot.py` covers the
+400x240 input, the `--snap` JPEG-noise case (fails without, passes with), a
+1-px shifted picture, and the negative cases (mirrored, vertically flipped,
+permuted cells, UR different from LL, solid region, wrong control colour).
 
 ## Licensing posture (not legal advice)
 

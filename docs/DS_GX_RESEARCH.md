@@ -610,7 +610,7 @@ table is used below, it does not document the texture memory layout).
   identical `xOffsets`/`yOffsets` and tile offset
   `(u & ~7) * 8 + (v & ~7) * width`
   (`src/core/renderer_gl/textures.cpp:94-107`). No source disagrees.
-- **CONFLICTING SOURCES; chosen: tile rows are stored top-down (Azahar tile walk + EMULATOR + Run 19 observation).** Azahar's linear buffer is
+- **CONFLICTING SOURCES; chosen: tile rows are stored top-down (Azahar tile walk + EMULATOR observation).** Azahar's linear buffer is
   bottom-up for OpenGL (`texture_codec.h:892-897`: "we read/write the linear
   buffer from the bottom up"), so its tile walk starts tile row 0 at linear row
   `height - 8` (`((height - 8 - y) * width + x) * bpp`, `:892-897`) and
@@ -627,11 +627,16 @@ table is used below, it does not document the texture memory layout).
   therefore conflict: Azahar's tile walk says memory tile row 0 is the image
   top row, while Panda3DS's upload order says memory row 0 is the GL bottom
   row. The corrected orientation used here rests on Azahar's tile-walk reading
-  (`texture_codec.h:892-897`, `:577-604`) plus the emulator observation that
-  the old code rendered textures vertically mirrored
-  (`docs/EMULATOR_VALIDATION.md`, "FINDING and FIX (orientation)") plus Run 19
-  hardware matching that old mirrored output (`docs/PHASE5B_PLAN.md`,
-  "5B-2e-2 hardware run").
+  (`texture_codec.h:892-897`, `:577-604`) plus the emulator observation of the
+  multi-format frame whose corners follow DS semantics (`t=0` at the top
+  vertices) (`docs/EMULATOR_VALIDATION.md`, "FINDING and FIX (orientation)");
+  Panda3DS partly conflicts. Hardware evidence for the orientation rule itself
+  is still missing: Run 19 hardware showed the upright picture of a frame
+  whose bottom-up corner order compensated the old renderer's row flip, i.e.
+  on hardware old-code + compensated-frame equals the emulator's old-code +
+  compensated-frame picture (`docs/PHASE5B_PLAN.md`, "5B-2e-2 hardware run").
+  **HARDWARE verification of the corrected orientation with a DS-correct
+  frame: Run 20, NOT yet run.**
 - **VERIFIED PICA wrap register values.** `ClampToEdge = 0`,
   `ClampToBorder = 1`, `Repeat = 2`, `MirroredRepeat = 3`
   (Azahar `src/video_core/pica/regs_texturing.h:27-31`; the register fields are
@@ -668,11 +673,15 @@ The sources are ambiguous/conflicting on whether memory row 0 is sampled at
 `v=1` (Azahar) or `v=0` (Panda3DS). The statement "PICA samples `v=1` at
 in-memory row 0" is therefore supported by Azahar's upload-plus-shader path
 but not by Panda3DS's upload path; the final choice of `v = 1 - t/height`
-with no row flip in the swizzle rests on (a) the Azahar tile-walk reading,
-(b) the emulator observation that the old code rendered textures vertically
-mirrored (`docs/EMULATOR_VALIDATION.md`, "FINDING and FIX (orientation)"),
-and (c) Run 19 hardware matching that old mirrored output
-(`docs/PHASE5B_PLAN.md`, "5B-2e-2 hardware run").
+with no row flip in the swizzle rests on (a) the Azahar tile-walk reading and
+(b) the emulator observation of the multi-format frame whose corners follow DS
+semantics (`t=0` at the top vertices) (`docs/EMULATOR_VALIDATION.md`,
+"FINDING and FIX (orientation)"); Panda3DS partly conflicts, and hardware
+evidence for the orientation rule itself is still missing (Run 19 hardware
+showed the upright picture of a frame whose bottom-up corner order
+compensated the old renderer's row flip, `docs/PHASE5B_PLAN.md`,
+"5B-2e-2 hardware run"). **HARDWARE verification of the corrected orientation
+with a DS-correct frame: Run 20, NOT yet run.**
 
 For DS texel-space `t` (grows downward from the top) the normalised coordinate
 is therefore
@@ -685,9 +694,11 @@ with no extra flip. Hand-computed literals in `tests/host/test_pica_tex.c`
 
 `libctru` / `citro3d` headers contain no "flip" or "bottom" remarks on the
 RGBA8 layout, and 3dbrew was not reachable from the sandbox; the choice of fix
-(A: remove the row flip in the swizzle, keep `v = 1 - t/height`) is forced by
-the emulator and Run 19 hardware observation that the old code rendered
-textures vertically mirrored.
+(A: remove the row flip in the swizzle, keep `v = 1 - t/height`) rests on the
+Azahar tile-walk reading and the emulator observation of the multi-format
+frame whose corners follow DS semantics; Panda3DS partly conflicts, and
+hardware evidence for the orientation rule itself is still missing (Run 20,
+NOT yet run).
 
 ### Deliberate scope choices
 

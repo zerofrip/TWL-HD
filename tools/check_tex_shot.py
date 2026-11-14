@@ -1,21 +1,37 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: Apache-2.0
-"""Validate a 5B-2e-2 textured-renderer emulator screenshot.
+"""Validate a 5B-2e-2 textured-renderer screenshot.
 
-Reads a P6 PPM (stdlib only), samples four fixed rectangles on the top screen
-(upper 400x240 of the 400x480 image), and checks that each region contains the
-expected solid colour (control frame) or exactly two colours (textured frame:
-the expected base colour plus white).
+Reads a P6 PPM (stdlib only): either a 400x240 top-screen-only capture (NTR
+hardware) or a 400x480 image whose upper 400x240 rows are the top screen.
+Samples four fixed rectangles on the top screen, and checks that each region
+contains the expected solid colour (control frame) or exactly two colours
+(textured frame: the expected base colour plus white).
 
 For textured frames it also validates the checker STRUCTURE: it measures the
 cell period along x and y inside each region, compares it with the period
 predicted from the measured quad size and the known texture size, checks that
 the non-square 16x8 region has a different x/y cell ratio than the square
-regions, and checks that the two 8x8 regions (UR and LL, which share a texture)
-have the same cell pattern.
+regions, and compares the cell patterns of the two 8x8 regions (UR and LL,
+which share a texture) cell by cell, tolerating a 1-px bounding-box shift.
+
+--snap replaces every top-screen pixel with the nearest colour of a fixed
+palette (squared RGB distance, ties to the earlier entry) before any check, so
+JPEG captures from real hardware can be validated by the same checks. Palette:
+
+    (0, 255, 0)      UL green
+    (255, 0, 0)      UR/LL red
+    (0, 0, 255)      LR blue
+    (255, 255, 255)  checker white
+    (16, 16, 24)     clear colour
+    (132, 132, 132)  control grey (before 128 so hardware grey wins ties)
+    (128, 128, 128)  control grey
+    (0, 0, 0)        black
+
+Without --snap nothing is changed.
 
 Usage:
-    python3 tools/check_tex_shot.py <ppm> [--frame tex|ctl] [--tolerance N]
+    python3 tools/check_tex_shot.py <ppm> [--frame tex|ctl] [--tolerance N] [--snap]
 
 Exits 0 when every region matches, non-zero otherwise.
 """
@@ -41,6 +57,31 @@ REGIONS = [
 
 WHITE = (255, 255, 255)
 CLEAR = (16, 16, 24)
+
+# Fixed palette used by --snap. Order matters: nearest-colour ties go to the
+# earlier entry (so 130 grey snaps to 132, not 128).
+SNAP_PALETTE = [
+    (0, 255, 0),
+    (255, 0, 0),
+    (0, 0, 255),
+    (255, 255, 255),
+    CLEAR,
+    (132, 132, 132),
+    (128, 128, 128),
+    (0, 0, 0),
+]
+
+
+def snap_pixels(data, width, top):
+    """Replace every top-screen pixel by its nearest palette colour."""
+    for y in range(top):
+        for x in range(width):
+            off = (y * width + x) * 3
+            pixel = (data[off], data[off + 1], data[off + 2])
+            best = min(SNAP_PALETTE,
+                       key=lambda c: sum((pixel[i] - c[i]) ** 2
+                                         for i in range(3)))
+            data[off], data[off + 1], data[off + 2] = best
 
 
 def parse_ppm(path):
@@ -258,7 +299,59 @@ def check_region_structure(data, width, height, name, x0, x1, y0, y1,
         "cells": (cells_x, cells_y),
         "phase": phase_got,
         "expected_colour": expected_colour,
+        "bbox": (qx0, qx1, qy0, qy1),
     }
+
+
+def _is_base_cell(data, width, height, x, y, base):
+    """3x3 majority vote: True when the sampled cell is the base colour."""
+    base_votes = 0
+    for py in range(max(0, y - 1), min(height, y + 2)):
+        for px in range(max(0, x - 1), min(width, x + 2)):
+            pixel = pixel_at(data, width, px, py)
+            base_d = sum((pixel[i] - base[i]) ** 2 for i in range(3))
+            white_d = sum((pixel[i] - WHITE[i]) ** 2 for i in range(3))
+            if base_d <= white_d:
+                base_votes += 1
+    return base_votes >= 5
+
+
+def _cell_pattern(data, width, height, bbox, cells, base, dx=0, dy=0):
+    """Cell classes (True = base colour) sampled at texel cell centres."""
+    qx0, qx1, qy0, qy1 = bbox
+    quad_w = qx1 - qx0 + 1
+    quad_h = qy1 - qy0 + 1
+    cells_x, cells_y = cells
+    pattern = []
+    for j in range(cells_y):
+        y = int(qy0 + (j + 0.5) * quad_h / cells_y) + dy
+        for i in range(cells_x):
+            x = int(qx0 + (i + 0.5) * quad_w / cells_x) + dx
+            pattern.append(_is_base_cell(data, width, height, x, y, base))
+    return pattern
+
+
+def compare_reuse(data, width, height, ur, ll):
+    """Compare UR and LL cell-by-cell, searching +-1 px for bbox jitter.
+
+    Returns (matched_cells, total_cells, (dx, dy)) for the best shift.
+    """
+    if ur["cells"] != ll["cells"]:
+        return 0, 0, (0, 0)
+    ll_pattern = _cell_pattern(data, width, height, ll["bbox"], ll["cells"],
+                               ll["expected_colour"])
+    best = None
+    for dx in (-1, 0, 1):
+        for dy in (-1, 0, 1):
+            ur_pattern = _cell_pattern(data, width, height, ur["bbox"],
+                                       ur["cells"], ur["expected_colour"],
+                                       dx, dy)
+            matched = sum(1 for got, want in zip(ur_pattern, ll_pattern)
+                          if got == want)
+            score = (-matched, abs(dx) + abs(dy))
+            if best is None or score < best[0]:
+                best = (score, matched, (dx, dy))
+    return best[1], len(ll_pattern), best[2]
 
 
 def check_structure(data, width, height, tolerance):
@@ -305,17 +398,19 @@ def check_structure(data, width, height, tolerance):
         return False
 
     # Reuse check: UR and LL share the same 8x8 texture, so their cell pattern
-    # (period and phase) must match within tolerance.
+    # must match. Compare cell centres (3x3 majority) and search a +-1 px
+    # sample shift to absorb bounding-box jitter from JPEG edges.
     ur = results["UR"]
     ll = results["LL"]
     period_ok = (abs(ur["measured_px"][0] - ll["measured_px"][0]) <=
                  max(1, STRUCTURE_TOLERANCE_FRAC * max(ur["measured_px"][0], 1)) and
                  abs(ur["measured_px"][1] - ll["measured_px"][1]) <=
                  max(1, STRUCTURE_TOLERANCE_FRAC * max(ur["measured_px"][1], 1)))
-    reuse_phase_ok = within_tolerance(ur["phase"], ll["phase"], tolerance)
-    reuse_ok = period_ok and reuse_phase_ok
+    matched, total, shift = compare_reuse(data, width, height, ur, ll)
+    reuse_ok = period_ok and total > 0 and matched == total
     status = "OK" if reuse_ok else "FAIL"
-    print(f"UR==LL reuse {status}: period={period_ok} phase={reuse_phase_ok}")
+    print(f"UR==LL reuse {status}: period={period_ok} "
+          f"cells={matched}/{total} shift=({shift[0]},{shift[1]})")
     if not reuse_ok:
         return False
 
@@ -344,12 +439,21 @@ def main(argv=None):
     parser.add_argument(
         "--tolerance", type=int, default=TOLERANCE,
         help="per-channel RGB tolerance")
+    parser.add_argument(
+        "--snap", action="store_true",
+        help="snap every top-screen pixel to the nearest palette colour "
+             "(for JPEG hardware captures)")
     args = parser.parse_args(argv)
 
     width, height, data = parse_ppm(args.ppm)
-    if width != 400 or height != 480:
-        print(f"FAIL: expected 400x480 PPM, got {width}x{height}", file=sys.stderr)
+    if width != 400 or height not in (240, 480):
+        print(f"FAIL: expected a 400x240 or 400x480 PPM, got {width}x{height}",
+              file=sys.stderr)
         return 2
+    top = 240 if height == 480 else height
+
+    if args.snap:
+        snap_pixels(data, width, top)
 
     all_ok = True
     for name, x0, x1, y0, y1, expected_tex, expected_ctl, _tex_size in REGIONS:
