@@ -749,7 +749,41 @@ is relative, and a numeric in-console readout would settle whether the blend
 is truly ineffective or only appears so in photos. Requires its own approval
 before any code (section 6).
 
-## 5B-2e-2 hardware run (DRAFT, needs owner approval)
+## 5B-2e-2 hardware run (EXECUTED 2026-11-14 as Run 19; the text below is the original draft)
+
+**HARDWARE OBSERVED (Run 19, 2026-11-14, owner-approved, assistant-executed under
+CONSOLE_ACCESS_POLICY.md).** Build main `f89d3bd`, `twlhd-arm11-tex.3dsx`
+(sha256 `d49f404b...`), frames from `tools/gen_tex_frames.py`. Method as Run 18
+(3dslink, ftpd-classic FTP swap with read-back, ntr_input, numeric ntr_capture).
+Details and hashes: `hwtest-staging/RUN2_RESULTS.md` (Run 19) and `RUN19_PROCEDURE.md`.
+
+- Control frame (no texture chunks): `tools/check_tex_shot.py --frame ctl` PASS on
+  the console capture. The default untextured path is unchanged on hardware.
+- Textured frame: the console draws the checker textures. After snapping every
+  pixel of the JPEG capture to the nearest of {region colour, white, clear} the
+  colour, period/structure and non-square-ratio checks PASS. Cell-centre
+  sampling gives identical patterns to the emulator (LL, LR fully; first 6 rows
+  of UL/UR), and UR/LL (same texture) show the same pattern. Pixel-class
+  agreement with the emulator inside the four rectangles 95.7 % (mismatches are
+  checker edges), whole top screen mean abs diff 4.38 per channel. The
+  hardware picture is shifted about 1 px up/left relative to the emulator
+  (cause not identified: rasteriser rule or capture).
+- The script's "UR==LL reuse" sub-check printed FAIL on the snapped hardware
+  image (it compares the colour of one corner pixel per quad, which a 1 px
+  shift and JPEG edges flip); the cell-centre comparison is the reuse evidence.
+  OPEN ITEM: make check_tex_shot.py sample cell centres.
+- Over-budget frame (3 x 1024x1024, arena 12 MiB > 8 MiB cap): no hang, no
+  garbage; picture equals the emulator fallback (4743 white pixels on both,
+  mean abs diff 0.71).
+- Not observed: the bottom screen stays black in the capture, so the build-id
+  line and the trace readout could not be read (the 3dsx sha256 was verified
+  before upload). Not shown: DS-hardware accuracy of the texture equations,
+  paletted/compressed formats beyond the test frame, performance, real memory
+  exhaustion.
+- The original `/twlhd_frame.bin` (1128 B, sha256 `2decd74d...`) was restored
+  with read-back.
+
+## 5B-2e-2 hardware run (original draft)
 
 This section is a **DRAFT** only. No SD/console/network scripts are created by
 this stage. The owner must review and approve the procedure before any real
