@@ -898,6 +898,97 @@ read backend is the only platform-specific part; the host consumer's
 
 ---
 
+## 6.4 Status 5C-2 (2026-11-15)
+
+**BUILD/UNIT only.** The texture-aware serialize path is wired into the GX
+recorder, the source-buffer backend exists, the arm9v2 demo has an opt-in
+textured scene, and a host test suite exercises the whole path. No DS run, no
+emulator run, no hardware claim is made.
+
+What exists:
+
+- `common/twlhd_gx_record.[ch]`: new `twlhd_gx_rec_serialize_tex()` runs the
+  planner over the recorder's GXCM entries, applies the result into
+  caller-owned scratch, fills `params.tex`, and calls the existing v2 writer
+  unchanged. The existing `twlhd_gx_rec_serialize()` is untouched and remains
+  byte-identical for every existing test.
+- Compile-time texture budgets with a `_Static_assert`ed serialize-buffer size:
+  default 131,072 B TXDT + 32,768 B PLDT ⇒ `TWLHD_GX_REC_SERIALIZE_TEX_MAX` =
+  **309,395 B**. The full-cap override (524,288 + 98,304) compiles on the host
+  and gives **768,147 B** (the design §3.6 figure 768,144 omitted the
+  worst-case 3-byte PLDT pad).
+- `common/twlhd_tex_source.[ch]`: host-compilable, ARM9-clean source-buffer
+  backend. It registers `(kind, base, length, main-RAM pointer)` regions and
+  resolves the planner's texel/palette/index offsets against them. It rejects
+  unregistered offsets, partial overlap, offset+bytes uint32 wraparound, and
+  unknown `kind`; it supports the `dst == NULL` probe; a zero-length read
+  succeeds iff the offset lies inside a matching region.
+- `arm9v2/source/demo_frame.cpp`: new `TWLHD_DEMO_SCENE == 5` branch with an
+  8×8 I4 texture + palette in main RAM. The scene uploads to VRAM with direct
+  stores and writes `GFX_TEX_FORMAT` / `GFX_PAL_FORMAT` explicitly through the
+  shim so the keys are recorded (D6).
+- `arm9v2/source/main.cpp`: in textured builds the dump path calls
+  `twlhd_gx_rec_serialize_tex()` and prints kept/dropped counts; the normal
+  build keeps the original path and buffer size unchanged.
+- `tests/host/test_gx_record_tex.c`: 14 labels covering one textured quad,
+  two keys, budget drop, read-error drop, no-texture byte-identity,
+  too-small output buffer, NULL args, source-backend cases, region capacity,
+  backend null args, large-texture budget, `pica_frame` status, recorder
+  overflow semantics, and the before/after OOB guard harness.
+- `docs/reports/5c2_mutate_gx_record_tex.py` and
+  `docs/reports/5c2-mutation-report.md`: ≥60 mutants of the new serialize
+  function and the backend, with real kill/survive numbers and every survivor
+  classified.
+
+**OVERFLOW decision (D3):** texture-drop `TWLHD_V2_FLAG_OVERFLOW` is set
+**only in the serialized file flags**, never in `rec->flags`. The arm9v2 dump
+gate (`rec->flags & OVERFLOW != 0 ⇒ refuse`) therefore keeps its exact
+recorder-level meaning: only GXCM/RSTA overflow refuses the dump. The file
+flag is set for **any dropped key** (budget + read-error + unsupported), not
+just for `plan.stats.overflow`, because read-error and unsupported drops also
+leave the file missing texture data a draw references. Same-key conflicts do
+not set the flag (no drop).
+
+**Static RAM numbers (ARM9, measured from `.elf` / `.map`):**
+
+| Buffer | Default | Full-cap override |
+|---|---|---|
+| serialize output (`g_serialize`) | 309,395 B | 768,147 B |
+| texture scratch (`TwlhdGxRecTexScratch`) | 180,268 B | ~641 KiB |
+| source backend context (`TwlhdTexSourceCtx`) | 260 B | 260 B |
+| normal build `g_serialize` | 135,264 B | — |
+| normal build BSS total | 274,064 B | — |
+| textured build BSS total | 628,808 B | — |
+
+The textured build adds **+354,744 B** of BSS over the normal build (output
+buffer growth of +174,131 B plus the scratch/backend state). The normal build
+keeps `g_serialize` at 135,264 B and adds no texture state.
+
+**D6 outcome:** libnds `glTexImage2D` / `glColorTableEXT` / `glBindTexture`
+are out-of-line and bypass the shim's macro proxy, so scene 5 uploads the
+source arrays with direct VRAM stores and then issues explicit
+`GFX_TEX_FORMAT = param;` and `GFX_PAL_FORMAT = pltt;` writes through the
+proxy. The record path therefore captures the keys; the upload path itself is
+not recorded (it is main-RAM → VRAM, not a GX command).
+
+Corrections to this design, found while implementing:
+
+- §3.5 said the gate must be relaxed for texture-only drops. The implemented
+  design keeps the gate untouched and puts the flag in the file only; the
+  owner explicitly approved this relaxation on 2026-11-15.
+- §3.5/§3.6 used 768,144 B for the full-cap buffer. The real worst-case
+  includes the writer's 3-byte PLDT pad: 768,147 B.
+- §3.5 step 4 said the planner sets `TWLHD_V2_FLAG_OVERFLOW`. The planner only
+  reports drop counters; `twlhd_gx_rec_serialize_tex()` maps the three drop
+  counters to the file flag.
+
+Open items: 5C-3 is DeSmuME validation of scene 5; 5C-4 is a hardware dump
+byte-compare; 5C-5 (VRAM readback backend) remains deferred. The source-buffer
+backend covers only game-registered source arrays; generic capture from
+arbitrary VRAM is not implemented.
+
+---
+
 ## 7. What cannot be claimed yet
 
 | Claim | Status |

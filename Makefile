@@ -51,7 +51,7 @@ HOST_COMMON := common/twlhd_frame_parse.c common/twlhd_vertex_convert.c \
 	common/twlhd_geometry_slots.c common/twlhd_attr_pad.c
 HOST_V2_COMMON := common/twlhd_v2_parse.c common/twlhd_v2_write.c \
 	common/twlhd_gx_record.c common/twlhd_gx_interp.c \
-	common/twlhd_tex_decode.c
+	common/twlhd_tex_decode.c common/twlhd_tex_capture.c
 HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_geometry_slots.h common/twlhd_frame_format.h \
 	common/twlhd_v2_format.h common/twlhd_v2_parse.h \
@@ -63,6 +63,7 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_clipfix.h common/twlhd_seq.h \
 	common/twlhd_tex_draw_plan.h \
 	common/twlhd_tex_capture.h \
+	common/twlhd_tex_source.h \
 	tests/host/tests_host.h \
 	tools/azahar_host/azahar_host_util.h
 HOST_TESTS := tests/host/build/test_parser \
@@ -80,6 +81,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_pica_frame \
 	tests/host/build/test_tex_draw_plan \
 	tests/host/build/test_tex_capture \
+	tests/host/build/test_gx_record_tex \
 	tests/host/build/test_clipfix \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
@@ -167,10 +169,16 @@ tests/host/build/test_tex_draw_plan: tests/host/test_tex_draw_plan.c \
 		$(HOST_LDFLAGS)
 
 tests/host/build/test_tex_capture: tests/host/test_tex_capture.c \
-		common/twlhd_tex_capture.c common/twlhd_pica_frame.c \
+		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_frame.c \
+		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_gx_record_tex: tests/host/test_gx_record_tex.c \
+		common/twlhd_tex_source.c common/twlhd_pica_frame.c \
 		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_HEADERS) | \
 		tests/host/build
-	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_capture.c \
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_source.c \
 		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
 		$(HOST_V2_COMMON) $(HOST_LDFLAGS)
 

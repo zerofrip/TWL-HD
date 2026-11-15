@@ -8,6 +8,7 @@
 
 #include <string.h>
 
+#include "twlhd_tex_capture.h"
 #include "twlhd_v2_write.h"
 
 static TwlhdGxRecorder g_recorder;
@@ -172,6 +173,72 @@ TwlhdV2Result twlhd_gx_rec_serialize(const TwlhdGxRecorder *rec, uint8_t *out,
 
     return twlhd_v2_write(&params, out, capacity, out_size);
 }
+
+/* BEGIN 5C-2 serialize_tex */
+TwlhdV2Result twlhd_gx_rec_serialize_tex(
+    const TwlhdGxRecorder *rec, TwlhdGxRecTexScratch *scratch,
+    uint8_t *out, size_t capacity, size_t *out_size,
+    const TwlhdTexCapLimits *limits,
+    TwlhdTexCapReadFn read, void *read_ctx,
+    TwlhdTexCapStats *stats_out) {
+    TwlhdV2WriteParams params;
+    TwlhdTexCapResult cap_result;
+    TwlhdV2Result result;
+    uint32_t file_flags;
+
+    if (!rec || !scratch || !out || !limits || !read) {
+        return TWLHD_V2_ERR_NULL;
+    }
+
+    cap_result = twlhd_tex_capture_plan(limits, rec->gxcm, rec->gxcm_count,
+                                        read, read_ctx, &scratch->plan);
+    if (cap_result != TWLHD_TEX_CAP_OK) {
+        if (cap_result == TWLHD_TEX_CAP_ERR_NULL) return TWLHD_V2_ERR_NULL;
+        if (cap_result == TWLHD_TEX_CAP_ERR_CAPACITY) return TWLHD_V2_ERR_SIZE;
+        return TWLHD_V2_ERR_TXDS;
+    }
+
+    cap_result = twlhd_tex_capture_apply(
+        &scratch->plan, read, read_ctx, scratch->txdt,
+        TWLHD_GX_REC_TEX_TXDT_MAX, scratch->pldt,
+        TWLHD_GX_REC_TEX_PLDT_MAX, scratch->entries,
+        TWLHD_V2_TXDS_MAX_RECORDS);
+    if (cap_result != TWLHD_TEX_CAP_OK) {
+        if (cap_result == TWLHD_TEX_CAP_ERR_NULL) return TWLHD_V2_ERR_NULL;
+        if (cap_result == TWLHD_TEX_CAP_ERR_CAPACITY) return TWLHD_V2_ERR_SIZE;
+        return TWLHD_V2_ERR_TXDT;
+    }
+
+    params.frame_index = rec->frame_index;
+    params.flags = rec->flags;
+    params.backend_id = rec->backend_id;
+    params.coverage_flags = rec->coverage_flags;
+    params.gxcm = rec->gxcm;
+    params.gxcm_count = rec->gxcm_count;
+    params.rsta = rec->rsta;
+    params.rsta_count = rec->rsta_count;
+    params.tex = scratch->entries;
+    params.tex_count = scratch->plan.record_count;
+
+    /*
+     * Texture-drop OVERFLOW belongs to the file only, never to the recorder.
+     * It is set for any dropped key (budget, read error or unsupported), but
+     * not for same-key conflicts, which keep the first snapshot whole.
+     */
+    file_flags = rec->flags;
+    if (scratch->plan.stats.keys_dropped_budget +
+            scratch->plan.stats.keys_dropped_read_error +
+            scratch->plan.stats.keys_dropped_unsupported >
+        0u) {
+        file_flags |= TWLHD_V2_FLAG_OVERFLOW;
+    }
+    params.flags = file_flags;
+
+    result = twlhd_v2_write(&params, out, capacity, out_size);
+    if (stats_out) *stats_out = scratch->plan.stats;
+    return result;
+}
+/* END 5C-2 serialize_tex */
 
 uint32_t twlhd_gx_rec_entry_count(const TwlhdGxRecorder *rec) {
     return rec ? rec->gxcm_count : 0u;

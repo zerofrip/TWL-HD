@@ -21,14 +21,23 @@
 
 #include "demo_frame.hpp"
 #include "twlhd_gx_record.h"
+#include "twlhd_tex_capture.h"
+#include "twlhd_tex_source.h"
 
 /* Opt-in test build: dump the frame automatically (0 disables it). */
 #ifndef TWLHD_DEMO_AUTODUMP_FRAME
 #define TWLHD_DEMO_AUTODUMP_FRAME 0
 #endif
 
+#if TWLHD_DEMO_SCENE == 5
+/* Textured build: larger serialize buffer + planner scratch + source backend. */
+static uint8_t g_serialize[TWLHD_GX_REC_SERIALIZE_TEX_MAX];
+static TwlhdGxRecTexScratch g_tex_scratch;
+static TwlhdTexSourceCtx g_tex_source;
+#else
 /* Static, heap-free: ~270 KB total on the DS. */
 static uint8_t g_serialize[TWLHD_GX_REC_SERIALIZE_MAX];
+#endif
 static int g_fat_ready;
 
 static void refresh_console(void) {
@@ -71,8 +80,27 @@ static int dump_frame(void) {
         return -1;
     }
 
+#if TWLHD_DEMO_SCENE == 5
+    {
+        TwlhdTexCapLimits limits;
+        TwlhdTexCapStats stats;
+
+        twlhd_tex_capture_default_limits(&limits);
+        result = twlhd_gx_rec_serialize_tex(
+            rec, &g_tex_scratch, g_serialize, sizeof g_serialize, &written,
+            &limits, twlhd_tex_source_read, &g_tex_source, &stats);
+        if (result == TWLHD_V2_OK) {
+            iprintf("textures kept %lu  dropped b/r/u %lu/%lu/%lu\n",
+                    (unsigned long)stats.keys_kept,
+                    (unsigned long)stats.keys_dropped_budget,
+                    (unsigned long)stats.keys_dropped_read_error,
+                    (unsigned long)stats.keys_dropped_unsupported);
+        }
+    }
+#else
     result = twlhd_gx_rec_serialize(rec, g_serialize, sizeof g_serialize,
                                     &written);
+#endif
     if (result != TWLHD_V2_OK) {
         iprintf("serialize failed: %s\n", twlhd_v2_result_string(result));
         return -1;
@@ -115,6 +143,10 @@ int main(void) {
     glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
 
     twlhd_gx_rec_init(rec);
+#if TWLHD_DEMO_SCENE == 5
+    twlhd_tex_source_reset(&g_tex_source);
+    twlhd_demo_scene5_register_sources(&g_tex_source);
+#endif
     refresh_console();
 
     while (1) {

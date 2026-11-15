@@ -10,11 +10,18 @@
  */
 #pragma once
 
+#include "twlhd_tex_source.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void twlhd_demo_draw_frame(unsigned angle);
+
+#if TWLHD_DEMO_SCENE == 5
+/* Register the scene-5 texture/palette source arrays with the capture backend. */
+void twlhd_demo_scene5_register_sources(TwlhdTexSourceCtx *ctx);
+#endif
 
 #ifdef __cplusplus
 }
