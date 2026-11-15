@@ -32,6 +32,7 @@ sys.path.insert(0, EMULATOR_DIR)
 import twlhd_v2_dump as v2  # noqa: E402
 import compare_capture  # noqa: E402
 import compare_texture_capture as tex  # noqa: E402
+import test_emulator_compare as base  # noqa: E402
 import test_twlhd_v2  # noqa: E402
 
 ANGLE = 61440
@@ -231,18 +232,29 @@ class TextureCompareTest(unittest.TestCase):
             self.fail("TXDS chunk not found")
         self.assert_rejected(bytes(data), "v2-parse", "ERR_CHUNK_BOUNDS")
 
-    def test_existing_mode_rejects_texture_capture_unchanged(self):
+    def test_existing_mode_accepts_extra_valid_texture_chunks(self):
+        """compare_capture's rules (flags/meta/GXCM/RSTA) do not inspect
+        TXDS/TXDT/PLDT; twlhd_v2_dump.parse decodes valid ones, so the
+        existing-mode outcome is unchanged: extra valid texture chunks are
+        accepted (exit 0). compare_capture.py is unmodified.
+        """
         expected = os.path.join(self.tmpdir, "expected.txt")
         with open(expected, "w", encoding="utf-8") as handle:
-            handle.write("G 0 0x00000040 0x00000001\n"
-                         "G 1 0x00000050 0x00000000\n")
-        capture = self.write(texture_file())
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output):
-            code = compare_capture.main(
-                ["compare_capture.py", capture, expected, str(ANGLE)])
-        self.assertEqual(code, 1, output.getvalue())
-        self.assertIn("- gxcm-count:", output.getvalue())
+            handle.write(base.expected_text(base.base_gxcm(),
+                                            base.base_rsta()))
+        control = build(base.base_gxcm(), rsta=base.base_rsta())
+        textured = build(base.base_gxcm(), rsta=base.base_rsta(),
+                         txds=tex_record(), txdt=tex.TEXEL, pldt=tex.PALETTE)
+        for name, data in (("control", control), ("textured", textured)):
+            with self.subTest(name=name):
+                capture = self.write(data, name="capture-%s.bin" % name)
+                output = io.StringIO()
+                with contextlib.redirect_stdout(output):
+                    code = compare_capture.main(
+                        ["compare_capture.py", capture, expected,
+                         str(ANGLE)])
+                self.assertEqual(code, 0, output.getvalue())
+                self.assertIn("PASS", output.getvalue())
 
     def test_usage_errors_exit_2(self):
         self.assertEqual(tex.main(["compare_texture_capture.py"]), 2)
