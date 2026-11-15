@@ -812,6 +812,92 @@ Any choice other than these recommendations needs the matching approval at
 
 ---
 
+## 6.3 Status 5C-1 (2026-11-15)
+
+**BUILD/UNIT only.** The pure-C planner exists and is tested on the host;
+nothing is wired to the recorder, no arm9/arm11/arm9v2 source changed, and no
+EMULATOR or HARDWARE claim is made. There is no format change and the planner
+never sets a v2 flag.
+
+What exists:
+
+- `common/twlhd_tex_capture.[ch]`: allocation-free planner. Input is a
+  `const TwlhdV2CmdEntry[]` + count (the recorder/serializer representation);
+  output is `TwlhdTexCapPlan` (fixed 256-record array) and, through
+  `twlhd_tex_capture_apply()`, caller-owned TXDT/PLDT bytes and
+  `TwlhdV2TexEntry[]` ready for `twlhd_v2_write()` unchanged.
+- Key rules follow §3.1: a key is used only by a VTX command inside a `BEGIN`
+  group, format 0 is skipped, and the current `TEXIMAGE_PARAM`/`PLTT_BASE`
+  latches start at 0. Dedupe is per frame by the exact pair; two different keys
+  with identical bytes are kept twice because TXDS records are keyed, not
+  content-addressed (§3.2).
+- Sizes come from the shared, already exported `twlhd_v2_tex_sizes()`; no
+  formula was copied. No header export was needed and no existing file changed.
+- Budget/drop follows D3/D5: defaults 131,072 B TXDT, 32,768 B PLDT and 256
+  records (`twlhd_tex_capture_full_limits()` exposes the format caps for
+  tests); first-fit in first-use order, whole-record drop only, later smaller
+  records still fit. `overflow` is a plan field; 5C-2 maps it to
+  `TWLHD_V2_FLAG_OVERFLOW`.
+- Format 5 uses the D4 minimal window `4*max(entry & 0x3FFF) + 8`; a failed
+  2-byte content scan falls back to the 65,540-byte full window.
+- Tests: `tests/host/test_tex_capture.c` (14 labels, hand-computed literals,
+  guard-byte/OOB harness, round-trip through writer → parser → pica_frame),
+  independent oracle `tools/tex_capture_oracle.py`, 36-scene golden suite
+  `tools/test_tex_capture_golden.py`. `make test` is green. Mutation numbers
+  are in `docs/reports/5c1-mutation-report.md`.
+
+Corrections to this design, found while implementing:
+
+- §5.1's "pure sizing (no reads)" cannot be literal. The D4 minimal window and
+  the read-error drop both need information before the plan can commit. The
+  chosen split is: `twlhd_tex_capture_plan()` performs dst==NULL availability
+  probes and real 2-byte index scans for format 5; `twlhd_tex_capture_layout()`
+  is the read-free sizing call (it only recomputes offsets/totals from the kept
+  set); `twlhd_tex_capture_apply()` consumes the immutable plan and never
+  re-decides the kept set, so sizing and apply agree by construction.
+- §5.1's callback signature has no address space and has no probe form. The
+  implemented seam is
+  `int (*)(void *ctx, uint32_t kind, uint32_t offset, uint32_t bytes, uint8_t *dst)`
+  with `kind` = texel / palette / index, because the DS has three disjoint
+  spaces and 5C-2 must route them. `dst == NULL` is an availability probe.
+- §5.1 names `twlhd_tex_cap_plan()`/`twlhd_tex_cap_emit()`; the delivered API
+  is `twlhd_tex_capture_plan()`/`_layout()`/`_apply()` with a
+  `TwlhdTexCapPlan` that owns the record array.
+- §3.5 says the PLDT check includes "the worst-case 3 pad bytes" and §5.1 test
+  item 7 asks for "a 2 mod 4 window". Both are wrong: every legal palette size
+  is a multiple of 4 (fixed tables are multiples of 8; format 5 is
+  `4*max + 8`), so the writer's 4-pad is always zero and a 2 mod 4 window
+  cannot exist. The planner nevertheless checks the exact padded running total,
+  which is required if a future format ever has a non-multiple-of-4 table.
+- §3.5 step 4 ("set `TWLHD_V2_FLAG_OVERFLOW`") is a 5C-2 action; the planner
+  reports `overflow` only.
+- D7's "first snapshot wins" is implemented as "one record per key, read once
+  in apply, conflicts counted when either register was rewritten between two
+  uses of that key". The planner does not hash content (§3.1 leaves the hash
+  unapproved). The conflict counter is therefore a detected-rebind count, not
+  a proof that bytes changed.
+- Format-5 fallback boundary: "index block cannot be read" is split. If the
+  index block's availability probe fails, the key is a read-error drop (apply
+  would have no index bytes to copy — a dangling reference). If the block is
+  available but the 2-byte content scan fails, the planner falls back to the
+  65,540-byte window. This satisfies both D4 and the "no dangling reference"
+  rule.
+- The full format-5 window (65,540 B) exceeds the default PLDT cap (32,768 B),
+  so a fallback key is budget-dropped with defaults; only the full-cap test
+  path exercises a kept fallback.
+- One stated bound is approximate by construction: `keys_seen` counts distinct
+  used keys, but keys beyond the fixed 256-entry table cannot be deduped, so a
+  257th+ key that is used repeatedly adds one per use to `keys_seen` and
+  `keys_dropped_budget`. The records are still dropped whole. 5C-2 can revisit
+  this if a real frame ever exceeds 256 distinct keys.
+
+Open items: D6 (out-of-line libnds coverage) stands; recorder wiring and the
+source-buffer backend are 5C-2; the planner does not touch MMIO/VRAM and the
+read backend is the only platform-specific part; the host consumer's
+`NO_DATA` result for a dropped key is expected and allowed.
+
+---
+
 ## 7. What cannot be claimed yet
 
 | Claim | Status |

@@ -195,6 +195,7 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 - Not done: recorder-side texture capture, the Python mirror extension,
   interpreter texcoords, vertex-layout change and PICA upload.
 - 2026-11-14: recorder-side texture capture design study written, see `docs/TEXTURE_CAPTURE_DESIGN.md`; documentation only, no code/test/Makefile change, status stays BUILD/UNIT and no 5C stage is approved.
+- 2026-11-15: stage 5C-1 texture capture planner implemented (`common/twlhd_tex_capture.[ch]`, host tests, oracle/golden suite, mutation report); **BUILD/UNIT only**, not wired to the recorder (5C-2), no format or arm9/arm9v2/arm11 change.
 - Repair round 1: format 5 (4x4) `palette_size` is now a caller-chosen even
   window in `[2, 65540]` bytes (round 1 first shipped `[2, 65536]`; raised in
   round 3), not the fixed 0 this stage originally specified. DeSmuME's PAL4X4
