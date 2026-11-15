@@ -4,6 +4,7 @@
  * and common/twlhd_tex_source.c.
  */
 
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 
@@ -512,12 +513,38 @@ static void test_null_args(void) {
 /* ------------------------------------------------------------------------- */
 /* 8. Source-buffer backend unit cases.                                     */
 /* ------------------------------------------------------------------------- */
+#define SB_GUARD 64u
+
+static _Alignas(8) uint8_t g_sb_dst[SB_GUARD + 16 + SB_GUARD];
+
+static int sb_dst_intact(int fill, const uint8_t *expected,
+                         size_t expected_len) {
+    uint8_t want[sizeof(g_sb_dst)];
+
+    memset(want, fill, sizeof(want));
+    if (expected_len != 0u) {
+        memcpy(want + SB_GUARD, expected, expected_len);
+    }
+    return memcmp(g_sb_dst, want, sizeof(g_sb_dst)) == 0;
+}
+
+static void sb_read_case(TwlhdTexSourceCtx *src, uint32_t kind,
+                         uint32_t offset, uint32_t bytes,
+                         const uint8_t *expected, size_t expected_len,
+                         int expect_ret, int fill, int probe) {
+    memset(g_sb_dst, fill, sizeof(g_sb_dst));
+    CHECK_EQ_INT(twlhd_tex_source_read(src, kind, offset, bytes,
+                                       probe ? NULL : (g_sb_dst + SB_GUARD)),
+                 expect_ret);
+    CHECK(sb_dst_intact(fill, expected, expected_len));
+}
+
 static void test_source_backend(void) {
     TwlhdTexSourceCtx src;
     uint8_t buf[16] = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15};
     uint8_t high_buf[256];
-    uint8_t tmp[16];
     uint32_t i;
+    uint32_t pass;
 
     for (i = 0; i < sizeof(high_buf); i++) high_buf[i] = (uint8_t)(0xC0u + i);
 
@@ -526,61 +553,51 @@ static void test_source_backend(void) {
                                       16u, buf),
                   0);
 
-    /* Registered exact read. */
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u,
-                                        8u, tmp),
-                  0);
-    CHECK(memcmp(tmp, buf, 8u) == 0);
-
-    /* Exact end read. */
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
-                                        0x100u + 8u, 8u, tmp),
-                  0);
-    CHECK(memcmp(tmp, buf + 8u, 8u) == 0);
-
-    /* Partial overlap at the end must fail and copy nothing. */
-    memset(tmp, 0xCCu, sizeof(tmp));
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
-                                        0x100u + 12u, 8u, tmp),
-                  1);
-    CHECK_EQ_INT(tmp[0], 0xCCu);
-
-    /* Unregistered offset. */
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL, 0u, 1u,
-                                        tmp),
-                  1);
-
-    /* Unknown kind. */
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, 99u, 0x100u, 1u, tmp), 1);
-
-    /* Zero-length read succeeds inside the region, fails outside. */
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
-                                        0x100u + 15u, 0u, tmp),
-                  0);
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
-                                        0x100u + 16u, 0u, tmp),
-                  1);
-
-    /* Probe (dst == NULL) reports availability without copying. */
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u,
-                                        8u, NULL),
-                  0);
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x200u,
-                                        1u, NULL),
-                  1);
-
-    /* uint32 wraparound of offset+bytes: a region near 0xFFFFFFFF must still
-     * fail when rel+bytes exceeds its length (not wrap back to a small value). */
+    /* uint32 wraparound region near 0xFFFFFFFF. */
     CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_TEXEL,
                                       0xFFFFFF00u, 0x100u, high_buf),
                   0);
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
-                                        0xFFFFFF80u, 0x100u, tmp),
-                  1);
-    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
-                                        0xFFFFFFFFu, 1u, tmp),
-                  0);
-    CHECK_EQ_INT(tmp[0], high_buf[0xFFu]);
+
+    for (pass = 0; pass < 2u; pass++) {
+        int fill = pass == 0 ? 0x00 : 0xFF;
+
+        /* Registered exact read. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u, 8u, buf, 8u,
+                     0, fill, 0);
+
+        /* Exact end read. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u + 8u, 8u,
+                     buf + 8u, 8u, 0, fill, 0);
+
+        /* Partial overlap at the end must fail and copy nothing. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u + 12u, 8u,
+                     NULL, 0u, 1, fill, 0);
+
+        /* Unregistered offset. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0u, 1u,
+                     NULL, 0u, 1, fill, 0);
+
+        /* Unknown kind. */
+        sb_read_case(&src, 99u, 0x100u, 1u, NULL, 0u, 1, fill, 0);
+
+        /* Zero-length read succeeds inside the region, fails outside. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u + 15u, 0u,
+                     NULL, 0u, 0, fill, 0);
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u + 16u, 0u,
+                     NULL, 0u, 1, fill, 0);
+
+        /* Probe (dst == NULL) reports availability without copying. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x100u, 8u,
+                     NULL, 0u, 0, fill, 1);
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0x200u, 1u,
+                     NULL, 0u, 1, fill, 1);
+
+        /* uint32 wraparound of offset+bytes. */
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0xFFFFFF80u, 0x100u,
+                     NULL, 0u, 1, fill, 0);
+        sb_read_case(&src, TWLHD_TEX_CAP_READ_TEXEL, 0xFFFFFFFFu, 1u,
+                     &high_buf[0xFFu], 1u, 0, fill, 0);
+    }
 
     /* Adding a zero-length region is rejected. */
     CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_PALETTE, 0u,
@@ -887,7 +904,6 @@ static void test_recorder_overflow_unchanged(void) {
 /* 11. OOB guard harness: 0x00/0xFF two-pass over every output buffer.      */
 /* ------------------------------------------------------------------------- */
 #define OOB_GUARD 128u
-#define OOB_FILL 0x5Bu
 
 static _Alignas(8) uint8_t
     g_oob_scratch[OOB_GUARD + sizeof(TwlhdGxRecTexScratch) + OOB_GUARD];
@@ -895,10 +911,16 @@ static _Alignas(8) uint8_t
     g_oob_out[OOB_GUARD + TWLHD_GX_REC_SERIALIZE_TEX_MAX + OOB_GUARD];
 static _Alignas(8) uint8_t
     g_oob_rec[OOB_GUARD + sizeof(TwlhdGxRecorder) + OOB_GUARD];
+static _Alignas(8) uint8_t
+    g_oob_size[OOB_GUARD + sizeof(size_t) + OOB_GUARD];
+static _Alignas(8) uint8_t
+    g_oob_stats[OOB_GUARD + sizeof(TwlhdTexCapStats) + OOB_GUARD];
 
 #define OOB_SCRATCH ((TwlhdGxRecTexScratch *)(g_oob_scratch + OOB_GUARD))
 #define OOB_OUT (g_oob_out + OOB_GUARD)
 #define OOB_REC ((TwlhdGxRecorder *)(g_oob_rec + OOB_GUARD))
+#define OOB_SIZE ((size_t *)(g_oob_size + OOB_GUARD))
+#define OOB_STATS ((TwlhdTexCapStats *)(g_oob_stats + OOB_GUARD))
 
 static int guard_intact(const uint8_t *base, size_t used, int fill) {
     size_t i;
@@ -910,6 +932,17 @@ static int guard_intact(const uint8_t *base, size_t used, int fill) {
     return 1;
 }
 
+static int entry_equal(const TwlhdV2TexEntry *a, const TwlhdV2TexEntry *b) {
+    return a->teximage_param == b->teximage_param &&
+           a->pltt_base == b->pltt_base &&
+           a->texel == b->texel &&
+           a->palette == b->palette &&
+           a->index == b->index &&
+           a->texel_bytes == b->texel_bytes &&
+           a->palette_bytes == b->palette_bytes &&
+           a->index_bytes == b->index_bytes;
+}
+
 static void test_out_of_bounds(void) {
     TwlhdTexSourceCtx src;
     TwlhdTexCapLimits limits;
@@ -917,6 +950,8 @@ static void test_out_of_bounds(void) {
     uint8_t out_copy[2][sizeof(g_oob_out)];
     uint32_t pass;
     uint32_t param = param_of(3u, 0u, 0u, 0u);
+    size_t txdt_off = offsetof(TwlhdGxRecTexScratch, txdt);
+    size_t pldt_off = offsetof(TwlhdGxRecTexScratch, pldt);
 
     texture_bytes_fill();
     twlhd_tex_source_reset(&src);
@@ -930,7 +965,6 @@ static void test_out_of_bounds(void) {
 
     for (pass = 0; pass < 2u; pass++) {
         int fill = pass == 0 ? 0x00 : 0xFF;
-        size_t size = 0;
 
         memset(g_oob_rec, fill, sizeof(g_oob_rec));
         twlhd_gx_rec_init(OOB_REC);
@@ -945,30 +979,172 @@ static void test_out_of_bounds(void) {
         rec_write_to(OOB_REC, 0x04000504u, 0u);
         rec_write_to(OOB_REC, 0x04000540u, 0u);
 
-        memset(g_oob_scratch, OOB_FILL, sizeof(g_oob_scratch));
-        memset(g_oob_out, OOB_FILL, sizeof(g_oob_out));
+        memset(g_oob_scratch, fill, sizeof(g_oob_scratch));
+        memset(g_oob_out, fill, sizeof(g_oob_out));
+        memset(g_oob_size, fill, sizeof(g_oob_size));
+        memset(g_oob_stats, fill, sizeof(g_oob_stats));
+
+        CHECK(guard_intact(g_oob_scratch, sizeof(TwlhdGxRecTexScratch), fill));
+        CHECK(guard_intact(g_oob_out, TWLHD_GX_REC_SERIALIZE_TEX_MAX, fill));
+        CHECK(guard_intact(g_oob_rec, sizeof(TwlhdGxRecorder), fill));
+        CHECK(guard_intact(g_oob_size, sizeof(size_t), fill));
+        CHECK(guard_intact(g_oob_stats, sizeof(TwlhdTexCapStats), fill));
 
         CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(
                           OOB_REC, OOB_SCRATCH, OOB_OUT,
-                          TWLHD_GX_REC_SERIALIZE_TEX_MAX, &size, &limits,
-                          twlhd_tex_source_read, &src, NULL),
+                          TWLHD_GX_REC_SERIALIZE_TEX_MAX, OOB_SIZE, &limits,
+                          twlhd_tex_source_read, &src, OOB_STATS),
                       TWLHD_V2_OK);
-        CHECK(size > 0u);
+        CHECK(*OOB_SIZE > 0u);
 
-        CHECK(guard_intact(g_oob_scratch, sizeof(TwlhdGxRecTexScratch),
-                            OOB_FILL));
-        CHECK(guard_intact(g_oob_out, size, OOB_FILL));
+        CHECK(guard_intact(g_oob_scratch, sizeof(TwlhdGxRecTexScratch), fill));
+        CHECK(guard_intact(g_oob_out, *OOB_SIZE, fill));
         CHECK(guard_intact(g_oob_rec, sizeof(TwlhdGxRecorder), fill));
+        CHECK(guard_intact(g_oob_size, sizeof(size_t), fill));
+        CHECK(guard_intact(g_oob_stats, sizeof(TwlhdTexCapStats), fill));
+
+        CHECK_EQ_INT(OOB_STATS->keys_seen, 1u);
+        CHECK_EQ_INT(OOB_STATS->keys_kept, 1u);
+        CHECK_EQ_INT(OOB_STATS->keys_dropped_budget, 0u);
+        CHECK_EQ_INT(OOB_STATS->keys_dropped_read_error, 0u);
+        CHECK_EQ_INT(OOB_STATS->keys_dropped_unsupported, 0u);
+        CHECK_EQ_INT(OOB_STATS->bytes_txdt, 32u);
+        CHECK_EQ_INT(OOB_STATS->bytes_pldt, 32u);
 
         memcpy(scratch_copy[pass], g_oob_scratch, sizeof(g_oob_scratch));
         memcpy(out_copy[pass], g_oob_out, sizeof(g_oob_out));
     }
 
-    CHECK(memcmp(scratch_copy[0], scratch_copy[1], sizeof(g_oob_scratch)) ==
-          0);
-    CHECK(memcmp(out_copy[0], out_copy[1], sizeof(g_oob_out)) == 0);
+    CHECK(memcmp(out_copy[0] + OOB_GUARD, out_copy[1] + OOB_GUARD,
+                 *OOB_SIZE) == 0);
+    CHECK(memcmp(scratch_copy[0] + OOB_GUARD + txdt_off,
+                 scratch_copy[1] + OOB_GUARD + txdt_off,
+                 OOB_STATS->bytes_txdt) == 0);
+    CHECK(memcmp(scratch_copy[0] + OOB_GUARD + pldt_off,
+                 scratch_copy[1] + OOB_GUARD + pldt_off,
+                 OOB_STATS->bytes_pldt) == 0);
+    {
+        uint32_t r;
+        TwlhdGxRecTexScratch *s0 =
+            (TwlhdGxRecTexScratch *)(scratch_copy[0] + OOB_GUARD);
+        TwlhdGxRecTexScratch *s1 =
+            (TwlhdGxRecTexScratch *)(scratch_copy[1] + OOB_GUARD);
+
+        for (r = 0; r < OOB_SCRATCH->plan.record_count; r++) {
+            CHECK(entry_equal(&s0->entries[r], &s1->entries[r]));
+        }
+    }
 
     test_report("gx-record-tex/oob-guards");
+}
+
+/* ------------------------------------------------------------------------- */
+/* 12. Limits above the scratch caps must return ERR_SIZE untouched.        */
+/* ------------------------------------------------------------------------- */
+static void test_limits_above_scratch_caps(void) {
+    TwlhdTexSourceCtx src;
+    TwlhdTexCapLimits limits;
+    TwlhdTexCapStats stats;
+    size_t size;
+    uint32_t pass;
+    uint32_t flags_before;
+    uint32_t overflow_before;
+    uint8_t expected[sizeof(g_out)];
+
+    /* TXDT case: format 7 256x256 needs 131072 B, limit is one byte over. */
+    memset(g_big_texel, 0xBBu, sizeof(g_big_texel));
+    recorder_begin();
+    twlhd_tex_source_reset(&src);
+    CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_TEXEL, 0u,
+                                      sizeof(g_big_texel), g_big_texel),
+                  0);
+
+    rec_write(0x040004A8u, param_of(7u, 5u, 5u, 0u));
+    rec_write(0x040004ACu, 0u);
+    rec_write(0x04000500u, 1u);
+    rec_write(0x0400048Cu, 0u);
+    rec_write(0x0400048Cu, 0u);
+    rec_write(0x0400048Cu, 0u);
+    rec_write(0x0400048Cu, 0u);
+    rec_write(0x04000504u, 0u);
+    rec_write(0x04000540u, 0u);
+
+    twlhd_tex_capture_default_limits(&limits);
+    limits.max_txdt_bytes = TWLHD_GX_REC_TEX_TXDT_MAX + 1u;
+
+    flags_before = twlhd_gx_rec_flags(&g_rec);
+    overflow_before = twlhd_gx_rec_overflowed(&g_rec);
+
+    for (pass = 0; pass < 2u; pass++) {
+        int fill = pass == 0 ? 0x00 : 0xFF;
+
+        memset(g_out, fill, sizeof(g_out));
+        memset(expected, fill, sizeof(expected));
+        memset(&stats, 0xA5, sizeof(stats));
+        size = 0xDEADBEEFu;
+
+        CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(&g_rec, &g_scratch, g_out,
+                                                sizeof(g_out), &size, &limits,
+                                                twlhd_tex_source_read, &src,
+                                                &stats),
+                       TWLHD_V2_ERR_SIZE);
+        CHECK_EQ_INT(size, 0xDEADBEEFu);
+        CHECK(memcmp(g_out, expected, sizeof(g_out)) == 0);
+
+        CHECK_EQ_INT(stats.keys_seen, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_kept, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_dropped_budget, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_dropped_read_error, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_dropped_unsupported, 0xA5A5A5A5u);
+        CHECK_EQ_INT(twlhd_gx_rec_flags(&g_rec), flags_before);
+        CHECK_EQ_INT(twlhd_gx_rec_overflowed(&g_rec), overflow_before);
+    }
+
+    /* PLDT case: 8x8 I4 key needs 32 B palette, limit is one byte over. */
+    texture_bytes_fill();
+    recorder_begin();
+    twlhd_tex_source_reset(&src);
+    {
+        uint32_t param = param_of(3u, 0u, 0u, 0u);
+
+        source_one_key(&src, param, 0u);
+        draw_textured_quad(param, 0u);
+        rec_write(0x04000540u, 0u);
+
+        twlhd_tex_capture_default_limits(&limits);
+        limits.max_pldt_bytes = TWLHD_GX_REC_TEX_PLDT_MAX + 1u;
+
+        flags_before = twlhd_gx_rec_flags(&g_rec);
+        overflow_before = twlhd_gx_rec_overflowed(&g_rec);
+
+        for (pass = 0; pass < 2u; pass++) {
+            int fill = pass == 0 ? 0x00 : 0xFF;
+
+            memset(g_out, fill, sizeof(g_out));
+            memset(expected, fill, sizeof(expected));
+            memset(&stats, 0xA5, sizeof(stats));
+            size = 0xDEADBEEFu;
+
+            CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(&g_rec, &g_scratch, g_out,
+                                                    sizeof(g_out), &size,
+                                                    &limits,
+                                                    twlhd_tex_source_read, &src,
+                                                    &stats),
+                           TWLHD_V2_ERR_SIZE);
+            CHECK_EQ_INT(size, 0xDEADBEEFu);
+            CHECK(memcmp(g_out, expected, sizeof(g_out)) == 0);
+
+            CHECK_EQ_INT(stats.keys_seen, 0xA5A5A5A5u);
+            CHECK_EQ_INT(stats.keys_kept, 0xA5A5A5A5u);
+            CHECK_EQ_INT(stats.keys_dropped_budget, 0xA5A5A5A5u);
+            CHECK_EQ_INT(stats.keys_dropped_read_error, 0xA5A5A5A5u);
+            CHECK_EQ_INT(stats.keys_dropped_unsupported, 0xA5A5A5A5u);
+            CHECK_EQ_INT(twlhd_gx_rec_flags(&g_rec), flags_before);
+            CHECK_EQ_INT(twlhd_gx_rec_overflowed(&g_rec), overflow_before);
+        }
+    }
+
+    test_report("gx-record-tex/limits-above-scratch-caps");
 }
 
 int main(void) {
@@ -990,5 +1166,6 @@ int main(void) {
     test_pica_frame_status();
     test_recorder_overflow_unchanged();
     test_out_of_bounds();
+    test_limits_above_scratch_caps();
     return test_exit_code();
 }

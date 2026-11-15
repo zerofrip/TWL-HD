@@ -931,13 +931,14 @@ What exists:
 - `arm9v2/source/main.cpp`: in textured builds the dump path calls
   `twlhd_gx_rec_serialize_tex()` and prints kept/dropped counts; the normal
   build keeps the original path and buffer size unchanged.
-- `tests/host/test_gx_record_tex.c`: 18 labels covering one textured quad,
+- `tests/host/test_gx_record_tex.c`: 19 labels covering one textured quad,
   two keys, budget drop, read-error drop, no-texture byte-identity,
   too-small output buffer (full output untouched), NULL args, source-backend
   cases, region capacity, backend null args, full-table OOB read, poisoned
   slot, apply-time read error, 256-distinct-key capacity, large-texture budget,
-  `pica_frame` status, recorder overflow semantics, and the before/after OOB
-  guard harness.
+  `pica_frame` status, recorder overflow semantics, the before/after OOB
+  guard harness, and limits above the scratch caps returning `ERR_SIZE` with
+  every output untouched.
 - `docs/reports/5c2_mutate_gx_record_tex.py` and
   `docs/reports/5c2-mutation-report.md`: ≥60 mutants of the new serialize
   function and the backend, with real kill/survive numbers and every survivor
