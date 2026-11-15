@@ -58,7 +58,7 @@ watchdog path (which reports 1). This is EMULATOR evidence only; it is **not** H
    `glCurClearColor` (seeded by `glInit()` on the DS, zero on the host), so the **first** write to `0x04000350` may differ only in the polygon-id
    bits 24..29 (mask `0x3F000000`). Any other difference on that write, or any difference on a later `0x04000350` write, fails.
 
-## Mutation / negative tests (run by `make test`; 82 Python tests in total; 2 of them need the devkitPro environment and are skipped without it)
+## Mutation / negative tests (run by `make test`; 294 Python tests in total after 5C-3, measured baseline before it: 253; 3 of them need the devkitPro environment and are skipped without it)
 
 `tools/test_emulator_compare.py` feeds the comparator wrong data and requires exit 1 with the right reason: value mismatch, command-sequence
 mismatch, perspective/look-at/rotation wrong, negative rotation angle, rotation blocks swapped, wrong header flags / META backend / coverage,
@@ -119,6 +119,73 @@ they do not replace the real run.
   binaries that check the recorded primitive type, VTX_16/COLOR/POLYGON_ATTR counts, the exact interpreted vertex-index order and
   frustum bounds at angles 0, 7680, 15360, 23040 and 30720, plus the per-vertex alpha literals for `SCENE=4`
   (1.0 / 0.53125 / 0.15625 / 0.0). The scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25.
+
+## Textured scene (SCENE=5) run, stage 5C-3 tooling
+
+**Label rules.** Everything described here is **BUILD/UNIT** tooling and tests.
+A real DeSmuME run of the textured ROM is **EMULATOR** evidence, and it is
+recorded by the owner's run in this file — this task does not run an emulator
+and makes no EMULATOR or HARDWARE claim. DS hardware is the separate 5C-4 step.
+
+Build the textured autodump ROM, capture it, cross-check both parsers, and
+compare the texture chunks against the known arrays:
+
+    DESMUME_CLI=/path/to/desmume-cli make emu-validate-tex
+
+`DESMUME_CLI` setup is the same as for `emu-validate` (a self-built
+`desmume-cli` outside this repository; see "Prerequisites and how to run"
+above). The target fails loudly if `DESMUME_CLI` is unset or not executable.
+It builds `make -C arm9v2 SCENE=5 AUTODUMP_FRAME=240` →
+`arm9v2/twlhd-arm9v2-autodump-s5.nds`, captures into the **separate** directory
+`tests/host/build/emu/capture-tex` (the `emu-validate` artifacts in
+`tests/host/build/emu/capture` are never touched), runs
+`tools/emulator/validate_with_parsers.sh`, then
+`tools/emulator/compare_texture_capture.py`.
+
+What the texture comparator checks (exit 0 PASS / 1 FAIL / 2 usage, one reason
+per line):
+
+1. v2 container parses; file flags are **exactly** FRAME_COMPLETE. OVERFLOW
+   means the recorder dropped a texture key: for this scene a texture drop is a
+   FAIL (the file flag is set by any dropped key; `rec->flags` is untouched).
+   META backend is 1 (register proxy) and META coverage is 0x7.
+2. Exactly one `TXDS` record. Its key equals the `TEXIMAGE_PARAM` and
+   `PLTT_BASE` words the demo writes (`3 << 26` and `0`; texel base =
+   `(param & 0xFFFF) << 3`, palette base = `pltt << 4`), its sizes equal the
+   shared formula (32 texel bytes, 32 palette bytes, no index block), and the
+   `TXDT`/`PLDT` bytes equal the known `scene5_texel`/`scene5_palette` arrays.
+3. The GXCM stream has the structural shape the scene produces: one
+   `TEXIMAGE_PARAM` with the literal param, one `PLTT_BASE` with the literal
+   pltt, `TEXIMAGE_PARAM` before `PLTT_BASE` before exactly one
+   `BEGIN_VTXS(GL_QUADS)`, four `(TEX_COORD, VTX_16, VTX_16)` triples inside
+   the BEGIN group, one `END_VTXS` after it, and `SWAP_BUFFERS` last. The
+   perspective/look-at/rotation commands are checked analytically with the same
+   helpers as `compare_capture.py` (same demo camera path).
+
+**Justified limitation:** the host expected stream does not support SCENE=5
+(`tests/host/dump_demo_frame.cpp` is a non-texture build and its mock has no
+texture/VRAM ports), so the command-id sequence is compared structurally plus
+against the two exact known key values instead of entry for entry against
+`expected.txt`. A wrongly ordered non-key command outside the checked shape is
+therefore not caught by this comparator; the cross-checked literals, the matrix
+checks and `docs/reports/5c3-mutation-report.md` bound that gap.
+
+**What a PASS means:** the PASS proves the recorder, the v2 serializer and the
+source-buffer capture path worked **in DeSmuME only** — the capture contains the
+exact key, texel and palette bytes the demo registered, and both parsers accept
+it. It says nothing about DS hardware, VRAM readback, real SD/FAT behaviour or
+GX timing; those are the separate 5C-4 hardware step.
+
+The expected arrays live in exactly one place
+(`tools/emulator/compare_texture_capture.py`); a unit test parses the
+`scene5_texel`/`scene5_palette` initialisers and the `param`/`pltt` literals out
+of `arm9v2/source/demo_frame.cpp` and fails if they change. Negative tests
+(flipped TXDT/PLDT byte, wrong param/pltt key, two/zero TXDS records, wrong
+TXDT length, missing PLDT, OVERFLOW set, truncated chunk, and a textured
+capture fed to the unchanged non-texture comparator) each fail with their
+specific reason, and `tools/test_emulator_texture_run.py` drives this target's
+script path end to end with a fake emulator (positive and corrupted capture; no
+real DeSmuME).
 
 ## Emulator facts that shaped the harness
 
