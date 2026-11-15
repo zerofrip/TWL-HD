@@ -25,6 +25,16 @@ static uint8_t g_palette[64];
 static uint8_t g_index[64];
 static uint8_t g_big_texel[131072];
 
+/* Stateful mock: probes succeed, real copies fail. */
+static int stateful_mock_read(void *ctx, uint32_t kind, uint32_t offset,
+                              uint32_t bytes, uint8_t *dst) {
+    (void)ctx;
+    (void)kind;
+    (void)offset;
+    (void)bytes;
+    return dst == NULL ? 0 : 1;
+}
+
 static uint32_t param_of(uint32_t fmt, uint32_t shift_s, uint32_t shift_t,
                          uint32_t offset) {
     return ((fmt & 7u) << 26) | ((shift_s & 7u) << 20) |
@@ -414,13 +424,15 @@ static void test_no_texture_byte_identical(void) {
 }
 
 /* ------------------------------------------------------------------------- */
-/* 6. Too-small output buffer: error, out_size untouched.                   */
+/* 6. Too-small output buffer: error, every output untouched.               */
 /* ------------------------------------------------------------------------- */
 static void test_small_output_buffer(void) {
     TwlhdTexSourceCtx src;
     TwlhdTexCapLimits limits;
+    TwlhdTexCapStats stats;
     size_t size = 0xDEADBEEFu;
     uint32_t param = param_of(3u, 0u, 0u, 0u);
+    uint32_t pass;
 
     texture_bytes_fill();
     recorder_begin();
@@ -429,11 +441,31 @@ static void test_small_output_buffer(void) {
     rec_write(0x04000540u, 0u);
 
     twlhd_tex_capture_default_limits(&limits);
-    CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(&g_rec, &g_scratch, g_out, 32u,
-                                            &size, &limits,
-                                            twlhd_tex_source_read, &src, NULL),
-                  TWLHD_V2_ERR_SIZE);
-    CHECK_EQ_INT(size, 0xDEADBEEFu);
+
+    for (pass = 0; pass < 2u; pass++) {
+        int fill = pass == 0 ? 0x00 : 0xFF;
+        uint8_t expected[sizeof(g_out)];
+
+        memset(g_out, fill, sizeof(g_out));
+        memset(expected, fill, sizeof(expected));
+        memset(&stats, 0xA5, sizeof(stats));
+        size = 0xDEADBEEFu;
+
+        CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(&g_rec, &g_scratch, g_out, 32u,
+                                                &size, &limits,
+                                                twlhd_tex_source_read, &src,
+                                                &stats),
+                       TWLHD_V2_ERR_SIZE);
+        CHECK_EQ_INT(size, 0xDEADBEEFu);
+        CHECK(memcmp(g_out, expected, sizeof(g_out)) == 0);
+
+        /* Stats must stay untouched on error. */
+        CHECK_EQ_INT(stats.keys_seen, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_kept, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_dropped_budget, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_dropped_read_error, 0xA5A5A5A5u);
+        CHECK_EQ_INT(stats.keys_dropped_unsupported, 0xA5A5A5A5u);
+    }
 
     test_report("gx-record-tex/small-buffer");
 }
@@ -600,6 +632,132 @@ static void test_source_null_args(void) {
                                 buf) != 0);
 
     test_report("gx-record-tex/source-null-args");
+}
+
+/* ------------------------------------------------------------------------- */
+/* 8c. Full region table: unregistered read must not scan past the table.   */
+/* ------------------------------------------------------------------------- */
+static void test_source_oob_full_table(void) {
+    TwlhdTexSourceCtx src;
+    uint8_t bufs[TWLHD_TEX_SOURCE_REGION_MAX][1];
+    uint32_t i;
+
+    twlhd_tex_source_reset(&src);
+    for (i = 0; i < TWLHD_TEX_SOURCE_REGION_MAX; i++) {
+        bufs[i][0] = (uint8_t)i;
+        CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_TEXEL,
+                                          i, 1u, bufs[i]),
+                     0);
+    }
+    /* An unregistered offset of the matching kind must fail. The mutant that
+     * scans regions[count] reads one element past the struct; ASan kills it. */
+    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
+                                       0x1000u, 1u, NULL),
+                 1);
+
+    test_report("gx-record-tex/source-oob-full-table");
+}
+
+/* ------------------------------------------------------------------------- */
+/* 8d. Poisoned slot past count must not be matched.                        */
+/* ------------------------------------------------------------------------- */
+static void test_source_poison_slot(void) {
+    TwlhdTexSourceCtx src;
+    uint8_t buf[16];
+    uint8_t tmp = 0xCC;
+
+    memset(buf, 0xAB, sizeof(buf));
+    twlhd_tex_source_reset(&src);
+    CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_TEXEL,
+                                      0u, 8u, buf),
+                 0);
+    /* regions[count] is outside the active table; poison it to look like a
+     * match for an unregistered offset. */
+    src.regions[src.count].kind = TWLHD_TEX_CAP_READ_TEXEL;
+    src.regions[src.count].base = 0x100u;
+    src.regions[src.count].length = 8u;
+    src.regions[src.count].data = buf;
+
+    CHECK_EQ_INT(twlhd_tex_source_read(&src, TWLHD_TEX_CAP_READ_TEXEL,
+                                       0x100u, 1u, &tmp),
+                 1);
+    CHECK_EQ_INT(tmp, 0xCCu);
+
+    test_report("gx-record-tex/source-poison-slot");
+}
+
+/* ------------------------------------------------------------------------- */
+/* 8e. Apply-time read failure after successful plan probe.                 */
+/* ------------------------------------------------------------------------- */
+static void test_apply_read_error_txdt(void) {
+    TwlhdTexCapLimits limits;
+    size_t size = 0xDEADBEEFu;
+    uint32_t param = param_of(3u, 0u, 0u, 0u);
+    uint32_t flags_before;
+
+    texture_bytes_fill();
+    recorder_begin();
+    draw_textured_quad(param, 0u);
+    rec_write(0x04000540u, 0u);
+
+    twlhd_tex_capture_default_limits(&limits);
+    flags_before = twlhd_gx_rec_flags(&g_rec);
+    memset(g_out, 0xB6, sizeof(g_out));
+
+    CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(&g_rec, &g_scratch, g_out,
+                                            sizeof(g_out), &size, &limits,
+                                            stateful_mock_read, NULL, NULL),
+                 TWLHD_V2_ERR_TXDT);
+    CHECK_EQ_INT(size, 0xDEADBEEFu);
+    CHECK_EQ_INT(twlhd_gx_rec_flags(&g_rec), flags_before);
+
+    test_report("gx-record-tex/apply-read-error");
+}
+
+/* ------------------------------------------------------------------------- */
+/* 8f. 256 distinct keys exercise the TXDS record capacity.                 */
+/* ------------------------------------------------------------------------- */
+static void test_256_distinct_keys(void) {
+    TwlhdTexSourceCtx src;
+    TwlhdTexCapLimits limits;
+    TwlhdV2View view;
+    size_t size = 0;
+    uint32_t k;
+
+    memset(g_big_texel, 0xD0, sizeof(g_big_texel));
+    recorder_begin();
+    twlhd_tex_source_reset(&src);
+    CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_TEXEL, 0u,
+                                      8192u, g_big_texel),
+                 0);
+    CHECK_EQ_INT(twlhd_tex_source_add(&src, TWLHD_TEX_CAP_READ_PALETTE, 0u,
+                                      4096u, g_big_texel + 8192u),
+                 0);
+
+    for (k = 0; k < 256u; k++) {
+        uint32_t param = param_of(3u, 0u, 0u, k);
+        rec_write(0x040004A8u, param);
+        rec_write(0x040004ACu, 0u);
+        rec_write(0x04000500u, 1u);
+        rec_write(0x0400048Cu, 0u);
+        rec_write(0x0400048Cu, 0u);
+        rec_write(0x0400048Cu, 0u);
+        rec_write(0x0400048Cu, 0u);
+        rec_write(0x04000504u, 0u);
+    }
+    rec_write(0x04000540u, 0u);
+
+    twlhd_tex_capture_default_limits(&limits);
+    CHECK_EQ_INT(twlhd_gx_rec_serialize_tex(&g_rec, &g_scratch, g_out,
+                                            sizeof(g_out), &size, &limits,
+                                            twlhd_tex_source_read, &src, NULL),
+                 TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_v2_parse(g_out, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(view.txds_count, 256u);
+    CHECK_EQ_INT(view.txdt_size, 8192u);
+    CHECK_EQ_INT(view.pldt_size, 8192u);
+
+    test_report("gx-record-tex/256-distinct-keys");
 }
 
 /* ------------------------------------------------------------------------- */
@@ -825,6 +983,10 @@ int main(void) {
     test_source_backend();
     test_source_region_capacity();
     test_source_null_args();
+    test_source_oob_full_table();
+    test_source_poison_slot();
+    test_apply_read_error_txdt();
+    test_256_distinct_keys();
     test_pica_frame_status();
     test_recorder_overflow_unchanged();
     test_out_of_bounds();

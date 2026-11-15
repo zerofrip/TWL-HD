@@ -122,13 +122,14 @@ static void draw_cube(void) {
  * explicit GFX_TEX_FORMAT / GFX_PAL_FORMAT writes through the proxy.
  */
 #if TWLHD_DEMO_SCENE == 5
-static const uint8_t scene5_texel[32] = {
+/* Aligned so VRAM uploads can use 16-bit stores (the DS ignores 8-bit VRAM). */
+static const uint8_t scene5_texel[32] __attribute__((aligned(4))) = {
     0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE,
     0x01, 0x23, 0x45, 0x67, 0x89, 0xAB, 0xCD, 0xEF,
     0xFE, 0xDC, 0xBA, 0x98, 0x76, 0x54, 0x32, 0x10,
     0xEF, 0xCD, 0xAB, 0x89, 0x67, 0x45, 0x23, 0x01,
 };
-static const uint8_t scene5_palette[32] = {
+static const uint8_t scene5_palette[32] __attribute__((aligned(4))) = {
     0x00, 0x00, 0xFF, 0x0F, 0x00, 0xF8, 0xE0, 0x07,
     0x1F, 0x00, 0x00, 0x80, 0xFF, 0xFF, 0xFF, 0x7F,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -143,16 +144,30 @@ void twlhd_demo_scene5_register_sources(TwlhdTexSourceCtx *ctx) {
                          scene5_palette);
 }
 
+/*
+ * One-time upload to texture VRAM. Mapped banks cannot be CPU-written, so we
+ * map them to LCDC, copy with 16-bit stores, then switch to texture/palette
+ * memory. HARDWARE UNVERIFIED: build-only fix from DeSmuME/GBATEK model.
+ */
+void twlhd_demo_scene5_upload_textures(void) {
+    uint32_t i;
+
+    vramSetBankA(VRAM_A_LCD);
+    vramSetBankE(VRAM_E_LCD);
+    for (i = 0; i < 16u; i++) {
+        ((volatile uint16_t *)0x06800000u)[i] =
+            ((const uint16_t *)scene5_texel)[i];
+        ((volatile uint16_t *)0x06880000u)[i] =
+            ((const uint16_t *)scene5_palette)[i];
+    }
+    vramSetBankA(VRAM_A_TEXTURE);
+    vramSetBankE(VRAM_E_TEX_PALETTE);
+}
+
 static void draw_scene5_textured_quad(void) {
     /* 8x8 I4 texture, slot offset 0, palette slot 0. */
     uint32_t param = (3u << 26);
     uint32_t pltt = 0u;
-
-    /* Upload from main RAM to mapped VRAM banks (build-only path). */
-    vramSetBankA(VRAM_A_TEXTURE);
-    vramSetBankE(VRAM_E_TEX_PALETTE);
-    memcpy((uint8_t *)0x6800000, scene5_texel, 32);
-    memcpy((uint8_t *)0x6880000, scene5_palette, 32);
 
     /*
      * Explicit texture-register writes through the shim. libnds'
@@ -162,14 +177,18 @@ static void draw_scene5_textured_quad(void) {
     GFX_TEX_FORMAT = param;
     GFX_PAL_FORMAT = pltt;
 
+    /* Texturing is off by default; enable it before the textured quad. */
+    glEnable(GL_TEXTURE_2D);
+
     glBegin(GL_QUADS);
-    glTexCoord2f(0.0f, 0.0f);
+    /* Raw texel-scaled coords; glTexCoord2f needs active-texture size state. */
+    GFX_TEX_COORD = TEXTURE_PACK(inttot16(0), inttot16(0));
     glVertex3v16((v16)(-V16_ONE), (v16)(-V16_ONE), 0);
-    glTexCoord2f(1.0f, 0.0f);
+    GFX_TEX_COORD = TEXTURE_PACK(inttot16(8), inttot16(0));
     glVertex3v16((v16)V16_ONE, (v16)(-V16_ONE), 0);
-    glTexCoord2f(1.0f, 1.0f);
+    GFX_TEX_COORD = TEXTURE_PACK(inttot16(8), inttot16(8));
     glVertex3v16((v16)V16_ONE, (v16)V16_ONE, 0);
-    glTexCoord2f(0.0f, 1.0f);
+    GFX_TEX_COORD = TEXTURE_PACK(inttot16(0), inttot16(8));
     glVertex3v16((v16)(-V16_ONE), (v16)V16_ONE, 0);
     glEnd();
 }

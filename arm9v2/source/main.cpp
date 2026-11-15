@@ -146,6 +146,7 @@ int main(void) {
 #if TWLHD_DEMO_SCENE == 5
     twlhd_tex_source_reset(&g_tex_source);
     twlhd_demo_scene5_register_sources(&g_tex_source);
+    twlhd_demo_scene5_upload_textures();
 #endif
     refresh_console();
 

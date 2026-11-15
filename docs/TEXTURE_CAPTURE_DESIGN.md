@@ -924,17 +924,20 @@ What exists:
   unknown `kind`; it supports the `dst == NULL` probe; a zero-length read
   succeeds iff the offset lies inside a matching region.
 - `arm9v2/source/demo_frame.cpp`: new `TWLHD_DEMO_SCENE == 5` branch with an
-  8×8 I4 texture + palette in main RAM. The scene uploads to VRAM with direct
-  stores and writes `GFX_TEX_FORMAT` / `GFX_PAL_FORMAT` explicitly through the
-  shim so the keys are recorded (D6).
+  8×8 I4 texture + palette in main RAM. The scene uploads to VRAM once at init
+  (LCDC remap, 16-bit stores, then texture/palette mapping), enables texturing,
+  and writes `GFX_TEX_FORMAT` / `GFX_PAL_FORMAT` / `GFX_TEX_COORD` explicitly
+  through the shim so the keys and coordinates are recorded (D6).
 - `arm9v2/source/main.cpp`: in textured builds the dump path calls
   `twlhd_gx_rec_serialize_tex()` and prints kept/dropped counts; the normal
   build keeps the original path and buffer size unchanged.
-- `tests/host/test_gx_record_tex.c`: 14 labels covering one textured quad,
+- `tests/host/test_gx_record_tex.c`: 18 labels covering one textured quad,
   two keys, budget drop, read-error drop, no-texture byte-identity,
-  too-small output buffer, NULL args, source-backend cases, region capacity,
-  backend null args, large-texture budget, `pica_frame` status, recorder
-  overflow semantics, and the before/after OOB guard harness.
+  too-small output buffer (full output untouched), NULL args, source-backend
+  cases, region capacity, backend null args, full-table OOB read, poisoned
+  slot, apply-time read error, 256-distinct-key capacity, large-texture budget,
+  `pica_frame` status, recorder overflow semantics, and the before/after OOB
+  guard harness.
 - `docs/reports/5c2_mutate_gx_record_tex.py` and
   `docs/reports/5c2-mutation-report.md`: ≥60 mutants of the new serialize
   function and the backend, with real kill/survive numbers and every survivor
@@ -965,11 +968,21 @@ buffer growth of +174,131 B plus the scratch/backend state). The normal build
 keeps `g_serialize` at 135,264 B and adds no texture state.
 
 **D6 outcome:** libnds `glTexImage2D` / `glColorTableEXT` / `glBindTexture`
-are out-of-line and bypass the shim's macro proxy, so scene 5 uploads the
-source arrays with direct VRAM stores and then issues explicit
-`GFX_TEX_FORMAT = param;` and `GFX_PAL_FORMAT = pltt;` writes through the
-proxy. The record path therefore captures the keys; the upload path itself is
-not recorded (it is main-RAM → VRAM, not a GX command).
+are out-of-line and bypass the shim's macro proxy. Scene 5 therefore:
+
+- uploads the source arrays to VRAM once at init with direct 16-bit stores
+  after mapping the banks to LCDC, then remaps them to texture/palette memory;
+- issues explicit `GFX_TEX_FORMAT = param;` and `GFX_PAL_FORMAT = pltt;` writes
+  through the proxy so the keys are recorded in GXCM;
+- enables texturing with `glEnable(GL_TEXTURE_2D);`, which expands to
+  `GFX_CONTROL |= GL_TEXTURE_2D;` and is proxied, but `0x04000060` is outside
+  the GXCM window so the recorder counts it as an ignored write (not a GXCM
+  command);
+- issues raw texel-scaled coordinates through `GFX_TEX_COORD =
+  TEXTURE_PACK(inttot16(...), inttot16(...));`, which is proxied and recorded.
+
+The record path captures `GFX_TEX_FORMAT`, `GFX_PAL_FORMAT` and `GFX_TEX_COORD`;
+the VRAM upload and the `GFX_CONTROL` enable are not GXCM commands.
 
 Corrections to this design, found while implementing:
 
@@ -981,6 +994,19 @@ Corrections to this design, found while implementing:
 - §3.5 step 4 said the planner sets `TWLHD_V2_FLAG_OVERFLOW`. The planner only
   reports drop counters; `twlhd_gx_rec_serialize_tex()` maps the three drop
   counters to the file flag.
+
+**Repair round 1 (review defects fixed, BUILD/UNIT only):**
+
+- Scene-5 VRAM upload now maps banks to LCDC, copies with 16-bit stores, then
+  remaps to texture/palette memory, and it runs once at init instead of every
+  frame. Source arrays are `__attribute__((aligned(4)))`.
+- Scene 5 now enables texturing (`glEnable(GL_TEXTURE_2D)`) and issues raw
+  texel-scaled `GFX_TEX_COORD` writes through the shim.
+- `twlhd_gx_rec_serialize_tex()` only writes `stats_out` when the writer
+  returns `TWLHD_V2_OK`, so all outputs stay untouched on error.
+- Mutation survivors at `twlhd_tex_source.c:39` and
+  `twlhd_gx_record.c:205/209` are now killed by new tests; the mutation report
+  and run log were regenerated with real numbers.
 
 Open items: 5C-3 is DeSmuME validation of scene 5; 5C-4 is a hardware dump
 byte-compare; 5C-5 (VRAM readback backend) remains deferred. The source-buffer
