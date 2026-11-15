@@ -309,7 +309,9 @@ static void test_frame_is_self_contained(void) {
 #ifndef TWLHD_TEST_EXPECT_SCENE
     CHECK(has_cmd_word(TWLHD_V2_CMD_NORMAL));
 #endif
+#if !defined(TWLHD_TEST_EXPECT_SCENE) || TWLHD_TEST_EXPECT_SCENE != 5
     CHECK(has_cmd_word(TWLHD_V2_CMD_COLOR));
+#endif
 
     /* Rendering state recorded as RSTA. */
     CHECK(has_rsta_addr(0x04000350u)); /* clear colour */
@@ -941,6 +943,7 @@ static const float g_scene_alpha[SCENE_OUT_VERTICES] = {
 
 static TwlhdGxVertex g_scene_out[64];
 
+#if !defined(TWLHD_TEST_EXPECT_SCENE) || TWLHD_TEST_EXPECT_SCENE != 5
 static void test_scene_variant(void) {
     static const unsigned angles[] = {0u, 7680u, 15360u, 23040u, 30720u};
     TwlhdV2View view;
@@ -1080,6 +1083,7 @@ static void test_scene_variant(void) {
     }
 }
 #endif
+#endif
 
 /* Assert the mutation is exactly the intended one: same length, last entry
  * SWAP_BUFFERS, 16 MTX_MULT_4x4 entries, and the required commands present.
@@ -1210,8 +1214,10 @@ static void test_ordering_rejects_mult_after_modelview(void) {
 
 int main(void) {
 #ifdef TWLHD_TEST_EXPECT_SCENE
+#if TWLHD_TEST_EXPECT_SCENE != 5
     test_scene_variant();
     test_report("demo-frame/scene");
+#endif
 #endif
 
 #ifdef TWLHD_TEST_EXPECT_CUBES

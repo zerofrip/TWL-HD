@@ -1,5 +1,5 @@
 baseline: build OK, C test OK
-mutants: 60 unique
+mutants: 62 unique
 line 13 const 0 -> 1 -> KILLED(test)
 line 20 const 1 -> 0 -> KILLED(test)
 line 20 op || -> && -> KILLED(test)
@@ -17,6 +17,7 @@ line 28 targeted stored data NULL -> KILLED(test)
 line 29 const 0 -> 1 -> KILLED(test)
 line 37 const 1 -> 0 -> KILLED(test)
 line 39 const 0 -> 1 -> KILLED(test)
+line 39 op < -> <= -> KILLED(test)
 line 43 op != -> == -> KILLED(test)
 line 44 op < -> <= -> KILLED(test)
 line 47 const 0 -> 1 -> KILLED(test)
@@ -38,7 +39,11 @@ line 189 targeted serialize_tex null error -> ok -> KILLED(test)
 line 189 targeted serialize_tex null error -> size error -> KILLED(test)
 line 195 op != -> == -> KILLED(test)
 line 203 targeted serialize apply TXDT capacity -> PLDT capacity -> KILLED(test)
+line 205 targeted entries capacity -1 -> KILLED(test)
 line 206 op != -> == -> KILLED(test)
+line 207 op == -> != -> KILLED(test)
+line 208 op == -> != -> KILLED(test)
+line 209 targeted txdt error -> null error -> KILLED(test)
 line 220 targeted tex entries -> NULL -> KILLED(test)
 line 221 targeted tex count +1 -> KILLED(test)
 line 228 targeted file flags cleared -> KILLED(test)
@@ -47,23 +52,20 @@ line 229 targeted drop predicate >0 -> ==0 -> KILLED(test)
 line 231 op > -> >= -> KILLED(build)
 line 232 const 0 -> 1 -> KILLED(test)
 line 233 targeted file flag OR -> AND-NOT -> KILLED(test)
+line 239 op && -> || -> KILLED(test)
+line 239 op == -> != -> KILLED(test)
 
-test:     41
+test:     48
 build:    6
 timeout:  0
-survived: 13
-total:    60
+survived: 8
+total:    62
 SURVIVOR line 20 const 1 -> 2
 SURVIVOR line 22 const 1 -> 2
 SURVIVOR line 37 const 1 -> 2
-SURVIVOR line 39 op < -> <=
 SURVIVOR line 196 op == -> !=
 SURVIVOR line 197 op == -> !=
 SURVIVOR line 197 targeted plan capacity error -> null error
 SURVIVOR line 198 targeted txds error -> null error
 SURVIVOR line 204 targeted serialize apply PLDT capacity -> TXDT capacity
-SURVIVOR line 205 targeted entries capacity -1
-SURVIVOR line 207 op == -> !=
-SURVIVOR line 208 op == -> !=
-SURVIVOR line 209 targeted txdt error -> null error
 common/ restored: YES

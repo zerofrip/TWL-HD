@@ -235,7 +235,8 @@ TwlhdV2Result twlhd_gx_rec_serialize_tex(
     params.flags = file_flags;
 
     result = twlhd_v2_write(&params, out, capacity, out_size);
-    if (stats_out) *stats_out = scratch->plan.stats;
+    /* Outputs (including stats) stay untouched on error. */
+    if (result == TWLHD_V2_OK && stats_out) *stats_out = scratch->plan.stats;
     return result;
 }
 /* END 5C-2 serialize_tex */

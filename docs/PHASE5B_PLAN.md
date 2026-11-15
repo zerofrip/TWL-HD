@@ -197,6 +197,7 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 - 2026-11-14: recorder-side texture capture design study written, see `docs/TEXTURE_CAPTURE_DESIGN.md`; documentation only, no code/test/Makefile change, status stays BUILD/UNIT and no 5C stage is approved.
 - 2026-11-15: stage 5C-1 texture capture planner implemented (`common/twlhd_tex_capture.[ch]`, host tests, oracle/golden suite, mutation report); **BUILD/UNIT only**, not wired to the recorder (5C-2), no format or arm9/arm9v2/arm11 change.
 - 2026-11-15: stage 5C-2 recorder wiring implemented (`common/twlhd_gx_record.[ch]`, `common/twlhd_tex_source.[ch]`, `arm9v2/source/demo_frame.cpp`, `arm9v2/source/main.cpp`, `tests/host/test_gx_record_tex.c`, mutation report); **BUILD/UNIT only**, texture-drop OVERFLOW in file flags only, gate untouched, no format or arm11/arm9 (v1) change.
+- 2026-11-15: repair round 1 fixed scene-5 VRAM upload (LCDC remap, 16-bit stores, once at init), enabled texturing/raw texcoords, strengthened `test_small_output_buffer`, added tests killing the three mutation survivors, and regenerated the mutation report with real numbers; still **BUILD/UNIT only**.
 - Repair round 1: format 5 (4x4) `palette_size` is now a caller-chosen even
   window in `[2, 65540]` bytes (round 1 first shipped `[2, 65536]`; raised in
   round 3), not the fixed 0 this stage originally specified. DeSmuME's PAL4X4
