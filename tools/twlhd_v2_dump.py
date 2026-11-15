@@ -80,11 +80,20 @@ def fourcc(text):
 GXCM = fourcc("GXCM")
 META = fourcc("META")
 RSTA = fourcc("RSTA")
-KNOWN_CHUNKS = {GXCM, META, RSTA}
+TXDS = fourcc("TXDS")
+TXDT = fourcc("TXDT")
+PLDT = fourcc("PLDT")
+KNOWN_CHUNKS = {GXCM, META, RSTA, TXDS, TXDT, PLDT}
 
 # Reserved, not implemented: treated as unknown chunks.
-RESERVED_CHUNKS = {fourcc("CLPM"), fourcc("TXDS"),
-                   fourcc("TXDT"), fourcc("PLDT")}
+RESERVED_CHUNKS = {fourcc("CLPM")}
+
+TXDS_RECORD_SIZE = 40
+TXDS_MAX_RECORDS = 256
+TXDT_MAX_BYTES = 524288
+PLDT_MAX_BYTES = 98304
+TEX_PALETTE_4X4_MIN_BYTES = 2
+TEX_PALETTE_4X4_MAX_BYTES = 65540
 
 # Command id -> entries per command (one entry per port write).
 # A zero count still consumes exactly one entry.
@@ -111,7 +120,14 @@ RSTA_RANGES = (
 View = namedtuple(
     "View",
     "total_size flags frame_index chunk_count unknown_chunks_skipped "
-    "gxcm rsta meta_backend_id meta_coverage_flags")
+    "gxcm rsta meta_backend_id meta_coverage_flags "
+    "tex_records txdt pldt")
+
+# One TXDS descriptor: the 8 documented u32 fields.
+TexRecord = namedtuple(
+    "TexRecord",
+    "teximage_param pltt_base texel_offset texel_size "
+    "palette_offset palette_size index_offset index_size")
 
 
 class V2Error(Exception):
@@ -251,6 +267,107 @@ def _validate_meta(payload):
     return backend, coverage
 
 
+def tex_format(teximage_param):
+    """Packed format from bits 26..28 (0 none, 1 A3I5, 2 I2, 3 I4, ...)."""
+    return (teximage_param >> 26) & 7
+
+
+def tex_sizes(teximage_param):
+    """Mirror of twlhd_v2_tex_sizes(): (texel, palette, index) byte counts.
+
+    Returns None for format 0 (no texture, no record).
+    """
+    texel_eighths = (0, 8, 2, 4, 8, 2, 8, 16)
+    palette_by_format = (0, 64, 8, 32, 512, 0, 16, 0)
+    fmt = (teximage_param >> 26) & 7
+    if fmt == 0:
+        return None
+
+    width = 8 << ((teximage_param >> 20) & 7)
+    height = 8 << ((teximage_param >> 23) & 7)
+    texels = width * height
+    texel_bytes = texels * texel_eighths[fmt] >> 3
+    palette_bytes = palette_by_format[fmt]
+    index_bytes = texels >> 3 if fmt == 5 else 0
+    return texel_bytes, palette_bytes, index_bytes
+
+
+def _tex_palette_size_ok(teximage_param, palette_bytes):
+    sizes = tex_sizes(teximage_param)
+    if sizes is None:
+        return False
+    if (teximage_param >> 26) & 7 == 5:
+        return (TEX_PALETTE_4X4_MIN_BYTES <= palette_bytes <=
+                TEX_PALETTE_4X4_MAX_BYTES and palette_bytes % 2 == 0)
+    return palette_bytes == sizes[1]
+
+
+def _validate_tex(txds, txdt, pldt):
+    """Mirror of validate_tex(): the C result order is transcribed exactly."""
+    if len(txds) % TXDS_RECORD_SIZE:
+        raise V2Error("ERR_TXDS", "TXDS payload is not a multiple of 40")
+
+    count = len(txds) // TXDS_RECORD_SIZE
+    if count == 0 or count > TXDS_MAX_RECORDS:
+        raise V2Error("ERR_TXDS", "TXDS record count out of range")
+
+    records = []
+    for i in range(count):
+        fields = struct.unpack_from("<10I", txds, i * TXDS_RECORD_SIZE)
+        if fields[8] or fields[9]:
+            raise V2Error("ERR_TXDS", "TXDS reserved words are not zero")
+        if tex_sizes(fields[0]) is None:
+            raise V2Error("ERR_TXDS", "TXDS record has texture format 0")
+        records.append(TexRecord(*fields[:8]))
+
+    for i, a in enumerate(records):
+        for b in records[:i]:
+            if a.teximage_param == b.teximage_param and \
+                    a.pltt_base == b.pltt_base:
+                raise V2Error("ERR_TXDS_KEY",
+                              "duplicate (teximage_param, pltt_base) key")
+
+    need_pldt = False
+    for rec in records:
+        texel_bytes, _palette, index_bytes = tex_sizes(rec.teximage_param)
+        if rec.texel_size != texel_bytes or \
+                not _tex_palette_size_ok(rec.teximage_param,
+                                         rec.palette_size) or \
+                rec.index_size != index_bytes:
+            raise V2Error("ERR_TXDS_SIZE",
+                          "TXDS size does not match the formula")
+        if rec.texel_size == 0 and rec.texel_offset != 0:
+            raise V2Error("ERR_TXDS_SIZE", "TXDS zero texel size with offset")
+        if rec.palette_size == 0 and rec.palette_offset != 0:
+            raise V2Error("ERR_TXDS_SIZE", "TXDS zero palette size with offset")
+        if rec.index_size == 0 and rec.index_offset != 0:
+            raise V2Error("ERR_TXDS_SIZE", "TXDS zero index size with offset")
+        if rec.palette_size != 0:
+            need_pldt = True
+
+    if txdt is None:
+        raise V2Error("ERR_MISSING_CHUNK", "TXDS is present without TXDT")
+    if need_pldt and pldt is None:
+        raise V2Error("ERR_MISSING_CHUNK", "TXDS needs a PLDT chunk")
+
+    txdt_size = len(txdt)
+    pldt_size = len(pldt) if pldt is not None else 0
+    for rec in records:
+        if rec.texel_offset + rec.texel_size > txdt_size:
+            raise V2Error("ERR_TXDS_BOUNDS", "texel block past the TXDT end")
+        if rec.index_offset + rec.index_size > txdt_size:
+            raise V2Error("ERR_TXDS_BOUNDS", "index block past the TXDT end")
+        if rec.palette_offset + rec.palette_size > pldt_size:
+            raise V2Error("ERR_TXDS_BOUNDS", "palette block past the PLDT end")
+
+    if txdt_size > TXDT_MAX_BYTES:
+        raise V2Error("ERR_TXDT", "TXDT payload over 524288 bytes")
+    if pldt is not None and pldt_size > PLDT_MAX_BYTES:
+        raise V2Error("ERR_PLDT", "PLDT payload over 98304 bytes")
+
+    return records
+
+
 def parse(data):
     """Parse a v2 file. Returns View or raises V2Error."""
 
@@ -317,20 +434,37 @@ def parse(data):
     if GXCM not in chunks or META not in chunks:
         raise V2Error("ERR_MISSING_CHUNK", "GXCM and META are mandatory")
 
+    # Orphan texture payloads, before the payload-size caps (format s.8 step 10).
+    if (TXDT in chunks or PLDT in chunks) and TXDS not in chunks:
+        raise V2Error("ERR_MISSING_CHUNK", "TXDT/PLDT without a TXDS chunk")
+
     if not chunks[GXCM][0] & CHUNK_FLAG_REQUIRED:
         raise V2Error("ERR_CHUNK_FLAGS", "GXCM must be marked REQUIRED")
     if chunks[META][0] & CHUNK_FLAG_REQUIRED:
         raise V2Error("ERR_CHUNK_FLAGS", "META must not be marked REQUIRED")
     if RSTA in chunks and chunks[RSTA][0] & CHUNK_FLAG_REQUIRED:
         raise V2Error("ERR_CHUNK_FLAGS", "RSTA must not be marked REQUIRED")
+    for ctype, name in ((TXDS, "TXDS"), (TXDT, "TXDT"), (PLDT, "PLDT")):
+        if ctype in chunks and chunks[ctype][0] & CHUNK_FLAG_REQUIRED:
+            raise V2Error("ERR_CHUNK_FLAGS",
+                          "%s must not be marked REQUIRED" % name)
 
     gxcm = _validate_gxcm(chunks[GXCM][1], flags)
     rsta = (_validate_rsta(chunks[RSTA][1], len(gxcm))
             if RSTA in chunks else [])
+
+    tex_records = []
+    txdt = chunks[TXDT][1] if TXDT in chunks else None
+    pldt = chunks[PLDT][1] if PLDT in chunks else None
+    if TXDS in chunks:
+        tex_records = _validate_tex(chunks[TXDS][1], txdt, pldt)
+
     backend, coverage = _validate_meta(chunks[META][1])
 
     return View(total_size, flags, frame_index, chunk_count, unknown,
-                gxcm, rsta, backend, coverage)
+                gxcm, rsta, backend, coverage,
+                tex_records, txdt if txdt is not None else b"",
+                pldt if pldt is not None else b"")
 
 
 def detect_format(data):
@@ -373,6 +507,18 @@ def _print_stats(view, path, data):
     print("coverage:   0x%02X" % view.meta_coverage_flags)
     for word in sorted(count_by_cmd_word(view)):
         print("0x%08X  %d" % (word, count_by_cmd_word(view)[word]))
+    if view.tex_records:
+        print("txds:       %d records" % len(view.tex_records))
+        print("txdt:       %d bytes" % len(view.txdt))
+        print("pldt:       %d bytes" % len(view.pldt))
+        for index, rec in enumerate(view.tex_records):
+            print("tex %d:     0x%08X/0x%08X fmt=%d texel=%d+%d palette=%d+%d "
+                  "index=%d+%d"
+                  % (index, rec.teximage_param, rec.pltt_base,
+                     tex_format(rec.teximage_param),
+                     rec.texel_offset, rec.texel_size,
+                     rec.palette_offset, rec.palette_size,
+                     rec.index_offset, rec.index_size))
 
 
 def main(argv=None):

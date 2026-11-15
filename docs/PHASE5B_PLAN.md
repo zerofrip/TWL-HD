@@ -214,6 +214,7 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   because format-5 windows are only even and may be 2 mod 4. The 98,304-byte
   `PLDT` cap is applied to the padded length by both writer and parser; the
   padding is never part of a record. Still BUILD/UNIT only.
+- 2026-11-16: stage 5C-3 tooling implemented (`tools/twlhd_v2_dump.py` now decodes `TXDS`/`TXDT`/`PLDT`, new `tools/emulator/compare_texture_capture.py`, negative tests, mutation report, new opt-in `make emu-validate-tex` target and a fake-emulator end-to-end test); **BUILD/UNIT only**, no emulator or hardware run (the real EMULATOR run is the owner's), no format, `common/`, `arm9`/`arm9v2`/`arm11` or v1 change.
 
 #### Status 5B-2b — interpreter texture latch and texture matrix
 
@@ -994,3 +995,4 @@ The renderer emits the following markers on the texture path:
 
 Do not run this on hardware until the owner explicitly approves the procedure,
 the test frame, and the build hash. The assistant never executes hardware runs.
+- 5C-3: EMULATOR (DeSmuME) PASS for the textured SCENE=5 capture (see docs/TEXTURE_CAPTURE_DESIGN.md section 6.6); hardware not run (5C-4).

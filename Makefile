@@ -1,5 +1,5 @@
 .PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test host-test clean arm11-diag \
-	emu-expected emu-validate azahar-host ntr-capture ntr-input
+	emu-expected emu-validate emu-validate-tex azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
 
@@ -450,11 +450,12 @@ tests/host/build/dump_demo_frame: tests/host/dump_demo_frame.cpp \
 # ---------------------------------------------------------------------------
 # Emulator validation (opt-in; NEVER part of `all` or `test`).
 #
-# Both targets need an external, unvendored DeSmuME CLI. `emu-validate` fails
-# loudly when DESMUME_CLI is missing instead of silently "passing".
+# These targets need an external, unvendored DeSmuME CLI. They fail loudly when
+# DESMUME_CLI is missing instead of silently "passing".
 # ---------------------------------------------------------------------------
 EMU_DIR := tests/host/build/emu
 EMU_ANGLE := 61440
+EMU_ANGLE_TEX := 61440
 
 emu-expected: tests/host/build/dump_demo_frame
 	@mkdir -p $(EMU_DIR)
@@ -476,6 +477,24 @@ emu-validate:
 	python3 tools/emulator/compare_capture.py \
 		$(EMU_DIR)/capture/twlhd_frame_v2.bin \
 		$(EMU_DIR)/expected_frame.txt $(EMU_ANGLE)
+
+# SCENE=5 textured autodump capture. Separate outdir so `emu-validate`
+# artifacts are never clobbered. BUILD/UNIT tooling until the owner records a
+# real run (docs/EMULATOR_VALIDATION.md).
+emu-validate-tex:
+	@if [ -z "$(DESMUME_CLI)" ]; then \
+		echo "error: DESMUME_CLI is not set; point it at a desmume-cli binary (see docs/EMULATOR_VALIDATION.md)" >&2; \
+		exit 1; \
+	fi
+	@if [ ! -x "$(DESMUME_CLI)" ]; then \
+		echo "error: DESMUME_CLI=$(DESMUME_CLI) is not executable" >&2; \
+		exit 1; \
+	fi
+	$(MAKE) -C arm9v2 SCENE=5 AUTODUMP_FRAME=240
+	tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-s5.nds $(EMU_DIR)/capture-tex
+	tools/emulator/validate_with_parsers.sh $(EMU_DIR)/capture-tex/twlhd_frame_v2.bin
+	python3 tools/emulator/compare_texture_capture.py \
+		$(EMU_DIR)/capture-tex/twlhd_frame_v2.bin $(EMU_ANGLE_TEX)
 
 tests/host/build:
 	mkdir -p $@

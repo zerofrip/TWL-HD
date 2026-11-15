@@ -780,7 +780,7 @@ These cannot be settled by host tests or an emulator:
 | **5C-0** | This design study and the owner decisions D1-D7 | `docs/TEXTURE_CAPTURE_DESIGN.md`, one line in `docs/PHASE5B_PLAN.md` | none (documentation) | none (docs) | none | none for the doc; decisions are the owner's |
 | **5C-1** | Pure-C planner: key table, dedupe, budget, whole-record drop, format-5 minimal window, serialization-budget define | new `common/twlhd_tex_capture.[ch]`, `tests/host/test_tex_capture.c`, `Makefile` test wiring, Python oracle + mutation script | UNIT: `make test` (host + oracle + mutation report) | BUILD/UNIT | Low: no recorder wiring, no hardware path | Stage approval (`docs/PHASE5B_PLAN.md:683`) |
 | **5C-2** | Recorder wiring: fill `params.tex` from the planner; **source-buffer backend (option c)** for the demo; grow/resize the serialize buffer with the compile-time budget; textured demo scene; relax the dump gate for texture drops | `common/twlhd_gx_record.[ch]`, `arm9v2/source/main.cpp`, `arm9v2/source/demo_frame.cpp`, `arm9v2/include/twlhd_gx_shim.hpp` only if needed | UNIT: `make test` including a host test that drives recorder GXCM + mock source buffers to a parsed texture file; BUILD: `make arm9v2` | BUILD/UNIT | Medium: buffer and dump behaviour change; the shim gap is documented, not fixed | Stage approval; "capture-format extension" only if D3/D7 choose one; "new test-ROM scene generation or AUTODUMP change" (`:687`) |
-| **5C-3** | DeSmuME validation of the 5C-2 ROM scene: extend `compare_capture.py` + `twlhd_v2_dump.py` for texture chunks, compare TXDT/PLDT with the known array | `tools/emulator/`, `tools/twlhd_v2_dump.py`, `tools/test_emulator_compare.py` | EMULATOR: `make emu-validate` (or the equivalent texture run) must PASS; negative comparator tests | EMULATOR | Medium: two parsers must agree; the comparator extension is a tool change | Stage approval; tool changes are outside the current approval list and should be called out explicitly |
+| **5C-3** | DeSmuME validation of the 5C-2 ROM scene: extend `compare_capture.py` + `twlhd_v2_dump.py` for texture chunks, compare TXDT/PLDT with the known array | `tools/emulator/`, `tools/twlhd_v2_dump.py`, `tools/test_emulator_compare.py` | BUILD/UNIT: tooling + negative tests + fake-emulator path (delivered 2026-11-16, §6.5). EMULATOR: the real `make emu-validate-tex` run PASS is recorded by the owner's run | BUILD/UNIT tooling; EMULATOR run by owner | Medium: two parsers must agree; the comparator extension is a tool change | Stage approval; tool changes are outside the current approval list and should be called out explicitly (owner approved 2026-11-16) |
 | **5C-4** | Hardware run with the option-(c) backend: our own ROM, one dump, byte comparison against the known array | no source change; procedure doc | HARDWARE: one run, one dump, C parser + byte compare | HARDWARE | Medium: read path untested on silicon | One approval per run/build hash (`:686`) |
 | **5C-5** (optional) | VRAM readback backend (option a): `VRAMCNT` discovery, per-bank remap/restore, VBlank scheduling, abort recovery; the real generic path | `arm9v2/` platform backend, planner read callback | UNIT: mock `VRAMCNT`/VRAM; EMULATOR: textures captured from VRAM; HARDWARE: side-effect observation | BUILD/UNIT then EMULATOR then HARDWARE | **High**: steals banks from the running game; needs a written risk review | Separate stage approval, new hardware runs, owner sign-off on the remap design |
 
@@ -1016,6 +1016,85 @@ arbitrary VRAM is not implemented.
 
 ---
 
+## 6.5 Status 5C-3 tooling (2026-11-16)
+
+**BUILD/UNIT only. No EMULATOR or HARDWARE claim is made here.** This stage
+delivered the tooling and its tests; the real DeSmuME run is the owner's and is
+recorded separately in `docs/EMULATOR_VALIDATION.md` (EMULATOR label). DS
+hardware remains 5C-4.
+
+What exists:
+
+- `tools/twlhd_v2_dump.py` now decodes `TXDS`/`TXDT`/`PLDT` (record fields,
+  key, offsets, sizes, format) with the same validation order and result names
+  as `common/twlhd_v2_parse.c` (`validate_tex` mirror, `ERR_DUP_CHUNK`,
+  `ERR_MISSING_CHUNK` for orphans, `ERR_CHUNK_FLAGS`, then `ERR_TXDS*`,
+  `ERR_TXDT`, `ERR_PLDT`). Malformed or truncated texture chunks raise a named
+  `V2Error`, never a traceback or an out-of-range slice. `View` gained trailing
+  `tex_records`/`txdt`/`pldt` fields; `validate` output is unchanged and
+  `stats` output for non-texture files is pinned byte for byte by a test.
+- `tools/emulator/compare_texture_capture.py` (a separate script, so
+  `compare_capture.py`'s CLI, messages, exit codes and 26 existing tests stay
+  byte-identical): checks one `TXDS` record against the literal
+  `TEXIMAGE_PARAM`/`PLTT_BASE` and the 32/32/0 sizes, the `TXDT`/`PLDT` bytes
+  against the known arrays, exactly `FRAME_COMPLETE` (OVERFLOW = texture drop =
+  FAIL), META backend/coverage, and the structural `BEGIN`/`TEXIMAGE_PARAM`/
+  `PLTT_BASE`/`VTX`/`END`/`SWAP` shape plus the shared analytic camera checks.
+  The expected arrays live once and a unit test parses
+  `arm9v2/source/demo_frame.cpp` and fails if the arrays or key literals change.
+- Negative tests for every listed failure (flipped TXDT/PLDT byte, wrong
+  param/pltt key, two/zero `TXDS` records, wrong TXDT length, missing PLDT,
+  OVERFLOW, truncated chunk, textured capture through the unchanged
+  non-texture comparator) plus a positive control; the C parser and
+  `validate_with_parsers.sh` accept the synthetic textured capture (no C code
+  changed).
+- `docs/reports/5c3_mutate_tex_compare.py` + `docs/reports/5c3-mutation-report.md`:
+  187 unique mutants, 171 killed, 16 survivors — every survivor classified as
+  an equivalent (import ordering, a sub-tolerance default angle, impossible
+  equality of distinct command ids) or a diagnostic-only operand.
+- `Makefile`: new `emu-validate-tex` target only (never in `all` or `test`):
+  SCENE=5 `AUTODUMP_FRAME=240` → `arm9v2/twlhd-arm9v2-autodump-s5.nds`,
+  capture into the separate `tests/host/build/emu/capture-tex`, parser
+  cross-check, texture comparator. Fails loudly on unset/non-executable
+  `DESMUME_CLI`; `make emu-validate` is unchanged.
+- `tools/test_emulator_texture_run.py`: fake-emulator end-to-end (pure-stdlib
+  BPB-driven FAT16 injector, cross-checked by the capture script's own `7z`
+  extraction) — positive capture PASSes, a flipped TXDT byte FAILs at the
+  comparator with its own reason; no real DeSmuME.
+- Test counts, measured in the same environment with `make test` (which builds
+  the host CLIs first): **253 Python tests before 5C-3, 294 after**; 3 tests
+  need devkitPro and skip only when it is absent.
+
+**Documented limitation:** the host expected stream does not support SCENE=5,
+so the comparator checks the command sequence structurally plus the two exact
+key values rather than entry for entry against `expected.txt`.
+
+---
+
+## 6.6 EMULATOR result 5C-3 (2026-11-16)
+
+**EMULATOR (DeSmuME) only. Not a DS hardware result.** The orchestrating assistant ran the
+real emulator with `DESMUME_CLI` pointing at a DeSmuME CLI built from the
+unvendored checkout (`fc504ee0`, wifi off, built outside the repository):
+
+- Baseline `make emu-validate` (cube scene): `PASS: 124 GXCM + 4 RSTA entries
+  match for angle 61440`.
+- `make emu-validate-tex` (arm9v2 `SCENE=5`, autodump frame 240): parsers OK
+  (78 GXCM entries, 5 RSTA), comparator
+  `PASS: SCENE=5 texture 0x0C000000/0x00000000, 32 texel + 32 palette bytes for
+  angle 61440`.
+- Independent byte check of the capture file (not through the comparator):
+  TXDT holds `10 32 54 76 98 ba dc fe ...` and PLDT holds
+  `0000 ff0f 00f8 e007 ...`, equal to `scene5_texel` / `scene5_palette`.
+
+This shows recorder + `twlhd_gx_rec_serialize_tex` + source-buffer backend
+capture the registered arrays in DeSmuME. It does not show that the DS hardware
+does the same (VRAM LCDC upload order, 16-bit stores and the texture-enable
+state are modelled by DeSmuME); that is stage 5C-4 and needs the owner's
+approval per run.
+
+---
+
 ## 7. What cannot be claimed yet
 
 | Claim | Status |
@@ -1026,7 +1105,7 @@ arbitrary VRAM is not implemented.
 | A full 512 KiB texture set can be read in one VBlank | **UNVERIFIED**; the estimate in §2.5 says no |
 | The format-5 palette window bound (65,540 bytes) | **VERIFIED** in DeSmuME (`texcache.cpp:1791-1801`) and in the repo doc (`TWLHD_V2_FORMAT.md:330-349`); hardware `PAL4X4` behaviour is the same model |
 | The parser accepts `OVERFLOW` with a clean swap | **UNVERIFIED**; the code suggests yes (`parse.c:255-271`), needs a host test |
-| Python tools understand texture chunks | **FALSE** today (`tools/twlhd_v2_dump.py:85-87`); separate task |
+| Python tools understand texture chunks | **TRUE since 5C-3 tooling** (`tools/twlhd_v2_dump.py` decodes `TXDS`/`TXDT`/`PLDT`; BUILD/UNIT only) |
 | Hardware texture capture works | **UNVERIFIED**; no run exists |
 
 ## 8. Reference index
