@@ -62,6 +62,7 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_attr_pad.h \
 	common/twlhd_clipfix.h common/twlhd_seq.h \
 	common/twlhd_tex_draw_plan.h \
+	common/twlhd_tex_capture.h \
 	tests/host/tests_host.h \
 	tools/azahar_host/azahar_host_util.h
 HOST_TESTS := tests/host/build/test_parser \
@@ -78,6 +79,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_pica_tex \
 	tests/host/build/test_pica_frame \
 	tests/host/build/test_tex_draw_plan \
+	tests/host/build/test_tex_capture \
 	tests/host/build/test_clipfix \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
@@ -164,6 +166,14 @@ tests/host/build/test_tex_draw_plan: tests/host/test_tex_draw_plan.c \
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_draw_plan.c \
 		$(HOST_LDFLAGS)
 
+tests/host/build/test_tex_capture: tests/host/test_tex_capture.c \
+		common/twlhd_tex_capture.c common/twlhd_pica_frame.c \
+		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_HEADERS) | \
+		tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_capture.c \
+		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
+		$(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
 tests/host/build/test_seq: tests/host/test_seq.c $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
 
@@ -197,6 +207,12 @@ tests/host/build/pica_frame_cli: tests/host/pica_frame_cli.c \
 		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_frame.c \
 		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/tex_capture_cli: tests/host/tex_capture_cli.c \
+		common/twlhd_tex_capture.c common/twlhd_v2_parse.c \
+		$(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_capture.c \
+		common/twlhd_v2_parse.c $(HOST_LDFLAGS)
 
 # Blend-config test compiles the real libctru GPU enums header on the host and
 # asserts the clip-path (alpha blend) and DEBUG-path (opaque) configurations.
@@ -511,7 +527,8 @@ tools/ntr_capture/build/ntr_input: tools/ntr_capture/ntr_input.c \
 		-Itools/ntr_capture -o $@ $<
 
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
-	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli
+	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli \
+	tests/host/build/tex_capture_cli
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:
