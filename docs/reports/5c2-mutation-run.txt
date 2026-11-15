@@ -1,0 +1,74 @@
+baseline: build OK, C test OK
+mutants: 65 unique
+line 13 const 0 -> 1 -> KILLED(test)
+line 20 const 1 -> 0 -> KILLED(test)
+line 20 op || -> && -> KILLED(test)
+line 21 const 0 -> 1 -> KILLED(test)
+line 21 const 1 -> 0 -> KILLED(test)
+line 21 const 1 -> 2 -> KILLED(test)
+line 21 op == -> != -> KILLED(test)
+line 22 const 1 -> 0 -> KILLED(test)
+line 22 op >= -> > -> KILLED(test)
+line 22 targeted source region capacity -1 -> KILLED(test)
+line 25 targeted stored kind +1 -> KILLED(test)
+line 26 targeted stored base +1 -> KILLED(test)
+line 27 targeted stored length -1 -> KILLED(test)
+line 28 targeted stored data NULL -> KILLED(test)
+line 29 const 0 -> 1 -> KILLED(test)
+line 37 const 1 -> 0 -> KILLED(test)
+line 39 const 0 -> 1 -> KILLED(test)
+line 39 op < -> <= -> KILLED(test)
+line 43 op != -> == -> KILLED(test)
+line 44 op < -> <= -> KILLED(test)
+line 47 const 0 -> 1 -> KILLED(test)
+line 47 op == -> != -> KILLED(test)
+line 48 const 0 -> 1 -> KILLED(test)
+line 48 op < -> <= -> KILLED(test)
+line 51 op > -> >= -> KILLED(test)
+line 53 targeted copy -> zero fill -> KILLED(test)
+line 53 targeted copy guard invert -> KILLED(test)
+line 54 const 0 -> 1 -> KILLED(test)
+line 57 const 1 -> 0 -> KILLED(test)
+line 57 const 1 -> 2 -> KILLED(test)
+line 189 op || -> && -> KILLED(build)
+line 189 op || -> && -> KILLED(build)
+line 189 op || -> && -> KILLED(build)
+line 189 op || -> && -> KILLED(build)
+line 189 targeted drop rec null check -> KILLED(test)
+line 189 targeted serialize_tex null error -> ok -> KILLED(test)
+line 189 targeted serialize_tex null error -> size error -> KILLED(test)
+line 193 op > -> >= -> KILLED(test)
+line 193 op || -> && -> KILLED(test)
+line 193 targeted serialize apply TXDT capacity -> PLDT capacity -> KILLED(test)
+line 194 op > -> >= -> KILLED(test)
+line 194 targeted serialize apply PLDT capacity -> TXDT capacity -> KILLED(test)
+line 200 op != -> == -> KILLED(test)
+line 210 targeted entries capacity -1 -> KILLED(test)
+line 211 op != -> == -> KILLED(test)
+line 212 op == -> != -> KILLED(test)
+line 213 op == -> != -> KILLED(test)
+line 214 targeted txdt error -> null error -> KILLED(test)
+line 225 targeted tex entries -> NULL -> KILLED(test)
+line 226 targeted tex count +1 -> KILLED(test)
+line 233 targeted file flags cleared -> KILLED(test)
+line 234 targeted drop predicate >0 -> <0 (unsigned never true) -> KILLED(build)
+line 234 targeted drop predicate >0 -> ==0 -> KILLED(test)
+line 236 op > -> >= -> KILLED(build)
+line 237 const 0 -> 1 -> KILLED(test)
+line 238 targeted file flag OR -> AND-NOT -> KILLED(test)
+line 244 op && -> || -> KILLED(test)
+line 244 op == -> != -> KILLED(test)
+
+test:     52
+build:    6
+timeout:  0
+survived: 7
+total:    65
+SURVIVOR line 20 const 1 -> 2
+SURVIVOR line 22 const 1 -> 2
+SURVIVOR line 37 const 1 -> 2
+SURVIVOR line 201 op == -> !=
+SURVIVOR line 202 op == -> !=
+SURVIVOR line 202 targeted plan capacity error -> null error
+SURVIVOR line 203 targeted txds error -> null error
+common/ restored: YES

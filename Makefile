@@ -51,7 +51,7 @@ HOST_COMMON := common/twlhd_frame_parse.c common/twlhd_vertex_convert.c \
 	common/twlhd_geometry_slots.c common/twlhd_attr_pad.c
 HOST_V2_COMMON := common/twlhd_v2_parse.c common/twlhd_v2_write.c \
 	common/twlhd_gx_record.c common/twlhd_gx_interp.c \
-	common/twlhd_tex_decode.c
+	common/twlhd_tex_decode.c common/twlhd_tex_capture.c
 HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_geometry_slots.h common/twlhd_frame_format.h \
 	common/twlhd_v2_format.h common/twlhd_v2_parse.h \
@@ -63,6 +63,7 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_clipfix.h common/twlhd_seq.h \
 	common/twlhd_tex_draw_plan.h \
 	common/twlhd_tex_capture.h \
+	common/twlhd_tex_source.h \
 	tests/host/tests_host.h \
 	tools/azahar_host/azahar_host_util.h
 HOST_TESTS := tests/host/build/test_parser \
@@ -80,6 +81,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_pica_frame \
 	tests/host/build/test_tex_draw_plan \
 	tests/host/build/test_tex_capture \
+	tests/host/build/test_gx_record_tex \
 	tests/host/build/test_clipfix \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
@@ -91,6 +93,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_demo_frame_s2 \
 	tests/host/build/test_demo_frame_s3 \
 	tests/host/build/test_demo_frame_s4 \
+	tests/host/build/test_demo_frame_s5 \
 	tests/host/build/test_blend_config \
 	tests/host/build/test_azahar_host_ppm \
 	tests/host/build/test_ntr_capture_util \
@@ -167,10 +170,16 @@ tests/host/build/test_tex_draw_plan: tests/host/test_tex_draw_plan.c \
 		$(HOST_LDFLAGS)
 
 tests/host/build/test_tex_capture: tests/host/test_tex_capture.c \
-		common/twlhd_tex_capture.c common/twlhd_pica_frame.c \
+		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_pica_frame.c \
+		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_gx_record_tex: tests/host/test_gx_record_tex.c \
+		common/twlhd_tex_source.c common/twlhd_pica_frame.c \
 		common/twlhd_pica_tex.c $(HOST_V2_COMMON) $(HOST_HEADERS) | \
 		tests/host/build
-	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_capture.c \
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_tex_source.c \
 		common/twlhd_pica_frame.c common/twlhd_pica_tex.c \
 		$(HOST_V2_COMMON) $(HOST_LDFLAGS)
 
@@ -401,6 +410,25 @@ tests/host/build/test_demo_frame_s4: tests/host/test_demo_frame.cpp \
 	fi
 	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=4 \
 		-DTWLHD_TEST_EXPECT_SCENE=4 -o $@ $< $(HOST_V2_COMMON)
+# Same frame body compiled with the textured scene (build-only; no VRAM run).
+tests/host/build/test_demo_frame_s5: tests/host/test_demo_frame.cpp \
+		$(HOST_V2_COMMON) $(HOST_HEADERS) \
+		common/twlhd_tex_source.c \
+		arm9v2/include/demo_frame.hpp \
+		arm9v2/include/twlhd_gx_shim.hpp \
+		arm9v2/source/demo_frame.cpp | tests/host/build
+	@if [ -z "$(DEVKITPRO)" ]; then \
+		echo "error: DEVKITPRO is not set; the scene test needs the libnds headers" >&2; \
+		exit 1; \
+	fi
+	@if [ -z "$(DEVKITARM)" ]; then \
+		echo "error: DEVKITARM is not set; the scene test needs devkitARM" >&2; \
+		exit 1; \
+	fi
+	$(HOST_CXX) $(SHIM_CXXFLAGS) -DTWLHD_DEMO_SCENE=5 \
+		-DTWLHD_TEST_EXPECT_SCENE=5 -o $@ $< $(HOST_V2_COMMON) \
+		common/twlhd_tex_source.c
+
 
 # Expected-stream generator for tools/emulator/compare_capture.py. It runs the
 # same frame body with the same mock seam as the demo-frame test.

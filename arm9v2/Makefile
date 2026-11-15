@@ -138,9 +138,9 @@ endif
 #---------------------------------------------------------------------------------
 SCENE_STRIPPED	:=	$(strip $(SCENE))
 ifneq ($(SCENE_STRIPPED),)
-SCENE_OK := $(shell echo '$(SCENE_STRIPPED)' | grep -Eq '^[0-4]$$' && echo ok)
+SCENE_OK := $(shell echo '$(SCENE_STRIPPED)' | grep -Eq '^[0-5]$$' && echo ok)
 ifeq ($(SCENE_OK),)
-$(error SCENE must be empty or a decimal integer in 0..4 (got: $(SCENE)))
+$(error SCENE must be empty or a decimal integer in 0..5 (got: $(SCENE)))
 endif
 ifneq ($(SCENE_STRIPPED),0)
 TARGET		:=	$(TARGET)-s$(SCENE_STRIPPED)

@@ -24,6 +24,8 @@
 
 #include "twlhd_v2_format.h"
 #include "twlhd_v2_parse.h"
+#include "twlhd_v2_write.h"
+#include "twlhd_tex_capture.h"
 
 #define TWLHD_GX_REC_MAX_ENTRIES   16384u
 #define TWLHD_GX_REC_MAX_RSTA      256u
@@ -41,6 +43,51 @@
      TWLHD_V2_META_PAYLOAD_SIZE +                                            \
      TWLHD_GX_REC_MAX_ENTRIES * TWLHD_V2_GXCM_ENTRY_SIZE +                   \
      TWLHD_GX_REC_MAX_RSTA * TWLHD_V2_RSTA_ENTRY_SIZE)
+
+/*
+ * Compile-time texture budgets (D5). The defaults are small enough for a
+ * normal arm9v2 build; the full-cap test build overrides them with the format
+ * caps. These defines may be set on the compiler command line before this
+ * header is included.
+ */
+#ifndef TWLHD_GX_REC_TEX_TXDT_MAX
+#define TWLHD_GX_REC_TEX_TXDT_MAX 131072u
+#endif
+#ifndef TWLHD_GX_REC_TEX_PLDT_MAX
+#define TWLHD_GX_REC_TEX_PLDT_MAX 32768u
+#endif
+
+/*
+ * Worst-case serialize buffer for the texture-aware path:
+ *   existing non-texture maximum
+ * + 3 extra chunk headers (TXDS, TXDT, PLDT)
+ * + 256 * 40 byte TXDS records
+ * + the configured TXDT/PLDT budgets
+ * + worst-case 3-byte PLDT padding.
+ */
+#define TWLHD_GX_REC_SERIALIZE_TEX_MAX                                       \
+    (TWLHD_GX_REC_SERIALIZE_MAX + 3u * TWLHD_V2_CHUNK_HEADER_SIZE +          \
+     TWLHD_V2_TXDS_MAX_RECORDS * TWLHD_V2_TXDS_RECORD_SIZE +                 \
+     TWLHD_GX_REC_TEX_TXDT_MAX + TWLHD_GX_REC_TEX_PLDT_MAX + 3u)
+
+/*
+ * With the default budgets the constant above equals 309,395 B. The right-hand
+ * side of the || allows a command-line override to change the size without
+ * tripping the assertion.
+ */
+#if defined(__cplusplus)
+static_assert(
+    TWLHD_GX_REC_SERIALIZE_TEX_MAX == 309395u ||
+        TWLHD_GX_REC_TEX_TXDT_MAX != 131072u ||
+        TWLHD_GX_REC_TEX_PLDT_MAX != 32768u,
+    "default TWLHD_GX_REC_SERIALIZE_TEX_MAX must be 309395");
+#else
+_Static_assert(
+    TWLHD_GX_REC_SERIALIZE_TEX_MAX == 309395u ||
+        TWLHD_GX_REC_TEX_TXDT_MAX != 131072u ||
+        TWLHD_GX_REC_TEX_PLDT_MAX != 32768u,
+    "default TWLHD_GX_REC_SERIALIZE_TEX_MAX must be 309395");
+#endif
 
 #define TWLHD_GX_REC_FIFO_ADDR     0x04000400u
 #define TWLHD_GX_REC_PORT_FIRST    0x04000440u
@@ -103,6 +150,32 @@ TwlhdGxRecorder *twlhd_gx_rec_global(void);
 /* Serialize the current contents (same validity rules as the writer). */
 TwlhdV2Result twlhd_gx_rec_serialize(const TwlhdGxRecorder *rec, uint8_t *out,
                                      size_t capacity, size_t *out_size);
+
+/*
+ * Caller-owned scratch for the texture-aware serialize path. It holds the
+ * planner state (~8.3 KiB) and the texture byte/entry buffers, so it must NOT
+ * be allocated on the ARM9 stack. The recorder itself adds no static state.
+ */
+typedef struct {
+    TwlhdTexCapPlan plan;
+    uint8_t txdt[TWLHD_GX_REC_TEX_TXDT_MAX];
+    uint8_t pldt[TWLHD_GX_REC_TEX_PLDT_MAX];
+    TwlhdV2TexEntry entries[TWLHD_V2_TXDS_MAX_RECORDS];
+} TwlhdGxRecTexScratch;
+
+/*
+ * Serialize with texture capture. Runs the planner over the recorder's GXCM
+ * entries, applies the result into caller-owned scratch, then calls the v2
+ * writer with params.tex filled. The recorder's own flags are never modified;
+ * a texture-only drop sets TWLHD_V2_FLAG_OVERFLOW only in the file flags.
+ * stats_out is optional and receives the planner's drop/kept counters.
+ */
+TwlhdV2Result twlhd_gx_rec_serialize_tex(
+    const TwlhdGxRecorder *rec, TwlhdGxRecTexScratch *scratch,
+    uint8_t *out, size_t capacity, size_t *out_size,
+    const TwlhdTexCapLimits *limits,
+    TwlhdTexCapReadFn read, void *read_ctx,
+    TwlhdTexCapStats *stats_out);
 
 uint32_t twlhd_gx_rec_entry_count(const TwlhdGxRecorder *rec);
 uint32_t twlhd_gx_rec_rsta_count(const TwlhdGxRecorder *rec);
