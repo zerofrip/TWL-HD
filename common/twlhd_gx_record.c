@@ -190,6 +190,11 @@ TwlhdV2Result twlhd_gx_rec_serialize_tex(
         return TWLHD_V2_ERR_NULL;
     }
 
+    if (limits->max_txdt_bytes > TWLHD_GX_REC_TEX_TXDT_MAX ||
+        limits->max_pldt_bytes > TWLHD_GX_REC_TEX_PLDT_MAX) {
+        return TWLHD_V2_ERR_SIZE;
+    }
+
     cap_result = twlhd_tex_capture_plan(limits, rec->gxcm, rec->gxcm_count,
                                         read, read_ctx, &scratch->plan);
     if (cap_result != TWLHD_TEX_CAP_OK) {
