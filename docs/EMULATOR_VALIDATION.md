@@ -57,6 +57,8 @@ watchdog path (which reports 1). This is EMULATOR evidence only; it is **not** H
 4. RSTA addr / gx_index / width and every value are identical, with one deliberate exception: libnds keeps the polygon id in the library global
    `glCurClearColor` (seeded by `glInit()` on the DS, zero on the host), so the **first** write to `0x04000350` may differ only in the polygon-id
    bits 24..29 (mask `0x3F000000`). Any other difference on that write, or any difference on a later `0x04000350` write, fails.
+5. TXDS/TXDT/PLDT chunks are parsed by `twlhd_v2_dump.parse` but are not inspected by the existing-mode comparator; a non-texture capture that is
+   otherwise valid remains PASS when those chunks are present.
 
 ## Mutation / negative tests (run by `make test`; 294 Python tests in total after 5C-3, measured baseline before it: 253; 3 of them need the devkitPro environment and are skipped without it)
 
@@ -181,11 +183,14 @@ The expected arrays live in exactly one place
 `scene5_texel`/`scene5_palette` initialisers and the `param`/`pltt` literals out
 of `arm9v2/source/demo_frame.cpp` and fails if they change. Negative tests
 (flipped TXDT/PLDT byte, wrong param/pltt key, two/zero TXDS records, wrong
-TXDT length, missing PLDT, OVERFLOW set, truncated chunk, and a textured
-capture fed to the unchanged non-texture comparator) each fail with their
-specific reason, and `tools/test_emulator_texture_run.py` drives this target's
-script path end to end with a fake emulator (positive and corrupted capture; no
-real DeSmuME).
+TXDT length, missing PLDT, OVERFLOW set, truncated chunk) each fail with their
+specific reason. The unchanged non-texture comparator accepts a textured capture
+as long as its flags, META, GXCM and RSTA still match the expected non-texture
+stream, because `compare_capture.py` does not inspect TXDS/TXDT/PLDT;
+`tools/test_emulator_texture_compare.py` pins this behaviour with a texture-free
+control run and a same-capture-plus-valid-TXDS/TXDT/PLDT run, both exit 0 PASS.
+`tools/test_emulator_texture_run.py` drives this target's script path end to end
+with a fake emulator (positive and corrupted capture; no real DeSmuME).
 
 ## Emulator facts that shaped the harness
 
