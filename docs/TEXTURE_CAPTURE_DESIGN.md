@@ -482,8 +482,9 @@ Representative texel sizes from the shared formula
 49,152 + 65,536 + 131,072 = **294,912 B**. Palettes: 24×32 + 12×512 = 768 + 6,144
 = **6,912 B**. `TXDS`: 48 × 40 = **1,920 B**. Total texture data ≈ **303,744 B**,
 comfortably inside both caps and inside the 1 MiB file with a 16,384-entry GXCM.
-The fixed GXCM/META/RSTA/TXDS/header part is 137,200 B, so the file is
-**439,056 B** (≈429 KiB), not 449 KiB.
+The fixed GXCM/META/RSTA/TXDS/header part is 135,264 (serialize max) + 3 × 16
+(TXDS/TXDT/PLDT chunk headers) + 1,920 (TXDS) = 137,232 B, so the file is
+137,232 + 294,912 + 6,912 = **439,056 B** (≈429 KiB).
 
 **Worst case that still parses:** 256 records, `TXDT` exactly 524,288 B,
 `PLDT` 98,304 B, file 768,144 B with demo GXCM caps. A scene that needs more
@@ -495,13 +496,17 @@ is the exception: a full window is 65,540 B
 (`common/twlhd_v2_format.h:36-47`), so **one** full format-5 texture nearly fills
 `PLDT` and **two full windows (131,080 B) do not fit** (known limit,
 `docs/TWLHD_V2_FORMAT.md:588-593`). The recorder can do much better than the full
-window: for every 32-bit 4x4 block word, the palette byte offset used is
-`(word & 0x3FFF) * 4 + 2*k`, k = 0..3 (`desmume/src/texcache.cpp:1791-1801`;
-derivation in `docs/TWLHD_V2_FORMAT.md:330-349`). Taking `m = max(word & 0x3FFF)`
-over the captured index block, the minimal even window is
-`4*m + 8` bytes (rounded up to even), which for typical palettes is tens of bytes.
-That makes several format-5 textures per frame feasible; the policy is D4 in
-§6.2.
+window: for every 16-bit index entry (bits 0-13 palette offset, bits 14-15 mode),
+the palette byte offset used is `(entry & 0x3FFF) * 4 + 2*k`, k = 0..3
+(`desmume/src/texcache.cpp:1791-1801`; derivation in
+`docs/TWLHD_V2_FORMAT.md:330-349`). The entry is one per 4x4 block — the index
+block is `width*height/8` bytes, i.e. 2 bytes per block — and the host consumer
+reads it with `frame_read_le16(run->index + block*2)`
+(`common/twlhd_pica_frame.c:185-189`), not from the 32-bit texel word. Taking
+`m = max(entry & 0x3FFF)` over the captured index block, the minimal even window
+is `4*m + 8` bytes (rounded up to even), which for typical palettes is tens of
+bytes. That makes several format-5 textures per frame feasible; the policy is D4
+in §6.2.
 
 ### 3.4 What "acceptable per frame" means here
 
@@ -618,10 +623,11 @@ not rely on partial writes: a rejected writer call produces no usable file.
   `common/twlhd_v2_format.h:36-47`). The first captured byte must therefore be
   the palette byte at that address; the recorder must not trim from the front.
 - The host consumer resolves a run's `(param, pltt)` against the `TXDS` list
-  (`common/twlhd_pica_frame.c:43-64`), requires a palette for every format except
-  7 and an index block for format 5 (`common/twlhd_pica_frame.c:151-165`), and
-  caps distinct textures at the format's 256
-  (`common/twlhd_pica_frame.h:94`).
+  (`common/twlhd_pica_frame.c:54-71`), requires a palette for every format except
+  7 and an index block for format 5 (`common/twlhd_pica_frame.c:145-150`), then
+  checks that the palette window is legal or the fixed table fully present
+  (`common/twlhd_pica_frame.c:168-180`), and caps distinct textures at the
+  format's 256 (`common/twlhd_pica_frame.h:94`).
 
 ### 4.3 Test coverage that already exists
 
@@ -796,7 +802,7 @@ Deliverables per stage:
 | **D1** | Capture source | (c) game source buffers for our ROMs; (a) VRAM remap; (b) DMA snooping; (d) emulator only | **(c) for 5C-2..5C-4, (d) for 5C-3 validation; defer (a) to 5C-5 behind a risk review.** The fixed scope is our own homebrew (`docs/PHASE5B_PLAN.md:10-14`), so (c) is correct and zero-risk; (a) is the only generic path but can corrupt the game. |
 | **D2** | Cross-frame texture cache | re-emit per dumped frame; or extend the format with a persistent cache / back-reference | **Do not extend now.** The pipeline dumps one frame per file; each file is self-contained. Revisit only if continuous or multi-frame capture enters scope. |
 | **D3** | Texture-drop signal | reuse `TWLHD_V2_FLAG_OVERFLOW` and relax the demo dump gate; or add a new flag bit | **Reuse `OVERFLOW`, relax the gate in 5C-2, report the drop count.** No format change; but this changes dump behaviour, so it needs an explicit OK. |
-| **D4** | Format-5 palette window | full 65,540 B per record; or the computed minimal window `4*max(word & 0x3FFF) + 8` (even) | **Computed minimal window, with a full-window fallback** if the index block is unavailable. Keeps two or more 4x4 textures inside `PLDT`. |
+| **D4** | Format-5 palette window | full 65,540 B per record; or the computed minimal window `4*max(entry & 0x3FFF) + 8` (even) | **Computed minimal window, with a full-window fallback** if the index block is unavailable. Keeps two or more 4x4 textures inside `PLDT`. |
 | **D5** | Serialize budget | full caps (768,144 B static); or a smaller default | **Default 131,072 B `TXDT` + 32,768 B `PLDT` (≈309 KB buffer); full-cap value only for the test ROM,** as a compile-time define. |
 | **D6** | `glTexImage2D`/`glBindTexture` coverage gap | accept it and require explicit port writes; or intercept the libnds calls | **Accept and document it in 5C-2.** Intercepting libnds is a separate shim project and would still miss direct MMIO and FIFO lists. |
 | **D7** | Same-key, different-bytes within a frame | first snapshot wins (silent); or detect with a hash and drop/count; or format extension | **First snapshot wins, counted as a documented loss.** A hash detects but cannot repair; a format extension is premature. |
