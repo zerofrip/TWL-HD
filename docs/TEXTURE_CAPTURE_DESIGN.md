@@ -1071,6 +1071,30 @@ key values rather than entry for entry against `expected.txt`.
 
 ---
 
+## 6.6 EMULATOR result 5C-3 (2026-11-16)
+
+**EMULATOR (DeSmuME) only. Not a DS hardware result.** The orchestrating assistant ran the
+real emulator with `DESMUME_CLI` pointing at a DeSmuME CLI built from the
+unvendored checkout (`fc504ee0`, wifi off, built outside the repository):
+
+- Baseline `make emu-validate` (cube scene): `PASS: 124 GXCM + 4 RSTA entries
+  match for angle 61440`.
+- `make emu-validate-tex` (arm9v2 `SCENE=5`, autodump frame 240): parsers OK
+  (78 GXCM entries, 5 RSTA), comparator
+  `PASS: SCENE=5 texture 0x0C000000/0x00000000, 32 texel + 32 palette bytes for
+  angle 61440`.
+- Independent byte check of the capture file (not through the comparator):
+  TXDT holds `10 32 54 76 98 ba dc fe ...` and PLDT holds
+  `0000 ff0f 00f8 e007 ...`, equal to `scene5_texel` / `scene5_palette`.
+
+This shows recorder + `twlhd_gx_rec_serialize_tex` + source-buffer backend
+capture the registered arrays in DeSmuME. It does not show that the DS hardware
+does the same (VRAM LCDC upload order, 16-bit stores and the texture-enable
+state are modelled by DeSmuME); that is stage 5C-4 and needs the owner's
+approval per run.
+
+---
+
 ## 7. What cannot be claimed yet
 
 | Claim | Status |

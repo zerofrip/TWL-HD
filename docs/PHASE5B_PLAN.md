@@ -995,3 +995,4 @@ The renderer emits the following markers on the texture path:
 
 Do not run this on hardware until the owner explicitly approves the procedure,
 the test frame, and the build hash. The assistant never executes hardware runs.
+- 5C-3: EMULATOR (DeSmuME) PASS for the textured SCENE=5 capture (see docs/TEXTURE_CAPTURE_DESIGN.md section 6.6); hardware not run (5C-4).
