@@ -590,12 +590,15 @@ class LightingOracle:
 # All four commands share that ONE slot; only the PUSH/POP depth flag is kept
 # apart. PUSH/POP set gxstat.se on the toggle wrap (:860-871, :918-929);
 # STORE/RESTORE ignore the index and always use slot 0 (:950-1000).
-# The transform steps follow the research doc and DeSmuME gfx3d.cpp:1578-1593:
+# The transform steps follow the research doc and DeSmuME gfx3d.cpp:1578-1602:
 #   mode 0: raw s1.11.4 latch -> /16.0
 #   mode 1: (m0*s + m4*t + m8 + m12) >> 12, /16.0, with the RAW sign-extended
 #           s1.11.4 s/t and the raw m8/m9/m12/m13 addends (no promotion, no
 #           FX_ONE scaling); the >>12 result is wrapped to int32 like (s32).
-#   modes 2/3: raw s,t plus a per-VTX unsupported counter
+#   mode 2: rows 0/1 x the RAW normal (n10<<3, the _vecNormal latch, NOT the
+#           vector-matrix lighting copy) + (s<<24, t<<24), >> 24 (:1594-1596).
+#   mode 3: rows 0/1 x the RAW VTX coordinate (_vtxCoord16) + (s<<24, t<<24),
+#           >> 24 (:1600-1602).
 # ---------------------------------------------------------------------------
 
 TEX_STACK_CAP = 1
@@ -618,7 +621,9 @@ class TextureOracle:
         self.tex_t = 0
         self.teximage_param = 0
         self.pltt_base = 0
-        self.unsupported = 0
+        self.unsupported = 0  # modes 2/3 are implemented: stays 0.
+        self.normal = [0, 0, 0]  # RAW normal latch (_vecNormal.xyz).
+        self.vtx = [0, 0, 0]     # RAW VTX coordinate latch (_vtxCoord16).
         self.out = []
         self.in_begin = False
         self.begin_mode = 0
@@ -676,10 +681,8 @@ class TextureOracle:
     # -- per-vertex texture data -----------------------------------------
     def _tex_vertex(self):
         tmode = (self.teximage_param >> 30) & 3
-        if tmode >= 2:
-            self.unsupported += 1
+        m = self.tex
         if tmode == 1:
-            m = self.tex
             # Python >> on negative ints is already an arithmetic (floor)
             # shift; s32() reproduces the C (int32_t) wrap of extreme sums.
             s_out = s32((m[0] * self.tex_s + m[4] * self.tex_t +
@@ -688,8 +691,41 @@ class TextureOracle:
                          m[9] + m[13]) >> 12)
             return (s_out / 16.0, t_out / 16.0,
                     self.teximage_param, self.pltt_base)
+        if tmode in (2, 3):
+            # Independent implementation of the DeSmuME formula: the source
+            # vector is the RAW normal (mode 2) or RAW vertex (mode 3), not a
+            # matrix-transformed copy; the base coordinate enters as
+            # s<<24 and the whole 64-bit sum is arithmetic-shifted by 24.
+            src = self.normal if tmode == 2 else self.vtx
+            s_out = s32((m[0] * src[0] + m[4] * src[1] + m[8] * src[2] +
+                         (self.tex_s << 24)) >> 24)
+            t_out = s32((m[1] * src[0] + m[5] * src[1] + m[9] * src[2] +
+                         (self.tex_t << 24)) >> 24)
+            return (s_out / 16.0, t_out / 16.0,
+                    self.teximage_param, self.pltt_base)
         return (self.tex_s / 16.0, self.tex_t / 16.0,
                 self.teximage_param, self.pltt_base)
+
+    def _latch_vertex_command(self, command, params):
+        """Mirror DeSmuME's _vtxCoord16 updates (gfx3d.cpp:1441-1517)."""
+        if command == CMD_VTX_16:
+            self.vtx[0] = sign_extend16(params[0])
+            self.vtx[1] = sign_extend16(params[0] >> 16)
+            self.vtx[2] = sign_extend16(params[1])
+        elif command == CMD_VTX_10:
+            # sign_extend10 then << 6 (gfx3d.cpp:1466-1470).
+            self.vtx[0] = sign_extend10(params[0]) << 6
+            self.vtx[1] = sign_extend10(params[0] >> 10) << 6
+            self.vtx[2] = sign_extend10(params[0] >> 20) << 6
+        elif command == CMD_VTX_XY:
+            self.vtx[0] = sign_extend16(params[0])
+            self.vtx[1] = sign_extend16(params[0] >> 16)
+        elif command == CMD_VTX_XZ:
+            self.vtx[0] = sign_extend16(params[0])
+            self.vtx[2] = sign_extend16(params[0] >> 16)
+        elif command == CMD_VTX_YZ:
+            self.vtx[1] = sign_extend16(params[0])
+            self.vtx[2] = sign_extend16(params[0] >> 16)
 
     # -- primitive assembly (mirrors the C interpreter) -------------------
     def _emit_triangle(self, a, b, c):
@@ -744,6 +780,11 @@ class TextureOracle:
                 self.tex_t = sign_extend16(params[0] >> 16)
             elif command == CMD_TEXIMAGE_PARAM:
                 self.teximage_param = params[0]
+            elif command == CMD_NORMAL:
+                # RAW normal latch (gfx3d.cpp:1219-1221).
+                self.normal[0] = sign_extend10(params[0]) * 8
+                self.normal[1] = sign_extend10(params[0] >> 10) * 8
+                self.normal[2] = sign_extend10(params[0] >> 20) * 8
             elif command == CMD_PLTT_BASE:
                 self.pltt_base = params[0]
             elif command == CMD_BEGIN_VTXS:
@@ -756,6 +797,7 @@ class TextureOracle:
                 self.in_begin = False
                 self.buf = []
             elif command in _VERTEX_COMMANDS:
+                self._latch_vertex_command(command, params)
                 self._add_vertex(self._tex_vertex())
             elif self.mode == 3:
                 self._matrix_command(command, params)

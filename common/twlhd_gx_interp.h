@@ -55,8 +55,8 @@ typedef struct {
                                          1..30 (one per group, not per poly). */
     uint32_t alpha_wireframe_polys;   /* BEGIN groups with applied raw alpha 0
                                          (outline-only drawing NOT implemented). */
-    uint32_t tex_transform_unsupported; /* VTX commands with texture transform
-                                           mode 2/3: raw coords emitted. */
+    uint32_t tex_transform_unsupported; /* always 0: modes 2/3 are implemented
+                                           (kept for CLI/output compatibility). */
 } TwlhdGxStats;
 
 typedef enum {

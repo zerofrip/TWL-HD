@@ -235,10 +235,12 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
 - Transform: mode 0 = raw s1.11.4 (/16.0); mode 1 = texture-matrix rows 0/1
   applied to the raw s1.11.4 coordinate with raw m8/m9 and m12/m13 addends,
   64-bit sum, arithmetic `>>12`, `(int32_t)` cast and `/16.0` floats, exactly
-  `desmume/src/gfx3d.cpp:1578-1593` (see `docs/DS_GX_RESEARCH.md`). Modes 2/3
-  are **not implemented**: raw coordinates plus
-  `TwlhdGxStats.tex_transform_unsupported` (new, appended field), counted per
-  VTX command.
+  `desmume/src/gfx3d.cpp:1578-1593` (see `docs/DS_GX_RESEARCH.md`). Mode 2 =
+  rows 0/1 applied to the RAW normal (`sign_extend10<<3`) plus `s<<24`,
+  arithmetic `>>24`, `/16.0` (`gfx3d.cpp:1594-1596`); mode 3 = the same with
+  the RAW VTX coordinate (`gfx3d.cpp:1600-1602`). `TwlhdGxStats.
+  tex_transform_unsupported` (appended field) is kept for output
+  compatibility and is always 0.
 - Tests: C unit tests in `tests/host/test_gx_interp.c` (latch order, sign
   edges, mode 0 vs 1, modes 2/3 counter, quad/strip/capacity alignment,
   `tex_out == NULL` equivalence, stack ops and stack errors); golden streams
@@ -255,7 +257,20 @@ Implemented, **BUILD/UNIT only**, nothing EMULATOR or HARDWARE verified:
   matching golden stream. (An earlier round changed this index to 0; reverted
   in repair round 3, see `docs/reports/5b2b-mutation-report.md`.)
 - Not done: recorder-side texture capture; sampling/TexEnv; PICA upload; the
-  vertex stride change; modes 2/3.
+  vertex stride change.
+- Follow-up (2026-11-16): modes 2 (normal source) and 3 (vertex source) are
+  implemented, **BUILD/UNIT only** (no emulator or hardware run, no
+  EMULATOR/HARDWARE claim). Mode 2 latches the RAW normal (`n10<<3`) from the
+  NORMAL command; mode 3 keeps the RAW VTX_16/VTX_10/VTX_XY/XZ/YZ coordinate.
+  Both apply the 20.12 texture-matrix rows 0/1 with the `(s<<24)` base and
+  arithmetic `>>24` as `gfx3d.cpp:1594-1602`; the arithmetic path stays
+  integer and the output is `/16.0f`. No struct layout or downstream change
+  was needed. Sanctioned existing-test updates: the C
+  `test_tex_modes_2_3_raw_and_counter` and the golden
+  `test_tex_modes_2_3_raw_and_counter` keep their labels but now assert the
+  transformed values and `tex_transform_unsupported = 0` (the label is
+  historical). New hand-computed C tests, 23 deterministic seeded golden
+  scenes and a 60+ mutant run: `docs/reports/tm23-mutation-report.md`.
 
 - Repair round 1 (2026-11-10): mode 1 was 16x wrong for translation and
   missing the m8/m9 terms. Rewritten to the exact DeSmuME
