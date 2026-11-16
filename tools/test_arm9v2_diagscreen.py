@@ -16,7 +16,7 @@ class TestArm9v2DiagScreen(unittest.TestCase):
         os.environ.get("DEVKITARM") and os.environ.get("DEVKITPRO"),
         "devkitPro environment not available")
     def test_diagscreen_bad_values_fail(self):
-        for bad in ("abc", "-1", "1.5", "9"):
+        for bad in ("abc", "-1", "1.5", "9", "01"):
             completed = subprocess.run(
                 ["make", "-C", "arm9v2", "-n", "DIAGSCREEN=%s" % bad],
                 cwd=ROOT, capture_output=True, text=True)
@@ -41,7 +41,7 @@ class TestArm9v2DiagScreen(unittest.TestCase):
         os.environ.get("DEVKITARM") and os.environ.get("DEVKITPRO"),
         "devkitPro environment not available")
     def test_diagscreen_unset_is_default_target(self):
-        for env_value in (None, ""):
+        for env_value in (None, "", "0"):
             env = os.environ.copy()
             if env_value is None:
                 env.pop("DIAGSCREEN", None)

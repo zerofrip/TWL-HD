@@ -186,10 +186,10 @@ int main(void) {
 #endif
 
 #if TWLHD_DEMO_DIAGSCREEN == 3
-    /* DIAGSCREEN=3: explicit VRAM bank assignment matching Textured_Quad plus
-     * the palette bank our I4 texture needs. HARDWARE UNVERIFIED. */
-    vramSetBankA(VRAM_A_TEXTURE);
-    vramSetBankE(VRAM_E_TEX_PALETTE);
+    /* DIAGSCREEN=3: for SCENE=5, wait one vblank after upload so the
+     * LCDC->texture/palette bank switch is settled before the first draw.
+     * For the default cube this variant is a no-op beyond the banner.
+     * HARDWARE UNVERIFIED. */
 #endif
 
 #if TWLHD_DEMO_DIAGSCREEN != 2
@@ -201,6 +201,9 @@ int main(void) {
     twlhd_tex_source_reset(&g_tex_source);
     twlhd_demo_scene5_register_sources(&g_tex_source);
     twlhd_demo_scene5_upload_textures();
+#if TWLHD_DEMO_DIAGSCREEN == 3
+    swiWaitForVBlank();
+#endif
 #endif
     refresh_console();
 
