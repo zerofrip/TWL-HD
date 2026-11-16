@@ -10,10 +10,27 @@
  * mocked registers; no DS runtime has executed it.
  */
 
+#ifndef TWLHD_DEMO_DIAGSCREEN
+#define TWLHD_DEMO_DIAGSCREEN 0
+#endif
+
 #include "demo_frame.hpp"
 
+#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
+/* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
+#include <nds.h>
+#include "twlhd_gx_shim.hpp"
+#else
 #include "twlhd_gx_shim.hpp"
 #include <nds.h>
+#endif
+
+#if TWLHD_DEMO_DIAGSCREEN == 6
+/* Counter-driven rotation for the Simple_Tri variant. File-scope POD statics
+ * avoid a function-local dynamic init that would emit __cxa_guard_acquire. */
+static float simple_tri_rotateX = 0.0f;
+static float simple_tri_rotateY = 0.0f;
+#endif
 
 /* 4.12 fixed point vertex for the unit cube. */
 #define V16_ONE ((int16_t)(1 << 12))
@@ -112,6 +129,12 @@ static void draw_cube(void) {
 
 #if TWLHD_DEMO_SCENE != 0 && TWLHD_DEMO_CUBES != 1
 #error "TWLHD_DEMO_SCENE and TWLHD_DEMO_CUBES > 1 are mutually exclusive"
+#endif
+
+#if TWLHD_DEMO_DIAGSCREEN >= 7
+#if TWLHD_DEMO_SCENE != 0 || TWLHD_DEMO_CUBES > 1
+#error "DIAGSCREEN >= 7 variants are only defined for the single-cube base scene"
+#endif
 #endif
 
 /*
@@ -287,6 +310,37 @@ static void draw_scene_alpha_quads(void) {
 #endif
 
 void twlhd_demo_draw_frame(unsigned angle) {
+#if TWLHD_DEMO_DIAGSCREEN == 6
+    /* Exact Simple_Tri example draw logic, including the quirk that
+     * glMatrixMode(GL_MODELVIEW) is called after the projection-space rotates.
+     * Rotates by a counter so a frozen picture is distinguishable from animation.
+     * GL_TRIANGLE is the libnds name used by the example. */
+    glPushMatrix();
+    glTranslatef32(0, 0, floattof32(-1));
+    glRotateX(simple_tri_rotateX);
+    glRotateY(simple_tri_rotateY);
+
+    glMatrixMode(GL_MODELVIEW);
+
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+
+    glBegin(GL_TRIANGLE);
+    glColor3b(255, 0, 0);
+    glVertex3v16(inttov16(-1), inttov16(-1), 0);
+    glColor3b(0, 255, 0);
+    glVertex3v16(inttov16(1), inttov16(-1), 0);
+    glColor3b(0, 0, 255);
+    glVertex3v16(inttov16(0), inttov16(1), 0);
+    glEnd();
+
+    glPopMatrix(1);
+
+    simple_tri_rotateX += 3.0f;
+    simple_tri_rotateY += 3.0f;
+
+    glFlush(0);
+    return;
+#endif
 #if TWLHD_DEMO_SCENE != 0
     /* Re-issue all state needed to replay this frame independently. */
     glEnable(GL_ANTIALIAS);
@@ -313,7 +367,11 @@ void twlhd_demo_draw_frame(unsigned angle) {
     /* Each quad issues its own POLYGON_ATTR alpha. */
     draw_scene_alpha_quads();
 #else
+#if TWLHD_DEMO_SCENE == 5
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+#else
     glPolyFmt(POLY_ALPHA(31));
+#endif
 #if TWLHD_DEMO_SCENE == 1
     draw_scene_tri_list();
 #elif TWLHD_DEMO_SCENE == 2
@@ -340,7 +398,11 @@ void twlhd_demo_draw_frame(unsigned angle) {
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
+#if TWLHD_DEMO_DIAGSCREEN == 8
+    gluPerspective(70, 256.0 / 192.0, 0.1, 40.0);
+#else
     gluPerspective(70, 256.0 / 192.0, 0.1, 100.0);
+#endif
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
@@ -351,7 +413,13 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glScalef32(inttof32(1), inttof32(1), inttof32(1));
 
     glPushMatrix();
+#if TWLHD_DEMO_DIAGSCREEN == 7
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+#elif TWLHD_DEMO_DIAGSCREEN == 9
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_BACK);
+#else
     glPolyFmt(POLY_ALPHA(31));
+#endif
     draw_cube();
     glPopMatrix(1);
 

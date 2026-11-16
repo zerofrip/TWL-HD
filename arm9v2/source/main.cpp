@@ -13,10 +13,21 @@
  * only; all capture behavior is host-tested through the shim test.
  */
 
+#ifndef TWLHD_DEMO_DIAGSCREEN
+#define TWLHD_DEMO_DIAGSCREEN 0
+#endif
+
+#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
+/* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
+#include <fat.h>
+#include <nds.h>
+#include "twlhd_gx_shim.hpp"
+#else
 #include "twlhd_gx_shim.hpp"
 
 #include <fat.h>
 #include <nds.h>
+#endif
 #include <stdio.h>
 
 #include "demo_frame.hpp"
@@ -41,6 +52,9 @@ static uint8_t g_serialize[TWLHD_GX_REC_SERIALIZE_MAX];
 static int g_fat_ready;
 
 static void refresh_console(void) {
+#if TWLHD_DEMO_DIAGSCREEN == 5 || TWLHD_DEMO_DIAGSCREEN >= 7
+    (void)0;
+#else
     TwlhdGxRecorder *rec = twlhd_gx_rec_global();
 
     consoleClear();
@@ -61,11 +75,23 @@ static void refresh_console(void) {
             (unsigned long)twlhd_gx_rec_ignored_writes(rec),
             (unsigned long)twlhd_gx_rec_invalid_writes(rec));
     iprintf("v2 capture: HARDWARE UNVERIFIED (build-only)\n");
+#if TWLHD_DEMO_DIAGSCREEN != 0
+    iprintf("DIAGSCREEN=%d ... HARDWARE UNVERIFIED\n",
+            TWLHD_DEMO_DIAGSCREEN);
+#if TWLHD_DEMO_DIAGSCREEN == 2
+    iprintf("recorder disabled\n");
+#endif
+#endif
     iprintf("frames self-contained except glInit state\n");
     iprintf("A = dump /twlhd_frame_v2.bin\n");
+#endif
 }
 
 static int dump_frame(void) {
+#if TWLHD_DEMO_DIAGSCREEN == 5 || TWLHD_DEMO_DIAGSCREEN >= 7
+    (void)0;
+    return -1;
+#else
     TwlhdGxRecorder *rec = twlhd_gx_rec_global();
     TwlhdV2Result result;
     size_t written = 0;
@@ -130,6 +156,7 @@ static int dump_frame(void) {
 
     iprintf("dumped %lu bytes\n", (unsigned long)written);
     return (int)written;
+#endif
 }
 
 int main(void) {
@@ -137,24 +164,87 @@ int main(void) {
     int frame = 0;
     TwlhdGxRecorder *rec = twlhd_gx_rec_global();
 
+#if TWLHD_DEMO_DIAGSCREEN == 1
+    /* DIAGSCREEN=1: replicate the libnds example display-setup order for the
+     * cube scene (videoSetMode -> glInit -> AA/clear/viewport/projection/lookAt
+     * -> console -> recorder). HARDWARE UNVERIFIED. */
+    videoSetMode(MODE_0_3D);
+    glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(0, 0, 255, 191);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(70, 256.0 / 192.0, 0.1, 40.0);
+    gluLookAt(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+    glMatrixMode(GL_MODELVIEW);
+    consoleDemoInit(); /* statistics console on the sub screen */
+#elif TWLHD_DEMO_DIAGSCREEN == 4
+    /* DIAGSCREEN=4: force the main engine onto the top physical screen. */
+    videoSetMode(MODE_0_3D);
+    lcdMainOnTop();
+    consoleDemoInit(); /* statistics console on the sub screen */
+    glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+#elif TWLHD_DEMO_DIAGSCREEN == 5 || TWLHD_DEMO_DIAGSCREEN >= 7
+    /* DIAGSCREEN=5/7/8/9: default cube demo with no console and no recorder.
+     * The variant number cannot be printed; the ROM file name carries it. */
+    videoSetMode(MODE_0_3D);
+    glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+#elif TWLHD_DEMO_DIAGSCREEN == 6
+    /* DIAGSCREEN=6: unmodified libnds Simple_Tri example init order, compiled
+     * and linked by our Makefile/flags/startup. No console, no recorder.
+     * HARDWARE UNVERIFIED. */
+    videoSetMode(MODE_0_3D);
+    glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(0, 0, 255, 191);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(70, 256.0 / 192.0, 0.1, 40.0);
+    gluLookAt(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+    glMatrixMode(GL_MODELVIEW);
+#else
     videoSetMode(MODE_0_3D);
     consoleDemoInit(); /* statistics console on the sub screen */
 
     glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+#endif
 
+#if TWLHD_DEMO_DIAGSCREEN == 3
+    /* DIAGSCREEN=3: for SCENE=5, wait one vblank after upload so the
+     * LCDC->texture/palette bank switch is settled before the first draw.
+     * For the default cube this variant is a no-op beyond the banner.
+     * HARDWARE UNVERIFIED. */
+#endif
+
+#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN < 5
     twlhd_gx_rec_init(rec);
+#else
+    (void)rec; /* recorder bypassed for this variant */
+#endif
 #if TWLHD_DEMO_SCENE == 5
     twlhd_tex_source_reset(&g_tex_source);
     twlhd_demo_scene5_register_sources(&g_tex_source);
     twlhd_demo_scene5_upload_textures();
+#if TWLHD_DEMO_DIAGSCREEN == 3
+    swiWaitForVBlank();
+#endif
 #endif
     refresh_console();
 
     while (1) {
+#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN < 5
         twlhd_gx_rec_arm(rec);
+#endif
         twlhd_demo_draw_frame((unsigned)angle);
         swiWaitForVBlank();
 
+#if TWLHD_DEMO_DIAGSCREEN < 5
         scanKeys();
         if (keysDown() & KEY_A) {
             (void)dump_frame();
@@ -167,11 +257,16 @@ int main(void) {
                     TWLHD_DEMO_AUTODUMP_FRAME);
         }
 #endif
+#endif
 
         /* binary angle: 32768 == 360 degrees */
         angle += 256;
 
+#if TWLHD_DEMO_DIAGSCREEN < 5
         if (++frame % 60 == 0) refresh_console();
+#else
+        ++frame;
+#endif
     }
 
     return 0;

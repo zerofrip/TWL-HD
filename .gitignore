@@ -26,6 +26,8 @@ arm9v2/build-c*/
 arm9v2/build-autodump-s*/
 arm9v2/build-s*/
 arm9v2/build-vp*/
+arm9v2/build-diag*/
+arm9v2/build-*-diag*/
 *.guard.nm
 
 arm11/build-diag/

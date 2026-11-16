@@ -1009,10 +1009,11 @@ Corrections to this design, found while implementing:
   `twlhd_gx_record.c:205/209` are now killed by new tests; the mutation report
   and run log were regenerated with real numbers.
 
-Open items: 5C-3 is DeSmuME validation of scene 5; 5C-4 is a hardware dump
-byte-compare; 5C-5 (VRAM readback backend) remains deferred. The source-buffer
-backend covers only game-registered source arrays; generic capture from
-arbitrary VRAM is not implemented.
+Open items: 5C-3 is DeSmuME validation of scene 5; 5C-4 hardware dump
+byte-compare is now a BUILD-only source change (SCENE=5 now issues
+`POLY_CULL_NONE`); 5C-5 (VRAM readback backend) remains deferred. The
+source-buffer backend covers only game-registered source arrays; generic capture
+from arbitrary VRAM is not implemented.
 
 ---
 
@@ -1038,10 +1039,11 @@ What exists:
   byte-identical): checks one `TXDS` record against the literal
   `TEXIMAGE_PARAM`/`PLTT_BASE` and the 32/32/0 sizes, the `TXDT`/`PLDT` bytes
   against the known arrays, exactly `FRAME_COMPLETE` (OVERFLOW = texture drop =
-  FAIL), META backend/coverage, and the structural `BEGIN`/`TEXIMAGE_PARAM`/
-  `PLTT_BASE`/`VTX`/`END`/`SWAP` shape plus the shared analytic camera checks.
-  The expected arrays live once and a unit test parses
-  `arm9v2/source/demo_frame.cpp` and fails if the arrays or key literals change.
+  FAIL), META backend/coverage, and the structural `POLYGON_ATTR`/`BEGIN`/
+  `TEXIMAGE_PARAM`/`PLTT_BASE`/`VTX`/`END`/`SWAP` shape plus the shared analytic
+  camera checks. The expected arrays live once and a unit test parses
+  `arm9v2/source/demo_frame.cpp` and fails if the arrays, key literals or the
+  scene-5 `glPolyFmt` literal change.
 - Negative tests for every listed failure (flipped TXDT/PLDT byte, wrong
   param/pltt key, two/zero `TXDS` records, wrong TXDT length, missing PLDT,
   OVERFLOW, truncated chunk, textured capture through the unchanged
@@ -1090,8 +1092,55 @@ unvendored checkout (`fc504ee0`, wifi off, built outside the repository):
 This shows recorder + `twlhd_gx_rec_serialize_tex` + source-buffer backend
 capture the registered arrays in DeSmuME. It does not show that the DS hardware
 does the same (VRAM LCDC upload order, 16-bit stores and the texture-enable
-state are modelled by DeSmuME); that is stage 5C-4 and needs the owner's
-approval per run.
+state are modelled by DeSmuME).
+
+### 5C-4 status (round 4, 2026-11-16)
+
+**BUILD only.** No emulator or hardware run was performed for this change.
+
+- The owner previously verified the captured texture content (key, texel and
+  palette bytes) on DS hardware; the on-screen texture check was pending
+  because `SCENE=5` issued `glPolyFmt(POLY_ALPHA(31))`, leaving cull mode 0.
+- `SCENE=5` now issues `glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE)` (recorded
+  `POLYGON_ATTR` word `0x001F00C0`). The shape check in
+  `tools/emulator/compare_texture_capture.py` now requires exactly one
+  `POLYGON_ATTR` entry with that value before `BEGIN_VTXS`.
+- The default cube and `SCENE=1..4` still issue `POLY_ALPHA(31)` alone; they
+  will still render nothing on a real DS because of cull mode 0. Fixing them
+  would change the recorded `POLYGON_ATTR` word and the golden/expected
+  literals, so that is left as an owner decision and was NOT done here.
+
+---
+
+## 6.7 HARDWARE result 5C-4 (2026-11-16)
+
+**HARDWARE: New 3DS running DS software in TWL mode via TWiLight Menu++
+(hb-bootstrap), not a DS Phat/Lite.** Owner-operated runs, evidence in the
+owner's photos and the dumped file (details in `RUN2_RESULTS.md`, Run 23):
+
+- Capture content: `twlhd-arm9v2-autodump-s5` dumped a 952-byte v2 file; the
+  validate step passed and `compare_texture_capture.py` PASSed: key
+  `0x0C000000`/`0x00000000`, TXDT = the 32 texel bytes, PLDT = the 32 palette
+  bytes (`scene5_texel`/`scene5_palette`). The recorder counts on the console were
+  GXCM 78 / RSTA 5, no drops, no ignored or invalid writes.
+- Black top screen, diagnosed by bisection ROMs (`DIAGSCREEN=1..9`, report
+  `docs/reports/5c4-black-screen-analysis.md`): the unmodified libnds examples
+  and a build of their draw code with our Makefile display; our cube demo did
+  not, with or without recorder and console. `glPolyFmt(POLY_ALPHA(31))` leaves
+  POLYGON_ATTR cull bits 6-7 = 0 (DS: render neither face). Adding
+  `POLY_CULL_NONE` or `POLY_CULL_BACK` makes the cube appear (cube winding is
+  correct); other projection/camera alone does not.
+- After the fix for SCENE=5 (`POLY_CULL_NONE`), both SCENE=5 ROMs show the
+  textured quad(s) with the palette colours and rotating: the VRAM LCDC upload,
+  bank switch, 16-bit stores, texture enable and palette path work on this
+  hardware (qualitative; texels were not compared pixel by pixel).
+- The autodump fired at loop frame 240 (file frame 241, angle 28672). The first
+  dump, taken at file frame 2566, was therefore not the autodump (most likely the
+  A button held during the TWiLight launch; not proven).
+
+Not shown: DS Phat/Lite behaviour; the default cube and SCENE=1..4 still carry
+cull bits 0 and render nothing on a real DS (changing them alters the recorded
+POLYGON_ATTR word and golden literals: owner decision pending).
 
 ---
 

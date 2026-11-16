@@ -108,6 +108,12 @@ they do not replace the real run.
   `build-autodump-c64/`. The limit of 170 is 6120 clip vertices (≤ the ARM11 `CLIP_VERTEX_CAPACITY` of 6144), fewer than 16384
   recorder entries, and below the 1 MiB v2 file size. `make test` also builds `-DTWLHD_DEMO_CUBES=170` and `=2` host binaries that
   check the recorded VTX_16 count and the interpreter's vertex output against fixed literals.
+- `DIAGSCREEN=<n>` (`n` = 1..9) produces an opt-in hardware-bisection variant of
+  the `arm9v2` demo that changes exactly one suspected display factor at a time
+  (**BUILD/UNIT only**; `HARDWARE UNVERIFIED`). `0`/unset leaves the normal ROM
+  byte-identical. The `-diag<n>` suffix composes with `SCENE`, `AUTODUMP_FRAME`,
+  `VP_*` and `CUBES`. See `docs/reports/5c4-black-screen-analysis.md` for the
+  analysis, variant semantics and build hashes.
 - `SCENE=<n>` replaces the cube with a flat primitive scene for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
   `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles),
   `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles) and `SCENE=4` four flat quads, one quad-list each, with a
@@ -121,6 +127,9 @@ they do not replace the real run.
   binaries that check the recorded primitive type, VTX_16/COLOR/POLYGON_ATTR counts, the exact interpreted vertex-index order and
   frustum bounds at angles 0, 7680, 15360, 23040 and 30720, plus the per-vertex alpha literals for `SCENE=4`
   (1.0 / 0.53125 / 0.15625 / 0.0). The scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25.
+  **Demo ROMs must set the polygon cull bits:** on DS hardware `POLY_ALPHA(31)` alone leaves cull mode 0, which renders no
+  face. `SCENE=5` therefore issues `glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE)`; the default cube and `SCENE=1..4` still use
+  cull mode 0 by owner decision and would need their own round to render on a real DS.
 
 ## Textured scene (SCENE=5) run, stage 5C-3 tooling
 
@@ -156,21 +165,24 @@ per line):
    `(param & 0xFFFF) << 3`, palette base = `pltt << 4`), its sizes equal the
    shared formula (32 texel bytes, 32 palette bytes, no index block), and the
    `TXDT`/`PLDT` bytes equal the known `scene5_texel`/`scene5_palette` arrays.
-3. The GXCM stream has the structural shape the scene produces: one
-   `TEXIMAGE_PARAM` with the literal param, one `PLTT_BASE` with the literal
-   pltt, `TEXIMAGE_PARAM` before `PLTT_BASE` before exactly one
-   `BEGIN_VTXS(GL_QUADS)`, four `(TEX_COORD, VTX_16, VTX_16)` triples inside
-   the BEGIN group, one `END_VTXS` after it, and `SWAP_BUFFERS` last. The
-   perspective/look-at/rotation commands are checked analytically with the same
-   helpers as `compare_capture.py` (same demo camera path).
+3. The GXCM stream has the structural shape the scene produces: exactly one
+   `POLYGON_ATTR` with the literal `0x001F00C0` (`POLY_ALPHA(31) |
+   `POLY_CULL_NONE`) before `BEGIN_VTXS`, one `TEXIMAGE_PARAM` with the literal
+   param, one `PLTT_BASE` with the literal pltt, `POLYGON_ATTR`/
+   `TEXIMAGE_PARAM`/`PLTT_BASE` all before exactly one `BEGIN_VTXS(GL_QUADS)`,
+   four `(TEX_COORD, VTX_16, VTX_16)` triples inside the BEGIN group, one
+   `END_VTXS` after it, and `SWAP_BUFFERS` last. The perspective/look-at/rotation
+   commands are checked analytically with the same helpers as
+   `compare_capture.py` (same demo camera path).
 
 **Justified limitation:** the host expected stream does not support SCENE=5
 (`tests/host/dump_demo_frame.cpp` is a non-texture build and its mock has no
 texture/VRAM ports), so the command-id sequence is compared structurally plus
-against the two exact known key values instead of entry for entry against
-`expected.txt`. A wrongly ordered non-key command outside the checked shape is
-therefore not caught by this comparator; the cross-checked literals, the matrix
-checks and `docs/reports/5c3-mutation-report.md` bound that gap.
+against the exact known key values (`POLYGON_ATTR`, `TEXIMAGE_PARAM`,
+`PLTT_BASE`) instead of entry for entry against `expected.txt`. A wrongly
+ordered non-key command outside the checked shape is therefore not caught by
+this comparator; the cross-checked literals, the matrix checks and
+`docs/reports/5c3-mutation-report.md` bound that gap.
 
 **What a PASS means:** the PASS proves the recorder, the v2 serializer and the
 source-buffer capture path worked **in DeSmuME only** — the capture contains the
@@ -182,9 +194,9 @@ The expected arrays live in exactly one place
 (`tools/emulator/compare_texture_capture.py`); a unit test parses the
 `scene5_texel`/`scene5_palette` initialisers and the `param`/`pltt` literals out
 of `arm9v2/source/demo_frame.cpp` and fails if they change. Negative tests
-(flipped TXDT/PLDT byte, wrong param/pltt key, two/zero TXDS records, wrong
-TXDT length, missing PLDT, OVERFLOW set, truncated chunk) each fail with their
-specific reason. The unchanged non-texture comparator accepts a textured capture
+(flipped TXDT/PLDT byte, wrong param/pltt key, wrong `POLYGON_ATTR` / cull bits
+set to 0, two/zero TXDS records, wrong TXDT length, missing PLDT, OVERFLOW set,
+truncated chunk) each fail with their specific reason. The unchanged non-texture comparator accepts a textured capture
 as long as its flags, META, GXCM and RSTA still match the expected non-texture
 stream, because `compare_capture.py` does not inspect TXDS/TXDT/PLDT;
 `tools/test_emulator_texture_compare.py` pins this behaviour with a texture-free
