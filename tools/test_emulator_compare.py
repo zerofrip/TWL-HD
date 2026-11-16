@@ -92,7 +92,9 @@ def base_gxcm():
     entries += [(0x1A, f32(value)) for value in rotation("y", ANGLE)]
     entries += [(0x1C, 0)] * 3
     entries += [(0x1B, 4096)] * 3
-    entries += [(0x11, 0), (0x29, 0x001F0000), (0x40, 1),
+    # POLYGON_ATTR = POLY_ALPHA(31) | POLY_CULL_NONE
+    #                = (31 << 16) | (3 << 6) = 0x001F0000 | 0xC0 = 0x001F00C0
+    entries += [(0x11, 0), (0x29, 0x001F00C0), (0x40, 1),
                 (0x21, 0x1FF00000), (0x20, 0x1F),
                 (0x23, 0xF000F000), (0x23, 0x00001000),
                 (0x41, 0), (0x12, 1), (0x50, 0)]
@@ -159,6 +161,13 @@ class CompareCaptureTest(unittest.TestCase):
             self.write_capture(base_gxcm(), base_rsta()))
         self.assertEqual(code, 0, output)
         self.assertIn("PASS", output)
+
+    def test_polygon_attr_cull_bits_zero_fails(self):
+        """Regression: cull mode 0 renders nothing on DS hardware."""
+        gxcm = base_gxcm()
+        index = next(i for i, entry in enumerate(gxcm) if entry[0] == 0x29)
+        gxcm[index] = (0x29, 0x001F0000)  # POLY_ALPHA(31), cull bits 0
+        self.assert_rejected(gxcm, base_rsta(), "gxcm-value")
 
     def test_non_math_value_mismatch_fails(self):
         gxcm = base_gxcm()

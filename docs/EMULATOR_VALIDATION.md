@@ -128,8 +128,35 @@ they do not replace the real run.
   frustum bounds at angles 0, 7680, 15360, 23040 and 30720, plus the per-vertex alpha literals for `SCENE=4`
   (1.0 / 0.53125 / 0.15625 / 0.0). The scene shapes draw at 2x scale, so the strip vertices reach |x| = 1.25.
   **Demo ROMs must set the polygon cull bits:** on DS hardware `POLY_ALPHA(31)` alone leaves cull mode 0, which renders no
-  face. `SCENE=5` therefore issues `glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE)`; the default cube and `SCENE=1..4` still use
-  cull mode 0 by owner decision and would need their own round to render on a real DS.
+  face. Every `arm9v2` demo draw path now issues `glPolyFmt(... | POLY_CULL_NONE)`, so `SCENE=1..4`, the default cube,
+  `CUBES` variants, `AUTODUMP_FRAME` and the `VP` variant all record `POLYGON_ATTR` word `0x001F00C0` (or the alpha-scene
+  equivalents `0x001F00C0` / `0x001000C0` / `0x000400C0` / `0x000000C0`). `DIAGSCREEN=6/7` already used `POLY_CULL_NONE`;
+  `DIAGSCREEN=9` keeps `POLY_CULL_BACK` by design. This was a **BUILD/UNIT** follow-up; no emulator or hardware run was done.
+
+### Impact of the 5C-4 cull-bit follow-up on literals and hashes (BUILD only)
+
+`POLY_ALPHA(a) = a << 16`; `POLY_CULL_NONE = 3 << 6 = 0xC0`.
+
+| Source site (`arm9v2/source/demo_frame.cpp`) | Variant(s) | Old `POLYGON_ATTR` word | New `POLYGON_ATTR` word |
+|---|---|---|---|
+| `:298` `glPolyFmt(POLY_ALPHA(scene_alpha[q]))` | `SCENE=4` q0/q1/q2/q3 | `0x001F0000` / `0x00100000` / `0x00040000` / `0x00000000` | `0x001F00C0` / `0x001000C0` / `0x000400C0` / `0x000000C0` |
+| `:370` shared scene branch | `SCENE=1,2,3` | `0x001F0000` | `0x001F00C0` |
+| `:370` shared scene branch | `SCENE=5` | `0x001F00C0` | unchanged (already fixed in round 4) |
+| `:325` | `DIAGSCREEN=6` | `0x001F00C0` | unchanged |
+| `:413` | `DIAGSCREEN=7` | `0x001F00C0` | unchanged |
+| `:415` | `DIAGSCREEN=9` | `0x001F0080` (`POLY_CULL_BACK`) | unchanged by design |
+| `:421` default single-cube `#else` | default ROM, `AUTODUMP_FRAME`, `VP`, `DIAGSCREEN=1..5,8` | `0x001F0000` | `0x001F00C0` |
+| `:466` multi-cube loop | `CUBES=2..170` per cube | `0x001F0000` | `0x001F00C0` |
+
+Updated dependent literals:
+
+- `tools/test_emulator_compare.py:95` fixture `0x29` entry: `0x001F0000` → `0x001F00C0` (`31<<16 = 0x001F0000`; `3<<6 = 0xC0`; OR = `0x001F00C0`).
+- `tests/host/test_demo_frame.cpp` self-contained assertion: default/`CUBES`/`VP`/`SCENE=1..3,5` pin `0x001F00C0`; `SCENE=4` pins the four alpha words above.
+- `tools/emulator/compare_capture.py` has no hard-coded `POLYGON_ATTR` value or tolerance; the regression test in `tools/test_emulator_compare.py` proves a cull-bits-0 word is rejected as `gxcm-value`.
+- `tests/host/fixtures/demo_frame_desmume_v2.bin` is an archived DeSmuME capture with the old default-cube cull-bits-0 word. It is kept as evidence; the interpreter-output tests that consume it assert only alpha/lighting, which are unchanged by cull bits.
+
+Expected ROM hash changes (everything whose draw path gained `0xC0` changes; `s5`, `diag6`, `diag7` and `diag9` stay the same):
+`twlhd-arm9v2.nds`, `twlhd-arm9v2-s1.nds`, `twlhd-arm9v2-s2.nds`, `twlhd-arm9v2-s3.nds`, `twlhd-arm9v2-s4.nds`, `twlhd-arm9v2-c64.nds`, `twlhd-arm9v2-autodump.nds`, `twlhd-arm9v2-vp.nds`, `twlhd-arm9v2-diag1.nds` through `diag5.nds`, and `twlhd-arm9v2-diag8.nds`. `DIAGSCREEN=1..4` and `DIAGSCREEN=8` change because they draw the default cube path; `DIAGSCREEN=5` changes because it draws the default cube through the same branch.
 
 ## Textured scene (SCENE=5) run, stage 5C-3 tooling
 

@@ -1105,10 +1105,11 @@ state are modelled by DeSmuME).
   `POLYGON_ATTR` word `0x001F00C0`). The shape check in
   `tools/emulator/compare_texture_capture.py` now requires exactly one
   `POLYGON_ATTR` entry with that value before `BEGIN_VTXS`.
-- The default cube and `SCENE=1..4` still issue `POLY_ALPHA(31)` alone; they
-  will still render nothing on a real DS because of cull mode 0. Fixing them
-  would change the recorded `POLYGON_ATTR` word and the golden/expected
-  literals, so that is left as an owner decision and was NOT done here.
+- The default cube and `SCENE=1..4` now issue `POLY_ALPHA(31) |
+  POLY_CULL_NONE` (recorded `POLYGON_ATTR` word `0x001F00C0`). The alpha-scene
+  quads (`SCENE=4`) carry the same `0xC0` cull bits on top of their alpha
+  values. This is a BUILD/UNIT follow-up; no new emulator or hardware run was
+  performed.
 
 ---
 
@@ -1138,9 +1139,9 @@ owner's photos and the dumped file (details in `RUN2_RESULTS.md`, Run 23):
   dump, taken at file frame 2566, was therefore not the autodump (most likely the
   A button held during the TWiLight launch; not proven).
 
-Not shown: DS Phat/Lite behaviour; the default cube and SCENE=1..4 still carry
-cull bits 0 and render nothing on a real DS (changing them alters the recorded
-POLYGON_ATTR word and golden literals: owner decision pending).
+Not shown: DS Phat/Lite behaviour. BUILD-only follow-up (2026-11-16): the
+default cube and `SCENE=1..4` now carry `POLY_CULL_NONE` (`0xC0`) while keeping
+their alpha/ID/lighting bits; no new emulator or hardware run was performed.
 
 ---
 

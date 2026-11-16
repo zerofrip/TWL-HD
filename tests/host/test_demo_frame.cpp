@@ -304,7 +304,22 @@ static void test_frame_is_self_contained(void) {
     /* Viewport and polygon state. */
     CHECK(has_cmd_word(TWLHD_V2_CMD_VIEWPORT));
     CHECK(has_cmd_word(TWLHD_V2_CMD_POLYGON_ATTR));
-#if TWLHD_TEST_EXPECT_SCENE == 5
+#if TWLHD_TEST_EXPECT_SCENE == 4
+    /* Four alpha-labelled quads: alpha 31/16/4/0 plus CULL_NONE (0xC0). */
+    CHECK(find_first_cmd_value(g_rec.gxcm, g_rec.gxcm_count,
+                               TWLHD_V2_CMD_POLYGON_ATTR,
+                               0x001F00C0u) != UINT32_MAX);
+    CHECK(find_first_cmd_value(g_rec.gxcm, g_rec.gxcm_count,
+                               TWLHD_V2_CMD_POLYGON_ATTR,
+                               0x001000C0u) != UINT32_MAX);
+    CHECK(find_first_cmd_value(g_rec.gxcm, g_rec.gxcm_count,
+                               TWLHD_V2_CMD_POLYGON_ATTR,
+                               0x000400C0u) != UINT32_MAX);
+    CHECK(find_first_cmd_value(g_rec.gxcm, g_rec.gxcm_count,
+                               TWLHD_V2_CMD_POLYGON_ATTR,
+                               0x000000C0u) != UINT32_MAX);
+#else
+    /* Default cube, CUBES, VP and SCENE=1/2/3/5 all issue one CULL_NONE word. */
     CHECK(find_first_cmd_value(g_rec.gxcm, g_rec.gxcm_count,
                                TWLHD_V2_CMD_POLYGON_ATTR,
                                0x001F00C0u) != UINT32_MAX);
