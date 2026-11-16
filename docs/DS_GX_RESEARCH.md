@@ -339,8 +339,11 @@ mode even when the flag is clear (`gfx3d.cpp:1579-1580`). Modes come from
   s32 and converted to floats by `/16.0f` (same units as mode 0). A 20.12
   translation of 4096 therefore moves **+1 raw s1.11.4 unit = 1/16 texel**,
   not 1 texture unit.
-- 2 normal source: rows 0/1 x (nx,ny,nz) + (s<<24, t<<24), `>> 24`.
-- 3 vertex source: rows 0/1 x (vx,vy,vz) + (s<<24, t<<24), `>> 24`.
+- 2 normal source (`gfx3d.cpp:1594-1596`): rows 0/1 x the **RAW**
+  `_vecNormal` (nx,ny,nz) + (s<<24, t<<24), `>> 24`; see the dedicated
+  section below for the exact latch and units.
+- 3 vertex source (`gfx3d.cpp:1600-1602`): rows 0/1 x the **RAW**
+  `_vtxCoord16` (vx,vy,vz) + (s<<24, t<<24), `>> 24`; same section.
 
 **READ:** all modes are integer fixed point with no normalisation; the texture
 matrix is `MATRIXMODE_TEXTURE` as latched at VTX time, so matrix changes between
@@ -388,11 +391,13 @@ EMULATOR or HARDWARE verification:
   `gfx3d.cpp:861-871`); POP ignores its parameter, restores slot 0 and reports
   underflow as `stack_errors`/`ERR_STACK` (`gfx3d.cpp:918-929`); STORE/RESTORE
   in mode 3: index ignored, always slot 0, no `ERR_STACK` (`gfx3d.cpp:950-1000`).
-- **GAP:** modes 2 (normal source) and 3 (vertex source) are **not
-  implemented**. Those vertices get the raw latched s,t and every VTX command
-  in such a mode increments `TwlhdGxStats.tex_transform_unsupported`; the
-  counter is per VTX command and is also incremented outside BEGIN..END, so it
-  is a stream property.
+- **IMPLEMENTED (BUILD/UNIT; source-read from DeSmuME, no hardware):** modes
+  2 (normal source) and 3 (vertex source) now apply the texture matrix rows
+  0/1 to the RAW normal / RAW vertex, with the `(s<<24)` base and arithmetic
+  `>>24` (`gfx3d.cpp:1594-1602`). The full rule set, fixed-point formulas and
+  file:line citations are in "Texture coordinate transform modes 2 and 3"
+  below. `TwlhdGxStats.tex_transform_unsupported` is kept for output
+  compatibility and is now always 0.
 - **GAP (known divergence, not addressed):** the projection, position and
   vector stacks still start zeroed (the `memset` in `twlhd_gx_interpret_ex`),
   whereas DeSmuME MatrixInits them: `_mtxStackProjection[0]`,
@@ -937,3 +942,87 @@ and never silently drops a texture.
 - **UNVERIFIED** the arm11 heap budget: a call needs the caller's arena
   (up to 1 GiB worst case) plus a 4 MiB scratch buffer, and nothing here proves
   that budget exists on the 3DS side.
+
+### Texture coordinate transform modes 2 and 3
+
+**VERIFIED (source-read, DeSmuME checkout)** — all line numbers below are
+`desmume/src/gfx3d.cpp` / `gfx3d.h`. There is no hardware verification for any
+of it: the DS behaviour itself is **UNVERIFIED**, the refactor only matches
+the DeSmuME model of it. Implementation and tests are **BUILD/UNIT only**.
+
+The transform runs in `AddCurrentVertexToList` (`gfx3d.cpp:1579-1612`), the
+same place as modes 0/1, and reads `_mtxCurrent[MATRIXMODE_TEXTURE]`
+(`gfx3d.cpp:1582`) as sampled at VTX time. `TexCoordTransformMode` is
+`TEXIMAGE_PARAM` bits 30-31 (`gfx3d.h:124-129`).
+
+- **Mode 2 (normal source), `gfx3d.cpp:1594-1596`:**
+  `s' = (s32)(( (s64)m[0]*nx + (s64)m[4]*ny + (s64)m[8]*nz +
+  ((s64)s << 24) ) >> 24)`; `t'` is the same with `m[1]/m[5]/m[9]` and `t`.
+- **Mode 3 (vertex source), `gfx3d.cpp:1600-1602`:**
+  `s' = (s32)(( (s64)m[0]*vx + (s64)m[4]*vy + (s64)m[8]*vz +
+  ((s64)s << 24) ) >> 24)`; `t'` with `m[1]/m[5]/m[9]`.
+- The matrix is the 20.12 `MATRIXMODE_TEXTURE` matrix, column-major
+  (`m[col*4+row]`), so rows 0/1 are `m[0,4,8]` / `m[1,5,9]`. The
+  `m[8]`/`m[9]` words are **multipliers of z** here, unlike mode 1 where they
+  are addends, and there is no translation term.
+- The products are `(s64)a * (s64)b` (`GEM_Mul32x32To64`,
+  `gfx3d.cpp:495-502`; `GEM_Mul32x16To64`, `:490-493`), summed in 64 bits.
+  The base coordinate is added as `(s64)s << 24` and the sum is
+  arithmetic-shifted down by 24, then cast to s32. This shift composition
+  (`<<24` on the base, `>>24` on the sum) is exactly the source text, not a
+  `>>12`+`>>12` equivalent.
+- The output is converted to texture units with `/16.0f`, like mode 1; the
+  float is the existing output conversion only, the arithmetic path is
+  integer.
+
+**Which normal (mode 2).** `SetNormal` stores the RAW 10-bit fields into
+`_vecNormal` as `sign_extend10(field) << 3` (`gfx3d.cpp:1219-1221`), with
+`w = 1 << 12` (`:1222`). The vector-matrix transform for lighting runs on a
+**local copy** (`normalTransformed`, `:1229-1230`); `_vecNormal` itself stays
+raw. Mode 2 therefore reads the **raw** normal `n10<<3`, *not* the lighting
+normal. (The earlier planning note in this repository that expected the
+vec-matrix-transformed normal was wrong; the source is authoritative.)
+No NORMAL command leaves `_vecNormal` at `zeroVec4s32` (`gfx3d.cpp:566`), so
+mode 2 with the initial normal is the base coordinate only.
+
+**Which vertex (mode 3).** `_vtxCoord16` is the RAW VTX command coordinate:
+VTX_16 stores the two packed s16 pairs directly (`gfx3d.cpp:1441-1458`,
+`:1474-1478`); VTX_10 stores `sign_extend10(field) * (1 << 6)` into the s16
+components (`:1463-1471`); VTX_XY/XZ/YZ overwrite only their two components
+(`:1489-1500`). It is the pre-modelview coordinate: the position transform
+uses a separate local `vtxCoordTransformed` (`:1520-1557`), so mode 3 uses
+the **raw** vertex, not the post-position-matrix vertex.
+
+**Ordering / invalidation.** The transform is recomputed when the flag
+`_doesTransformedTexCoordsNeedUpdate` is set — by TEX_COORD (`:1405-1414`),
+by NORMAL only in mode 2 (`:1224-1227`), by a transform-mode change
+(`:1385-1389`) and by matrix commands (`_UpdateTransformedTexCoordsIfNeeded`,
+`:649-655`) — and **always** for mode 3 (`:1579-1580`). Our interpreter is
+per-vertex and samples the latched state at each VTX command, which produces
+the same result without the cache.
+
+**Units.** In both modes the base `s`/`t` are the raw s1.11.4 latches used by
+mode 1, and the result `s'`/`t'` is in the same raw units, so `/16.0f` yields
+texture units exactly as modes 0/1. A 20.12 matrix scale of 4096 contributes
+`4096*x / 2^24` raw units for source component `x`.
+
+**Saturation/overflow.** The reference does not saturate: the 64-bit sum is
+arithmetic-shifted and cast to `(s32)`. With the real input ranges
+(`TEXIMAGE_PARAM`-driven sources: `|normal| <= 4088`, `|vertex| <= 32768`,
+`|m| <= 2^31`) the shifted result cannot exceed int32, so no wrap is
+reachable; the 64-bit accumulation is still required (a single product or a
+2-3 term sum exceeds 32 bits).
+
+**Downstream path.** `TwlhdGxTexVertex` (`s,t,teximage_param,pltt_base`) is
+unchanged and already carries modes 2/3 output; `twlhd_pica_texcoords_from_gx`
+consumes `s,t` in texture units for every mode (mode 1 already emits large
+values), so there is **no OPEN ITEM** for modes 2/3: nothing downstream needs
+a new field or a different unit.
+
+**Tests (BUILD/UNIT only).** Hand-computed literals in
+`tests/host/test_gx_interp.c` (`tex-mode2-*`, `tex-mode3-*`,
+`tex-mode23-*`, `tex-mode-switch-one-frame`,
+`tex-matrix-change-between-vertices`) plus deterministic seeded golden scenes
+in `tools/test_gx_interp_golden.py` compared against the independent
+`TextureOracle` implementation. Mutation results:
+`docs/reports/tm23-mutation-report.md`.

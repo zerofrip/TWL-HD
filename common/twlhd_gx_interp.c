@@ -85,6 +85,12 @@ typedef struct {
     uint32_t teximage_param; /* raw TEXIMAGE_PARAM, 0 = untextured. */
     uint32_t pltt_base;      /* raw PLTT_BASE. */
 
+    /* Texture-transform sources 2/3 (DeSmuME gfx3d.cpp:1594-1602). */
+    int32_t normal[3];      /* RAW normal latch n10<<3 (not the vec-matrix
+                               transformed copy used for lighting). */
+    int32_t raw_vtx[3];     /* RAW VTX_16/VTX_10/VTX_XY.. coordinates in
+                               DeSmuME _vtxCoord16 units. */
+
     /* Lighting latch (DeSmuME gfx3d.cpp:1158-1331). */
     uint32_t diffuse;       /* RGB555, low 15 bits (DIF_AMB low16). */
     uint32_t ambient;       /* RGB555 (DIF_AMB high16). */
@@ -467,6 +473,12 @@ static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
     n[0] = sign_extend10(param) * 8;
     n[1] = sign_extend10(param >> 10) * 8;
     n[2] = sign_extend10(param >> 20) * 8;
+    /* DeSmuME latches the RAW normal into _vecNormal for texture transform
+     * mode 2 and only transforms a local copy for lighting
+     * (gfx3d.cpp:1219-1230). Store the raw value before the matrix. */
+    g->normal[0] = n[0];
+    g->normal[1] = n[1];
+    g->normal[2] = n[2];
     matrix_transform_vec3(&g->vec, n);
 
     rgb555_unpack(g->diffuse, diffuse);
@@ -701,13 +713,16 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
  * Texture state for the vertex about to be emitted.
  *
  * TEX_COORD is applied at VTX time (DeSmuME AddCurrentVertexToList,
- * gfx3d.cpp:1578-1593 as described in docs/DS_GX_RESEARCH.md). Mode 1 is the
- * texture-matrix rows 0/1 applied to the RAW sign-extended s1.11.4 latches:
- * the m[8]/m[9] and m[12]/m[13] addends are used as-is (no FX_ONE scaling),
- * the 64-bit sum is arithmetic-shifted down by 12, cast to int32 and converted
- * to texture units (/16.0). Modes 2 and 3 are not implemented: raw latched
- * coordinates are emitted and the vertex is counted in
- * tex_transform_unsupported (per VTX command).
+ * gfx3d.cpp:1578-1602 as described in docs/DS_GX_RESEARCH.md). All modes are
+ * the texture-matrix rows 0/1 applied to a raw fixed-point source:
+ *  - mode 0: the raw latched s1.11.4 coordinate.
+ *  - mode 1: the raw s1.11.4 latches; the m[8]/m[9] and m[12]/m[13] addends
+ *    are used as-is (no FX_ONE scaling), the 64-bit sum is arithmetic-shifted
+ *    down by 12, cast to int32 and converted to texture units (/16.0).
+ *  - mode 2: the RAW normal latch (n10<<3, gfx3d.cpp:1594-1596) times rows
+ *    0/1, plus (s<<24, t<<24), summed in 64 bits, arithmetic >>24.
+ *  - mode 3: the RAW VTX coordinates (gfx3d.cpp:1600-1602) times rows 0/1,
+ *    same (s<<24, t<<24) base and >>24.
  */
 static TwlhdGxTexVertex compute_tex_vertex(GxInterp *g) {
     TwlhdGxTexVertex tv;
@@ -734,19 +749,57 @@ static TwlhdGxTexVertex compute_tex_vertex(GxInterp *g) {
         return tv;
     }
 
-    if (tmode >= 2u) {
-        g->stats->tex_transform_unsupported++;
+    if (tmode == 2u) {
+        /* DeSmuME gfx3d.cpp:1594-1596 (NormalSource). _vecNormal holds the
+         * RAW normal (sign_extend10 << 3; gfx3d.cpp:1219-1221), NOT the
+         * vector-matrix copy used by lighting. The base coordinate is added
+         * with a 24-bit shift and the whole 64-bit sum is arithmetic-shifted
+         * down by 24, then wrapped to int32 like (s32). */
+        int64_t s_acc = (int64_t)g->tex.m[0] * g->normal[0] +
+                        (int64_t)g->tex.m[4] * g->normal[1] +
+                        (int64_t)g->tex.m[8] * g->normal[2] +
+                        (int64_t)g->tex_s * 16777216;
+        int64_t t_acc = (int64_t)g->tex.m[1] * g->normal[0] +
+                        (int64_t)g->tex.m[5] * g->normal[1] +
+                        (int64_t)g->tex.m[9] * g->normal[2] +
+                        (int64_t)g->tex_t * 16777216;
+        tv.s = (float)(int32_t)(s_acc >> 24) / 16.0f;
+        tv.t = (float)(int32_t)(t_acc >> 24) / 16.0f;
+        return tv;
     }
+
+    if (tmode == 3u) {
+        /* DeSmuME gfx3d.cpp:1600-1602 (VertexSource). _vtxCoord16 holds the
+         * RAW VTX command coordinate (VTX_16 s16, VTX_10 sign_extend10<<6;
+         * gfx3d.cpp:1463-1477), not the post-modelview vertex. Same
+         * (s<<24, t<<24) base and arithmetic >>24 as mode 2. */
+        int64_t s_acc = (int64_t)g->tex.m[0] * g->raw_vtx[0] +
+                        (int64_t)g->tex.m[4] * g->raw_vtx[1] +
+                        (int64_t)g->tex.m[8] * g->raw_vtx[2] +
+                        (int64_t)g->tex_s * 16777216;
+        int64_t t_acc = (int64_t)g->tex.m[1] * g->raw_vtx[0] +
+                        (int64_t)g->tex.m[5] * g->raw_vtx[1] +
+                        (int64_t)g->tex.m[9] * g->raw_vtx[2] +
+                        (int64_t)g->tex_t * 16777216;
+        tv.s = (float)(int32_t)(s_acc >> 24) / 16.0f;
+        tv.t = (float)(int32_t)(t_acc >> 24) / 16.0f;
+        return tv;
+    }
+
     tv.s = (float)g->tex_s / 16.0f;
     tv.t = (float)g->tex_t / 16.0f;
     return tv;
 }
 
-static TwlhdGxResult emit_vertex(GxInterp *g, float x, float y, float z) {
+static TwlhdGxResult emit_vertex(GxInterp *g, float x, float y, float z,
+                                 int32_t rx, int32_t ry, int32_t rz) {
     TwlhdGxVertex v;
     TwlhdGxTexVertex tv;
 
     g->stats->vertices_in++;
+    g->raw_vtx[0] = rx;
+    g->raw_vtx[1] = ry;
+    g->raw_vtx[2] = rz;
     tv = compute_tex_vertex(g);
     g->cur.x = x;
     g->cur.y = y;
@@ -949,35 +1002,50 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
     case TWLHD_V2_CMD_VTX_16:
         r = emit_vertex(g, (float)sign_extend16(params[0]) / 4096.0f,
                         (float)sign_extend16(params[0] >> 16) / 4096.0f,
-                        (float)sign_extend16(params[1]) / 4096.0f);
+                        (float)sign_extend16(params[1]) / 4096.0f,
+                        (int32_t)sign_extend16(params[0]),
+                        (int32_t)sign_extend16(params[0] >> 16),
+                        (int32_t)sign_extend16(params[1]));
         if (r != TWLHD_GX_OK) return r;
         break;
 
     case TWLHD_V2_CMD_VTX_10:
         r = emit_vertex(g, (float)sign_extend10(params[0]) / 64.0f,
                         (float)sign_extend10(params[0] >> 10) / 64.0f,
-                        (float)sign_extend10(params[0] >> 20) / 64.0f);
+                        (float)sign_extend10(params[0] >> 20) / 64.0f,
+                        sign_extend10(params[0]) * 64,
+                        sign_extend10(params[0] >> 10) * 64,
+                        sign_extend10(params[0] >> 20) * 64);
         if (r != TWLHD_GX_OK) return r;
         break;
 
     case TWLHD_V2_CMD_VTX_XY:
         r = emit_vertex(g, (float)sign_extend16(params[0]) / 4096.0f,
                         (float)sign_extend16(params[0] >> 16) / 4096.0f,
-                        g->cur.z);
+                        g->cur.z,
+                        (int32_t)sign_extend16(params[0]),
+                        (int32_t)sign_extend16(params[0] >> 16),
+                        g->raw_vtx[2]);
         if (r != TWLHD_GX_OK) return r;
         break;
 
     case TWLHD_V2_CMD_VTX_XZ:
         r = emit_vertex(g, (float)sign_extend16(params[0]) / 4096.0f,
                         g->cur.y,
-                        (float)sign_extend16(params[0] >> 16) / 4096.0f);
+                        (float)sign_extend16(params[0] >> 16) / 4096.0f,
+                        (int32_t)sign_extend16(params[0]),
+                        g->raw_vtx[1],
+                        (int32_t)sign_extend16(params[0] >> 16));
         if (r != TWLHD_GX_OK) return r;
         break;
 
     case TWLHD_V2_CMD_VTX_YZ:
         r = emit_vertex(g, g->cur.x,
                         (float)sign_extend16(params[0]) / 4096.0f,
-                        (float)sign_extend16(params[0] >> 16) / 4096.0f);
+                        (float)sign_extend16(params[0] >> 16) / 4096.0f,
+                        g->raw_vtx[0],
+                        (int32_t)sign_extend16(params[0]),
+                        (int32_t)sign_extend16(params[0] >> 16));
         if (r != TWLHD_GX_OK) return r;
         break;
 

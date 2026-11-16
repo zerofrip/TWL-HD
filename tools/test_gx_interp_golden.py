@@ -6,6 +6,7 @@ compare against the independent Python oracle.
 """
 
 import os
+import random
 import struct
 import subprocess
 import sys
@@ -41,6 +42,10 @@ CMD_COLOR = 0x20
 CMD_NORMAL = 0x21
 CMD_TEX_COORD = 0x22
 CMD_VTX_16 = 0x23
+CMD_VTX_10 = 0x24
+CMD_VTX_XY = 0x25
+CMD_VTX_XZ = 0x26
+CMD_VTX_YZ = 0x27
 CMD_TEXIMAGE_PARAM = 0x2A
 CMD_PLTT_BASE = 0x2B
 CMD_POLYGON_ATTR = 0x29
@@ -150,6 +155,38 @@ def _rotate_z_90():
             -4096, 0, 0, 0,
             0, 0, 4096, 0,
             0, 0, 0, 4096]
+
+
+def _rand_matrix(rng):
+    """16 full-range s32 words: every product must be computed in 64 bits."""
+    return [_u32(rng.randint(-0x80000000, 0x7FFFFFFF)) for _ in range(16)]
+
+
+def _rand_matrix_small(rng):
+    """Moderate 20.12 words: keeps a mode-1 result inside exact float32."""
+    return [_u32(rng.randint(-0x10000, 0x10000)) for _ in range(16)]
+
+
+def _vtx16_xyz(x, y, z):
+    return [
+        (CMD_VTX_16, ((y & 0xFFFF) << 16) | (x & 0xFFFF)),
+        (CMD_VTX_16, z & 0xFFFF),
+    ]
+
+
+def _vtx10(x, y, z):
+    return [(CMD_VTX_10, (x & 0x3FF) | ((y & 0x3FF) << 10) |
+             ((z & 0x3FF) << 20))]
+
+
+def _rand_vtx16(rng):
+    return _vtx16_xyz(rng.randint(-32768, 32767), rng.randint(-32768, 32767),
+                      rng.randint(-32768, 32767))
+
+
+def _rand_vtx10(rng):
+    return _vtx10(rng.randint(-512, 511), rng.randint(-512, 511),
+                  rng.randint(-512, 511))
 
 
 # MTX_TRANS on vec cannot be observed through affine-only lighting streams:
@@ -768,6 +805,16 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertAlmostEqual(results[0x40001234][1], 0.9375, places=6)
 
     def test_tex_modes_2_3_raw_and_counter(self):
+        # Historical label: modes 2/3 are implemented, so nothing is counted
+        # as unsupported any more. diag(8192,8192,4096), TEX_COORD (16,32),
+        # no NORMAL (mode 2 sees the initial zero normal):
+        #   mode 2: (8192*0 + 16<<24) >> 24 = 16 -> 1.0, t = 2.0 for all.
+        #   mode 3: raw vertices (0,0,0), (4096,0,0), (0,4096,0):
+        #     (1.0, 2.0), (1.125, 2.0), (1.0, 2.125).
+        expected = {
+            2: [(1.0, 2.0)] * 3,
+            3: [(1.0, 2.0), (1.125, 2.0), (1.0, 2.125)],
+        }
         for mode in (2, 3):
             entries = [(CMD_MTX_MODE, 3)]
             _add_load_4x4(entries, _diag(8192, 8192, 4096))
@@ -777,12 +824,11 @@ class GxInterpGoldenTest(unittest.TestCase):
             for xy in ((0, 0), (0x1000, 0), (0, 0x1000)):
                 entries.extend(_vtx16(*xy))
             entries.append((CMD_END_VTXS, 0))
-            entries.extend(_vtx16(0, 0))  # outside BEGIN: still counted
+            entries.extend(_vtx16(0, 0))  # outside BEGIN: not counted
             entries.append((CMD_SWAP_BUFFERS, 0))
             tex, _, stats_line = self._assert_texture(entries)
-            self.assertEqual([(t["s"], t["t"]) for t in tex],
-                             [(1.0, 2.0)] * 3)
-            self.assertIn("tex_transform_unsupported=4", stats_line)
+            self.assertEqual([(t["s"], t["t"]) for t in tex], expected[mode])
+            self.assertIn("tex_transform_unsupported=0", stats_line)
 
     def test_tex_quad_list_alignment(self):
         entries = [(CMD_BEGIN_VTXS, 1)]
@@ -1586,6 +1632,159 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertEqual(len(vertices), 3)
         for vertex in vertices:
             self.assertEqual(vertex[7], 1.0)
+
+    # -- Texture transform modes 2/3: deterministic seeded scenes ---------
+    #
+    # Each scene is compared against TextureOracle's independent modes-2/3
+    # implementation (tools/gx_interp_oracle.py). Seeds are fixed, so the
+    # scenes are reproducible without a hardware capture.
+
+    def _mode_scene(self, seed, mode, vtx_kind="vtx16", matrix=None):
+        rng = random.Random(seed)
+        entries = [(CMD_MTX_MODE, 3)]
+        _add_load_4x4(entries, matrix if matrix is not None
+                      else _rand_matrix(rng))
+        _add_tex_coord(entries, rng.randint(-32768, 32767),
+                       rng.randint(-32768, 32767))
+        _add_teximage(entries, (mode << 30) | rng.getrandbits(30))
+        _add_pltt(entries, rng.getrandbits(16))
+        if mode == 2:
+            entries.append((CMD_NORMAL, rng.getrandbits(30)))
+        entries.append((CMD_BEGIN_VTXS, 0))
+        for _ in range(3):
+            if vtx_kind == "vtx10":
+                entries.extend(_rand_vtx10(rng))
+            else:
+                entries.extend(_rand_vtx16(rng))
+        entries.append((CMD_END_VTXS, 0))
+        entries.append((CMD_SWAP_BUFFERS, 0))
+        return self._assert_texture(entries)
+
+    def test_tex_mode2_identity_random(self):
+        # Identity matrix: only the (s<<24)>>24 base survives unless the
+        # normal term reaches one raw unit.
+        self._mode_scene(5700, 2, matrix=_diag(4096, 4096, 4096))
+
+    def test_tex_mode3_identity_random(self):
+        self._mode_scene(5703, 3, matrix=_diag(4096, 4096, 4096))
+
+    def test_tex_mode2_random_scenes(self):
+        for seed in (5701, 5702, 5704, 5705):
+            self._mode_scene(seed, 2)
+
+    def test_tex_mode3_random_scenes(self):
+        for seed in (5711, 5712, 5713, 5714):
+            self._mode_scene(seed, 3)
+
+    def test_tex_mode23_random_vtx_variants(self):
+        for seed, mode, kind in ((5721, 2, "vtx10"), (5722, 3, "vtx10")):
+            self._mode_scene(seed, mode, vtx_kind=kind)
+
+    def test_tex_random_vtx_partial_commands(self):
+        # VTX_XY/XZ/YZ keep the raw component from the previous vertex.
+        for seed, mode in ((5731, 2), (5732, 3)):
+            rng = random.Random(seed)
+            entries = [(CMD_MTX_MODE, 3)]
+            _add_load_4x4(entries, _rand_matrix(rng))
+            _add_tex_coord(entries, rng.randint(-32768, 32767),
+                           rng.randint(-32768, 32767))
+            _add_teximage(entries, (mode << 30) | rng.getrandbits(30))
+            if mode == 2:
+                entries.append((CMD_NORMAL, rng.getrandbits(30)))
+            entries.append((CMD_BEGIN_VTXS, 0))
+            entries.extend(_rand_vtx16(rng))
+            entries.append((CMD_VTX_XY,
+                            (rng.randint(0, 0xFFFF)) |
+                            (rng.randint(0, 0xFFFF) << 16)))
+            entries.append((CMD_VTX_XZ,
+                            (rng.randint(0, 0xFFFF)) |
+                            (rng.randint(0, 0xFFFF) << 16)))
+            entries.append((CMD_VTX_YZ,
+                            (rng.randint(0, 0xFFFF)) |
+                            (rng.randint(0, 0xFFFF) << 16)))
+            # Complete the second triangle so the VTX_YZ vertex is emitted.
+            entries.extend(_rand_vtx16(rng))
+            entries.extend(_rand_vtx16(rng))
+            entries.append((CMD_END_VTXS, 0))
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            self._assert_texture(entries)
+
+    def test_tex_mixed_mode_random_frames(self):
+        for seed in (5741, 5742, 5743, 5744):
+            rng = random.Random(seed)
+            entries = [(CMD_MTX_MODE, 3),
+                       (CMD_NORMAL, rng.getrandbits(30))]
+            for mode in (0, 1, 2, 3):
+                if mode in (1, 3):
+                    _add_load_4x4(entries, _rand_matrix_small(rng))
+                _add_tex_coord(entries, rng.randint(-32768, 32767),
+                               rng.randint(-32768, 32767))
+                _add_teximage(entries, (mode << 30) | rng.getrandbits(30))
+                if mode == 2:
+                    entries.append((CMD_NORMAL, rng.getrandbits(30)))
+                entries.append((CMD_BEGIN_VTXS, 0))
+                for _ in range(3):
+                    entries.extend(_rand_vtx16(rng))
+                entries.append((CMD_END_VTXS, 0))
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            self._assert_texture(entries)
+
+    def test_tex_mode23_random_stack_ops(self):
+        # PUSH/POP and STORE/RESTORE around random matrix changes; the matrix
+        # is sampled at each VTX, so the draws straddle both states.
+        for seed, mode in ((5751, 2), (5752, 3), (5753, 2)):
+            rng = random.Random(seed)
+            entries = [(CMD_MTX_MODE, 3)]
+            _add_load_4x4(entries, _rand_matrix(rng))
+            entries.append((CMD_MTX_PUSH, 0))
+            _add_load_4x4(entries, _rand_matrix(rng))
+            _add_tex_coord(entries, rng.randint(-32768, 32767),
+                           rng.randint(-32768, 32767))
+            _add_teximage(entries, (mode << 30) | rng.getrandbits(30))
+            if mode == 2:
+                entries.append((CMD_NORMAL, rng.getrandbits(30)))
+            entries.append((CMD_BEGIN_VTXS, 0))
+            for _ in range(3):
+                entries.extend(_rand_vtx16(rng))
+            entries.append((CMD_MTX_POP, 0))
+            for _ in range(3):
+                entries.extend(_rand_vtx16(rng))
+            entries.append((CMD_END_VTXS, 0))
+            entries.append((CMD_MTX_STORE, 0))
+            _add_load_4x4(entries, _rand_matrix(rng))
+            entries.append((CMD_MTX_RESTORE, 0))
+            entries.append((CMD_BEGIN_VTXS, 0))
+            for _ in range(3):
+                entries.extend(_rand_vtx16(rng))
+            entries.append((CMD_END_VTXS, 0))
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            self._assert_texture(entries)
+
+    def test_tex_mode23_extreme_words(self):
+        # s32 matrix extremes and full-range s16/s10 coordinates: every
+        # product leaves the 32-bit range, so a truncated accumulator or a
+        # 32-bit shift path diverges from the oracle.
+        extremes = [_u32(word) for word in (
+            0x7FFFFFFF, -0x80000000, 0x00100000, -0x00100000,
+            -0x80000000, 0x7FFFFFFF, 0, 0x00200000,
+            0x7FFFFFFF, 0x7FFFFFFF, -0x80000000, 0,
+            0, 0, 0, 4096,
+        )]
+        for seed, mode in ((5761, 2), (5762, 3)):
+            rng = random.Random(seed)
+            entries = [(CMD_MTX_MODE, 3)]
+            _add_load_4x4(entries, extremes)
+            _add_tex_coord(entries, -32768, 32767)
+            _add_teximage(entries, (mode << 30) | rng.getrandbits(30))
+            if mode == 2:
+                entries.append((CMD_NORMAL, 0x3FFFFFFF))
+            entries.append((CMD_BEGIN_VTXS, 0))
+            entries.extend(_vtx16_xyz(32767, -32768, 32767))
+            entries.extend(_vtx16_xyz(-32768, 32767, -32768))
+            entries.extend(_vtx16_xyz(0, 0, 0))
+            entries.append((CMD_END_VTXS, 0))
+            entries.append((CMD_SWAP_BUFFERS, 0))
+            self._assert_texture(entries)
 
 
 if __name__ == "__main__":
