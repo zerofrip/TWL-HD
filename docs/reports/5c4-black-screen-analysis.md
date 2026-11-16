@@ -82,42 +82,275 @@ Our code references are against the current `arm9v2` source.
 
 ---
 
-## 3. Ranked cause list (all hypotheses until hardware)
+## 2.5 Draw-content differences (DIAGSCREEN=5 cube vs libnds examples)
 
-1. **Missing/different display-init sequence** — our default order is
-   `videoSetMode -> consoleDemoInit -> glInit -> rec_init`, and we rely on
-   per-frame state re-issue rather than setting AA/clear/viewport/projection at
-   init time the way the examples do. `DIAGSCREEN=1` replicates the example
-   order. **HARDWARE UNVERIFIED.**
+The round-2 evidence already ruled out the recorder, display-setup order and
+`lcdMainOnTop()` as the *sole* cause. Round 3 isolates the draw content of the
+default cube scene (`arm9v2/source/demo_frame.cpp:386-422`) from the
+`Simple_Tri` / `Textured_Quad` example draw bodies.
 
-2. **Launch-environment screen/power state** — TWiLight Menu++ /
-   nds-bootstrap-hb may leave POWCNT / VRAM bank mappings in a state the stock
-   examples tolerate because of an extra setup call we lack (e.g. an implicit
-   power-on or a screen-swap default). Neither we nor the examples call
-   `lcdMainOnTop()`, but our homebrew may be launched through a different code
-   path. `DIAGSCREEN=4` forces `lcdMainOnTop()`. **HARDWARE UNVERIFIED.**
+### Polygon attributes: the key factual difference
 
-3. **SCENE=5-specific VRAM / texture timing** — the I4 texture path maps VRAM A
-   and E through LCDC, copies data, then flips them to texture/palette. The
-   Textured_Quad example uses a 16bpp texture and only maps bank A. The extra
-   bank remap, or the timing relative to the first 3D frame, could in theory
-   blank the top screen for `SCENE=5`. `DIAGSCREEN=3` settles the VRAM bank
-   switch one full frame before the first draw by waiting for vblank after
-   upload; for the default cube it is a no-op beyond the banner. **HARDWARE
-   UNVERIFIED.**
+`glPolyFmt` is a direct `GFX_POLY_FORMAT = params;` register write
+(`docs/reports/5c4-libnds-system-videogl.h-snippet.md:775-776`). The real
+libnds header defines the cull bits as
+(`/opt/devkitpro/libnds/include/nds/arm9/videoGL.h:187-189`):
 
-4. **Compiler / TU-layout side effect of the C++ proxy** — the shim turns every
-   `GFX_*` macro into a template `Port<addr,width>` object. While the hardware
-   writes are identical, code generation, inlining, or stack layout around the
-   draw loop could differ enough to matter on real hardware. `DIAGSCREEN=2`
-   compiles the same source with raw register macros and the recorder disabled.
+```
+POLY_CULL_FRONT = (1 << 6) = 0x00000040
+POLY_CULL_BACK  = (2 << 6) = 0x00000080
+POLY_CULL_NONE  = (3 << 6) = 0x000000C0
+```
+
+`POLY_ALPHA(31)` alone produces `0x001F0000`; bits 6-7 are **zero**. The
+DeSmuME-derived bit table in `docs/DS_GX_RESEARCH.md:20-41` says bits 6-7 are
+`SurfaceCullingMode`: `0 = Cull front and back`, `1 = Cull front`,
+`2 = Cull back`, `3 = No culling`. Mode 0 renders **neither** face; the
+visibility table (`docs/DS_GX_RESEARCH.md:62-65`) returns `false` for both
+back-facing and front-facing rows when the mode is 0. This is a **FACT** from
+source code, not a hardware measurement.
+
+Our cube issues `glPolyFmt(POLY_ALPHA(31))` (`demo_frame.cpp:417`), which writes
+mode 0. Both `Simple_Tri` (`5c4-libnds-simple_tri.cpp:50`) and
+`Textured_Quad` (`5c4-libnds-textured_quad.cpp:73`) set bits 6-7 to a non-zero
+mode (`POLY_CULL_NONE` and `POLY_CULL_BACK` respectively), and both display on
+the owner's hardware. Therefore the hypothesis "default cull is BACK" in the
+task brief is **incorrect** for the register word produced by
+`POLY_ALPHA(31)` alone: the default (zero) cull mode is **render neither**.
+
+### What the host interpreter and the ARM11 PICA path do with cull bits
+
+The host interpreter records `POLYGON_ATTR` but only consumes the alpha bits
+16-20 and the light mask bits 0-3. There is no facing, shoelace, or cull logic
+anywhere in `common/twlhd_gx_interp.c`:
+
+- state fields: `pending_alpha` (`:79`), `pending_light_mask` (`:99`);
+- command handler copies those two fields out of the raw word (`:864`);
+- `BEGIN_VTXS` applies only alpha and light mask (`:1002-1005`).
+
+The ARM11 PICA renderer hard-codes `C3D_CullFace(GPU_CULL_NONE)` every frame
+(`docs/DS_GX_RESEARCH.md:182`).
+
+So cull bits are the one piece of captured state that **neither** the host
+interpreter **nor** the PICA path acts on. This is exactly why the same
+captured cube renders correctly on host/PICA while the DS shows black.
+**FACT** (source-verified), with the caveat that real-hardware POLYGON_ATTR
+semantics beyond the DeSmuME bit table are still **UNVERIFIED**.
+
+### Remaining draw-content differences
+
+| # | Difference | Our cube | Example | Could blank? | Fact / Hypothesis |
+|---|---|---|---|---|---|
+| 17 | Cull bits in POLYGON_ATTR | `POLY_ALPHA(31)` → mode 0 (`demo_frame.cpp:417`) | `\| POLY_CULL_NONE` (`Simple_Tri:50`); `\| POLY_CULL_BACK` (`Textured_Quad:73`) | **Yes.** Mode 0 renders neither face. | **FACT** (register + DeSmuME bit table) |
+| 18 | Projection far plane | `gluPerspective(70, 256/192, 0.1, 100.0)` (`demo_frame.cpp:400`) | far 40.0 (`Simple_Tri:29`, `Textured_Quad:46`) | No. The cube is inside both view volumes (computed below). | **FACT** |
+| 19 | Camera z / lookAt | `gluLookAtf32(0,0,inttof32(4), ...)` (`demo_frame.cpp:405`) | `gluLookAt(0,0,1.0, ...)` (`Simple_Tri:31-33`, `Textured_Quad:48-50`) | No. Both cameras contain the object (computed below). | **FACT** |
+| 20 | Scale | `glScalef32(1,1,1)` (`demo_frame.cpp:409`) | implicit 1 for the triangle; `Textured_Quad` also uses `glScalef32`? — no, it uses raw `floattov16(-0.5)` vertices | No. Object fits in view. | **FACT** |
+| 21 | Primitive type | `GL_QUADS` (`demo_frame.cpp:77`) | `GL_TRIANGLE` (`Simple_Tri:63`); `GL_QUAD` (`Textured_Quad:87`) | No. DS supports both. | **FACT** |
+| 22 | Vertex count / shape | 6 quad faces, 24 vertices (`demo_frame.cpp:38-91`) | 1 triangle or 1 quad | No. More geometry should produce *more* pixels, not none. | **FACT** |
+| 23 | Per-vertex colour vs material | `glColor3b` per face (`demo_frame.cpp:81-82`) | `glColor3b` per vertex (`Simple_Tri:65-72`); material + texture (`Textured_Quad`) | No. Missing material would change shading, not blank the screen. | **FACT** |
+| 24 | Matrix mode quirk | `glMatrixMode(GL_MODELVIEW)` before rotates (`demo_frame.cpp:403-407`) | `glMatrixMode(GL_MODELVIEW)` *after* rotates (`Simple_Tri:45`) | Possibly. `Simple_Tri` rotates in projection space then switches; our cube rotates in modelview space. A pure rotation commutes with perspective only at the origin; the effect on a centred cube is a different orientation, not disappearance. | **FACT**; causality **HYPOTHESIS** (tested by keeping default cube with cull off in `DIAGSCREEN=7`) |
+
+### Cube face winding (shoelace)
+
+The DS front-face rule is: counter-clockwise on screen = front. The cube faces
+are emitted in `cube_faces[6][4]` (`demo_frame.cpp:49-56`). For each face we
+project onto the plane perpendicular to its outward normal, orient the 2D axes
+so that `(right, up)` is a right-handed basis with the normal pointing toward
+the viewer, and compute the signed area with the shoelace formula
+`Σ x_i (y_{i+1} - y_{i-1})`.
+
+**Front face `{0,1,2,3}`** (normal +Z). Viewer looks from +Z; right = +X, up = +Y.
+Screen coordinates:
+
+```
+0 (-1,-1,1) → (-1, -1)
+1 ( 1,-1,1) → ( 1, -1)
+2 ( 1, 1,1) → ( 1,  1)
+3 (-1, 1,1) → (-1,  1)
+```
+
+Shoelace:
+`(-1)(-1 -  1) + 1(1 - (-1)) + 1(1 - (-1)) + (-1)(-1 - 1)`
+`= (-1)(-2) + 1(2) + 1(2) + (-1)(-2) = 2 + 2 + 2 + 2 = +8`.
+
+Signed area +8 ⇒ **CCW** ⇒ front-facing. **FACT** (arithmetic).
+
+**Back face `{5,4,7,6}`** (normal -Z). Viewer looks from -Z; right = -X, up = +Y.
+Screen coordinates:
+
+```
+5 ( 1,-1,-1) → (-1, -1)
+4 (-1,-1,-1) → ( 1, -1)
+7 (-1, 1,-1) → ( 1,  1)
+6 ( 1, 1,-1) → (-1,  1)
+```
+
+Shoelace:
+`(-1)(-1 -  1) + 1(1 - (-1)) + 1(1 - (-1)) + (-1)(-1 - 1)`
+`= 2 + 2 + 2 + 2 = +8`.
+
+Signed area +8 ⇒ **CCW** ⇒ front-facing. **FACT** (arithmetic).
+
+The other four faces check out the same way (left/right/top/bottom all give +8
+with the appropriate right/up axes). Therefore the cube winding is **not**
+reversed relative to the DS front-face convention assumed here. The anchor for
+that convention is the displaying `Textured_Quad` quad order BL, BR, TR, TL
+(`5c4-libnds-textured_quad.cpp:91-100`) with `POLY_CULL_BACK`, which proves
+that exact order is hardware-front under the same convention.
+
+**Caveat:** `docs/DS_GX_RESEARCH.md:67-70` marks the hardware front-face sign
+as **UNVERIFIED** on real DS hardware; DeSmuME itself warns its winding sign
+may be wrong. The arithmetic above assumes the convention is correct; if real
+hardware uses the opposite sign, our front faces would be back-facing. This is
+the top *remaining* hardware-unverified suspect and is tested by
+`DIAGSCREEN=9`.
+
+### View-volume / clip-space check
+
+Default cube scene (`demo_frame.cpp:395-409`):
+
+```
+gluPerspective(70, 256.0 / 192.0, 0.1, 100.0);
+gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
+glRotateXi(angle);
+glRotateYi(angle);
+glScalef32(1, 1, 1);
+```
+
+Let `f = 1 / tan(35°) ≈ 1.428148`, `aspect = 256/192 = 4/3`,
+`f/aspect ≈ 1.071111`. For a vertex in eye space `(x_e, y_e, z_e)` with
+`w_e = -z_e`, the NDC coordinates are:
+
+```
+x_ndc = (f/aspect) * x_e / (-z_e)
+y_ndc = f * y_e / (-z_e)
+```
+
+**Angle 0.** No rotation. A corner `(x,y,z)` maps to eye space
+`(x, y, z - 4)`. The nearest corners have `z_e = -3`, the farthest `z_e = -5`.
+Worst-case `|x| = |y| = 1`:
+
+```
+|x_ndc|max = 1.071111 / 3 ≈ 0.357
+|y_ndc|max = 1.428148 / 3 ≈ 0.476
+```
+
+All 8 corners are well inside `[-1, 1]`.
+
+**Angle 4096 (= 45°).** OpenGL modelview order is `LookAt * RotX * RotY`, so
+the vertex is first rotated by Y then by X. Applying `R_y(45°)` then
+`R_x(45°)` to each unit corner and translating by `(0,0,-4)` gives:
+
+| Corner | Eye x_e | Eye y_e | Eye z_e | x_ndc | y_ndc |
+|---|---|---|---|---|---|
+| (-1,-1,-1) | -1.414 | -0.707 | -4.707 | -0.322 | -0.215 |
+| ( 1,-1,-1) |  0.000 |  0.293 | -5.707 |  0.000 |  0.073 |
+| ( 1, 1,-1) |  0.000 |  1.707 | -4.293 |  0.000 |  0.568 |
+| (-1, 1,-1) | -1.414 |  0.707 | -3.293 | -0.460 |  0.307 |
+| (-1,-1, 1) | -0.000 | -1.707 | -3.707 | -0.000 | -0.658 |
+| ( 1,-1, 1) |  1.414 | -0.707 | -4.707 |  0.322 | -0.215 |
+| ( 1, 1, 1) |  1.414 |  0.707 | -3.293 |  0.460 |  0.307 |
+| (-1, 1, 1) | -0.000 | -0.293 | -2.293 | -0.000 | -0.182 |
+
+Maximum `|x_ndc| ≈ 0.460`, maximum `|y_ndc| ≈ 0.658`. All corners are inside
+the view volume at both angles. **FACT** (arithmetic).
+
+### View-volume check for the proposed `DIAGSCREEN=8` camera/projection
+
+`DIAGSCREEN=8` keeps the default camera `z=4` and scale `1`, only changing the
+projection far plane to `40.0` (`demo_frame.cpp:398`). Near/far clip for the
+cube's eye-z range `[-5, -3]`:
+
+```
+z_ndc(z_e) = ((far+near)/(near-far) * z_e + 2*far*near/(near-far)) / (-z_e)
+```
+
+With `near=0.1`, `far=40`:
+
+```
+z_e = -3 → z_ndc = (-40.1/39.9 * -3 + -8/39.9) / 3 ≈  0.337
+z_e = -5 → z_ndc = (-40.1/39.9 * -5 + -8/39.9) / 5 ≈  0.604
+```
+
+Both are inside `[-1, 1]`. The x/y NDC bounds are identical to the default
+(because only the far plane changed), so the cube is provably inside the
+`DIAGSCREEN=8` view volume. **FACT** (arithmetic).
+
+### Ranked cause list after draw-content analysis
+
+1. **POLYGON_ATTR bits 6-7 = 0 → render neither face.** This is the only
+difference that *directly* explains a completely black top screen while the
+same captured frame renders fine on host/PICA. Tested by `DIAGSCREEN=7`
+(`POLY_CULL_NONE`). **FACT-supported, HARDWARE UNVERIFIED.**
+
+2. **Projection/camera numbers.** Arithmetic shows the default cube is inside
+the view volume at angle 0 and at 45°, and `DIAGSCREEN=8` (far 40, same
+camera) also contains it. This cause is expected to be exonerated, but the
+hardware run of `DIAGSCREEN=8` confirms it. **FACT** (arithmetic).
+
+3. **Hardware front-face sign vs the DeSmuME-derived convention.** The
+shoelace arithmetic above says our faces are front under the assumed
+convention, but `docs/DS_GX_RESEARCH.md:67-70` explicitly marks that sign as
+**UNVERIFIED** on hardware. If the real DS uses the opposite sign, our faces
+would be back-facing and `POLY_CULL_BACK` would cull them. Tested by
+`DIAGSCREEN=9` (`POLY_CULL_BACK`). **HARDWARE UNVERIFIED.**
+
+### What each hardware outcome would mean
+
+Assuming the render-neither theory is correct:
+
+- `DIAGSCREEN=7` displays ⇒ cull bits were the sole cause.
+- `DIAGSCREEN=7` displays **and** `DIAGSCREEN=9` is black ⇒ our faces are
+  hardware-back (front-face sign is opposite), because `POLY_CULL_BACK` would
+  cull the faces that `POLY_CULL_NONE` renders.
+- `DIAGSCREEN=7` black ⇒ cull bits are not the (only) cause; something else
+  still blanks the picture.
+
+`DIAGSCREEN=8` is expected to stay black under the render-neither theory (only
+the far plane changed; cull mode is still mode 0). If `DIAGSCREEN=8`
+unexpectedly displays, the default far plane / depth-clipping interaction was
+the cause.
+
+---
+
+## 3. Ranked cause list (round-3 narrowing)
+
+The round-2 hardware evidence already ruled out the recorder, display-setup
+order and `lcdMainOnTop()`. The draw-content analysis in §2.5 further narrows
+the list:
+
+1. **POLYGON_ATTR bits 6-7 = 0 → render neither face.** Our cube issues
+   `glPolyFmt(POLY_ALPHA(31))`, which writes cull mode 0. DeSmuME's bit table
+   and the displaying `Simple_Tri` / `Textured_Quad` examples both say mode 0
+   renders nothing, while modes 2/3 (`POLY_CULL_BACK` / `POLY_CULL_NONE`)
+   render something. This is the only difference that directly explains a
+   fully black top screen while host/PICA render the same capture correctly.
+   Tested by `DIAGSCREEN=7`. **FACT-supported, HARDWARE UNVERIFIED.**
+
+2. **Projection / camera numbers.** The clip-space arithmetic in §2.5 proves
+   the default cube is inside the view volume at angle 0 and at 45°, and
+   `DIAGSCREEN=8` (far 40, same camera) is also contained. Expected to be
+   exonerated; the hardware run confirms it. **FACT** (arithmetic).
+
+3. **Hardware front-face sign.** The shoelace arithmetic says our faces are
+   front under the DeSmuME-derived convention, but that convention is marked
+   **UNVERIFIED** on real hardware (`docs/DS_GX_RESEARCH.md:67-70`). If the DS
+   uses the opposite sign, our faces would be back-facing and
+   `POLY_CULL_BACK` would cull them. Tested by `DIAGSCREEN=9`.
    **HARDWARE UNVERIFIED.**
 
-5. **ARM11 / PICA-side or firmware environment** — if the owner runs our ROMs
+4. **ARM11 / PICA-side or firmware environment** — if the owner runs our ROMs
    under a patched TWL-HD firmware/arm11 setup that is not used for the stock
    examples, the difference may be outside the ARM9 ROM entirely. No ARM9/ARM11
    code change can test this; it needs owner clarification. **HARDWARE
    UNVERIFIED**, documented as an owner question below.
+
+Historical hypotheses now considered ruled out or subsumed:
+- Missing/different display-init sequence (ruled out by round-2 evidence).
+- `lcdMainOnTop()` / screen assignment (ruled out by round-2 evidence).
+- Recorder / C++ proxy side effect (ruled out by `DIAGSCREEN=2` round-2 result).
+- `consoleDemoInit()` traffic (removed in `DIAGSCREEN=5`; subsumed into draw
+  content once `DIAGSCREEN=6` displayed).
 
 ---
 
@@ -129,12 +362,17 @@ Our code references are against the current `arm9v2` source.
 2. What are the exact TWiLight Menu++ and nds-bootstrap-hb versions/settings?
    In particular, is there a "force DS mode / DSi mode / screen swap" option
    that differs between our `.nds` and the examples?
-3. Does the black-top-screen symptom also appear with the `DIAGSCREEN=1` ROM
-   (example display setup order)? With `DIAGSCREEN=4` (`lcdMainOnTop`)?
-4. For `SCENE=5`, does `DIAGSCREEN=3` (VRAM bank switch settled one vblank
+3. (Round 2 answered) Does `DIAGSCREEN=1` (example display setup order) or
+   `DIAGSCREEN=4` (`lcdMainOnTop`) produce a picture? — both were black.
+4. (Round 3) What happens with the new draw-content variants?
+   - `DIAGSCREEN=7` (`POLY_CULL_NONE`) — displays or black?
+   - `DIAGSCREEN=8` (far plane 40, same camera) — displays or black?
+   - `DIAGSCREEN=9` (`POLY_CULL_BACK`) — displays or black?
+   See the outcome decoding table in §2.5.
+5. For `SCENE=5`, does `DIAGSCREEN=3` (VRAM bank switch settled one vblank
    before the first draw) change the picture? Does `DIAGSCREEN=2` (recorder
    bypass) produce a picture?
-5. If all six `DIAGSCREEN` variants still show a black top screen, the cause
+6. If all nine `DIAGSCREEN` variants still show a black top screen, the cause
    is almost certainly outside the ARM9 ROM and must be investigated in the
    launch environment or firmware.
 
@@ -150,12 +388,15 @@ assignments, so the rejection test passes such values through the environment.
 
 | Variant | What it changes | Code location |
 |---|---|---|
-| `DIAGSCREEN=1` | Replicates the libnds example display-setup order: `videoSetMode -> glInit -> glEnable(GL_ANTIALIAS) / clear / viewport / projection / lookAt -> consoleDemoInit -> recorder init`. | `arm9v2/source/main.cpp:168-184` |
-| `DIAGSCREEN=2` | **Recorder proxy bypass:** includes `<nds.h>` before the shim so libnds inline helpers compile against raw `GFX_*` macros; never arms the recorder; console prints "recorder disabled". | `arm9v2/source/main.cpp:20-31`, `:226-230`; `arm9v2/source/demo_frame.cpp:19-27` |
-| `DIAGSCREEN=3` | Settle VRAM mapping/timing before the first 3D frame: for `SCENE=5` it waits one vblank after texture upload so the LCDC→texture/palette switch is committed before the first draw; for the default cube it is a no-op beyond the banner. | `arm9v2/source/main.cpp:219-224`, `:232-238` |
-| `DIAGSCREEN=4` | Forces the main engine onto the top physical screen with `lcdMainOnTop()`. | `arm9v2/source/main.cpp:185-190` |
-| `DIAGSCREEN=5` | Default cube demo with `consoleDemoInit()`, every `iprintf` / `consoleClear` call and the recorder removed; no `fatInitDefault`. The variant number is not printed (the ROM file name carries it). | `arm9v2/source/main.cpp:20-31`, `:191-195`, `:226-230`, `:242-272` |
-| `DIAGSCREEN=6` | The unmodified libnds `Simple_Tri` example draw logic (`videoSetMode -> glInit -> AA/clear/viewport/projection/lookAt -> counter-rotated coloured triangle -> glFlush`) compiled by our Makefile, flags, startup and link line. No console, no recorder. | `arm9v2/source/main.cpp:20-31`, `:196-211`, `:226-230`, `:242-272`; `arm9v2/source/demo_frame.cpp:19-27`, `:307-337` |
+| `DIAGSCREEN=1` | Replicates the libnds example display-setup order: `videoSetMode -> glInit -> glEnable(GL_ANTIALIAS) / clear / viewport / projection / lookAt -> consoleDemoInit -> recorder init`. | `arm9v2/source/main.cpp:167-183` |
+| `DIAGSCREEN=2` | **Recorder proxy bypass:** includes `<nds.h>` before the shim so libnds inline helpers compile against raw `GFX_*` macros; never arms the recorder; console prints "recorder disabled". | `arm9v2/source/main.cpp:20-30`, `:225-229`; `arm9v2/source/demo_frame.cpp:19-27` |
+| `DIAGSCREEN=3` | Settle VRAM mapping/timing before the first 3D frame: for `SCENE=5` it waits one vblank after texture upload so the LCDC→texture/palette switch is committed before the first draw; for the default cube it is a no-op beyond the banner. | `arm9v2/source/main.cpp:218-223`, `:234-236` |
+| `DIAGSCREEN=4` | Forces the main engine onto the top physical screen with `lcdMainOnTop()`. | `arm9v2/source/main.cpp:184-189` |
+| `DIAGSCREEN=5` | Default cube demo with `consoleDemoInit()`, every `iprintf` / `consoleClear` call and the recorder removed; no `fatInitDefault`. The variant number is not printed (the ROM file name carries it). | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269` |
+| `DIAGSCREEN=6` | The unmodified libnds `Simple_Tri` example draw logic (`videoSetMode -> glInit -> AA/clear/viewport/projection/lookAt -> counter-rotated coloured triangle -> glFlush`) compiled by our Makefile, flags, startup and link line. No console, no recorder. | `arm9v2/source/main.cpp:20-30`, `:195-210`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:19-27`, `:307-337` |
+| `DIAGSCREEN=7` | Same no-console/no-recorder base as `DIAGSCREEN=5`, but the single cube is drawn with `glPolyFmt(POLY_ALPHA(31) \| POLY_CULL_NONE)` instead of `POLY_ALPHA(31)` alone. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:412-413` |
+| `DIAGSCREEN=8` | Same base, but the projection far plane is `40.0` (matching `Simple_Tri`/`Textured_Quad`) instead of `100.0`; camera z=4 and scale=1 are unchanged. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:397-398` |
+| `DIAGSCREEN=9` | Same base, but the single cube is drawn with `glPolyFmt(POLY_ALPHA(31) \| POLY_CULL_BACK)`. This tests whether our faces are hardware-back under the real DS front-face sign. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:414-415` |
 
 `DIAGSCREEN=5` deliberately prints nothing, so the bottom screen is left
 untouched; the variant number can only be told from the ROM file name.
@@ -194,6 +435,10 @@ is not the cause.
 while keeping our build/link/ROM structure. If it displays, our scene content
 is the problem; if it is black, our build/link/ROM structure is the problem.
 
+`DIAGSCREEN=7/8/9` keep the same no-console/no-recorder base as
+`DIAGSCREEN=5` and change exactly one draw parameter each (culling, far plane,
+culling direction), per §2.5.
+
 ---
 
 ## 6. Build commands and hashes
@@ -209,7 +454,7 @@ make -C arm9v2 clean && make -C arm9v2
 sha256sum arm9v2/twlhd-arm9v2.nds
 # 5beefa30303b1a2b36654e09b41a77f3cdbf4892b20f135c2a7be7e2c10c47db
 
-# after edits
+# after round-3 edits
 make -C arm9v2 clean && make -C arm9v2
 sha256sum arm9v2/twlhd-arm9v2.nds
 # 5beefa30303b1a2b36654e09b41a77f3cdbf4892b20f135c2a7be7e2c10c47db
@@ -252,6 +497,22 @@ sha256sum arm9v2/twlhd-arm9v2-diag5.nds
 make -C arm9v2 clean DIAGSCREEN=6 && make -C arm9v2 DIAGSCREEN=6
 sha256sum arm9v2/twlhd-arm9v2-diag6.nds
 # 374cf632b21111315a8ebbd1da8586e25ca108b5a1643d1ed074dafe81bc9501
+```
+
+### Round-3 `DIAGSCREEN=7`, `8` and `9` variants
+
+```
+make -C arm9v2 clean DIAGSCREEN=7 && make -C arm9v2 DIAGSCREEN=7
+sha256sum arm9v2/twlhd-arm9v2-diag7.nds
+# a0ddb304db0bb3e0834aa62208f308c13619a242286e6638f72e3a1cd01b24a2
+
+make -C arm9v2 clean DIAGSCREEN=8 && make -C arm9v2 DIAGSCREEN=8
+sha256sum arm9v2/twlhd-arm9v2-diag8.nds
+# c6fdfb286619cadbc3d866e6ce4b2f3bf6793a0f4264ba8efbd8d0fe98990610
+
+make -C arm9v2 clean DIAGSCREEN=9 && make -C arm9v2 DIAGSCREEN=9
+sha256sum arm9v2/twlhd-arm9v2-diag9.nds
+# 41e6ba8ad9b66adeba0da8f3a758583d3033ec38f47306a1ce60e1e20f030bc5
 ```
 
 ### `SCENE=5` variants (the failing textured scene)
@@ -332,3 +593,35 @@ format (`common/twlhd_v2_format.h`, parser/writer) were changed in round 1.
 No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
 `arm9v2/include/`, `tools/emulator/`, or the v2 format
 (`common/twlhd_v2_format.h`, parser/writer) were changed in round 2.
+
+### Round 3
+
+- `arm9v2/Makefile` — extended `DIAGSCREEN` validation range from 1..6 to
+  1..9 and updated both error messages (`arm9v2/Makefile:155`, `:167`, `:171`,
+  `:173`).
+- `arm9v2/source/main.cpp` — shared the no-console/no-recorder `DIAGSCREEN=5`
+  init block with 7/8/9; extended recorder-bypass, include-order and loop
+  key/console guards to cover 7/8/9
+  (`arm9v2/source/main.cpp:20-30`, `:54-88`, `:90-160`, `:190-194`,
+  `:225-229`, `:241-269`).
+- `arm9v2/source/demo_frame.cpp` — extended recorder-bypass include-order
+  condition to cover 7/8/9; added an `#error` guard rejecting `DIAGSCREEN >= 7`
+  combined with `SCENE != 0` or `CUBES > 1`; added the three one-change draw
+  edits in the single-cube path
+  (`arm9v2/source/demo_frame.cpp:19-27`, `:134-138`, `:397-418`).
+- `tools/test_arm9v2_diagscreen.py` — accepted `7`, `8`, `9`, moved `"7"` and
+  `"9"` out of the bad list and added `"10"`, and updated the asserted error
+  message to `1..9`.
+- `docs/reports/5c4-black-screen-analysis.md` — added the "Draw-content
+  differences" section (§2.5) with computed winding, view-volume arithmetic,
+  interpreter/PICA cull-bit evidence, real libnds `POLY_CULL_*` values, and a
+  re-ranked cause list; added 7/8/9 semantics to §5, round-3 build
+  commands/hashes to §6, and this files-changed subsection.
+- `docs/EMULATOR_VALIDATION.md:111` — updated stale `DIAGSCREEN=1..4` status
+  line to `1..9`.
+- `docs/PHASE5B_PLAN.md:999` — updated stale `DIAGSCREEN=1..4` status line to
+  `1..9`.
+
+No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
+`arm9v2/include/`, `tests/host/`, `tools/emulator/`, root `Makefile`, or the v2
+format (`common/twlhd_v2_format.h`, parser/writer) were changed in round 3.
