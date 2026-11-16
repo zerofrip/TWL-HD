@@ -1018,3 +1018,4 @@ Do not run this on hardware until the owner explicitly approves the procedure,
 the test frame, and the build hash. The assistant never executes hardware runs.
 - 5C-3: EMULATOR (DeSmuME) PASS for the textured SCENE=5 capture (see docs/TEXTURE_CAPTURE_DESIGN.md section 6.6); hardware not run (5C-4).
 - 5C-4: `DIAGSCREEN=1..9` opt-in bisection variants for the arm9v2 black-top-screen symptom are implemented as BUILD/UNIT only; the owner hardware run confirmed cull mode 0 is the cause. All demo scenes now set `POLY_CULL_NONE` (BUILD/UNIT follow-up); see `docs/reports/5c4-black-screen-analysis.md`.
+- 2026-11-16: equality-check design study written (docs/EQUALITY_CHECK_DESIGN.md); documentation only, no code/test/Makefile change.
