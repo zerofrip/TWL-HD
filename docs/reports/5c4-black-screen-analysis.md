@@ -65,7 +65,7 @@ Our code references are against the current `arm9v2` source.
 |---|---|---|---|---|---|
 | 1 | `videoSetMode` / BG0-3D bit | `videoSetMode(MODE_0_3D)` at `main.cpp:171/186/193/199/212` | Same: `videoSetMode(MODE_0_3D)` at `Simple_Tri:10`, `Textured_Quad:17` | No. Identical value (`MODE_0_3D = 0x10000 \| DISPLAY_BG0_ACTIVE \| ENABLE_3D`, `video.h:476`). | **FACT** |
 | 2 | Which physical screen shows the main engine | Neither our demo nor the examples call `lcdMainOnTop()` / `lcdSwap()` | Same | Unknown. If the launch environment leaves the main engine mapped to the bottom screen, both would be affected unless something resets it. | **FACT** (no call either side); screen assignment hypothesis is **HYPOTHESIS** |
-| 3 | `consoleDemoInit` usage | Called **after** `videoSetMode` and **before** `glInit` at `main.cpp:183/188/213` | **Not called** by either example | Unlikely by itself (`consoleDemoInit` targets the sub engine / VRAM C, `console.h:228` comment). It is a real difference and moves `glInit` later. | **FACT**; top-screen effect is **HYPOTHESIS** |
+| 3 | `consoleDemoInit` usage | Default path: called **after** `videoSetMode` and **before** `glInit` (`main.cpp:213`, `glInit` at `:215`); `DIAGSCREEN=4`: `:188` before `glInit` at `:189`; `DIAGSCREEN=1`: `:183`, **after** `glInit` (`:172`) | **Not called** by either example | Unlikely by itself (`consoleDemoInit` targets the sub engine / VRAM C, `console.h:228` comment). It is a real difference and moves `glInit` later. | **FACT**; top-screen effect is **HYPOTHESIS** |
 | 4 | Init-time 3D state order | Default: `videoSetMode -> consoleDemoInit -> glInit -> rec_init`; per-frame state is re-issued inside `demo_frame.cpp` | `videoSetMode -> glInit`, then `glEnable(GL_ANTIALIAS)`, clear, viewport, projection, lookAt **once at init** (`Simple_Tri:13-33`, `Textured_Quad:20-50`) | Possibly. We re-issue the same state per frame, but the *initial* state before the first frame differs, and `glInit` runs after `consoleDemoInit` instead of immediately after `videoSetMode`. | **FACT**; black-screen causality is **HYPOTHESIS** |
 | 5 | `glEnable(GL_ANTIALIAS)` | Per frame at `demo_frame.cpp:346/392/437` | Once at init at `Simple_Tri:16`, `Textured_Quad:26` | No. Same control bit ends up set before draw. | **FACT** |
 | 6 | Clear colour / polygon ID / depth | `glClearColor(0,0,0,31)`, `glClearPolyID(63)`, `glClearDepth(GL_MAX_DEPTH)` per frame (`demo_frame.cpp:347-349/393-395/438-440` etc.) | Same values (`Simple_Tri:19-21`, `Textured_Quad:29-31`); `GL_MAX_DEPTH == 0x7FFF` (`videoGL.h:87`) | No. Identical values. | **FACT** |
@@ -115,8 +115,7 @@ Our cube issues `glPolyFmt(POLY_ALPHA(31))` (`demo_frame.cpp:421`), which writes
 mode 0. Both `Simple_Tri` (`5c4-libnds-simple_tri.cpp:50`) and
 `Textured_Quad` (`5c4-libnds-textured_quad.cpp:73`) set bits 6-7 to a non-zero
 mode (`POLY_CULL_NONE` and `POLY_CULL_BACK` respectively), and both display on
-the owner's hardware. Therefore the hypothesis "default cull is BACK" in the
-task brief is **incorrect** for the register word produced by
+the owner's hardware. Therefore the earlier internal assumption "default cull is BACK" is **incorrect** for the register word produced by
 `POLY_ALPHA(31)` alone: the default (zero) cull mode is **render neither**.
 
 ### What the host interpreter and the ARM11 PICA path do with cull bits
@@ -279,6 +278,8 @@ Both are inside `[-1, 1]`. The x/y NDC bounds are identical to the default
 
 ### Ranked cause list after draw-content analysis
 
+*(This is the pre-hardware ranking; it was settled by the owner's hardware run, see §3 and "Hardware results and conclusion": item 1 CONFIRMED.)*
+
 1. **POLYGON_ATTR bits 6-7 = 0 → render neither face.** This is the only
 difference that *directly* explains a completely black top screen while the
 same captured frame renders fine on host/PICA. Tested by `DIAGSCREEN=7`
@@ -366,7 +367,7 @@ Historical hypotheses now considered ruled out or subsumed:
    `DIAGSCREEN=4` (`lcdMainOnTop`) produce a picture? — both were black.
 4. **(Answered)** `DIAGSCREEN=7` displays, `DIAGSCREEN=8` is black,
    `DIAGSCREEN=9` displays. See the outcome decoding table in §2.5 and the
-   "Hardware results and conclusion" section above.
+   "Hardware results and conclusion" section below (§5).
 5. **(Answered, hardware)** `DIAGSCREEN=2` (recorder bypass) is black on the
    cube, as are 1, 4 and 5; 6, 7 and 9 display (see "Hardware results and
    conclusion"). `DIAGSCREEN=3` (SCENE=5 VRAM bank switch) has not been run
@@ -463,7 +464,7 @@ the far plane / depth-clipping interaction as the cause.
 **Settled hypotheses (was hypothesis, now fact):**
 
 - §2 row 8 "cull mode does not blank the whole screen" is **falsified** and
-  marked superseded below.
+  marked superseded above (§2 row 8).
 - §2.5 "POLYGON_ATTR bits 6-7 = 0 → render neither face" is **confirmed**.
 - §3 item 1 (cull bits are the cause) is **confirmed**.
 - §3 item 2 (projection/camera numbers) is **settled**: `DIAGSCREEN=8` is black,
