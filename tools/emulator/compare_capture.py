@@ -9,7 +9,8 @@ Rules (all must hold):
 * file flags are exactly FRAME_COMPLETE (no OVERFLOW), META backend is the
   register proxy (1) and META coverage is all three known gaps (0x7);
 * the GXCM command-id sequence is identical, entry for entry;
-* every non-math GXCM value is byte-identical;
+* every non-math GXCM value is byte-identical (this includes POLYGON_ATTR
+  cmd 0x29: there is no special tolerance, so cull bits 0 fail as gxcm-value);
 * the math commands are checked analytically because the host mock cannot
   reproduce the DS divider, sqrt or trig tables:
     - 0x18 (MTX_MULT_4x4): closed-form gluPerspective(70, 256/192, 0.1, 100)

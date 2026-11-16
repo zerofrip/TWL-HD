@@ -295,7 +295,7 @@ static void draw_scene_alpha_quads(void) {
     int i;
 
     for (q = 0; q < 4; q++) {
-        glPolyFmt(POLY_ALPHA(scene_alpha[q]));
+        glPolyFmt(POLY_ALPHA(scene_alpha[q]) | POLY_CULL_NONE);
         glBegin(GL_QUADS);
         for (i = 0; i < 4; i++) {
             glColor3b(scene_colors[q][0], scene_colors[q][1],
@@ -370,7 +370,7 @@ void twlhd_demo_draw_frame(unsigned angle) {
 #if TWLHD_DEMO_SCENE == 5
     glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
 #else
-    glPolyFmt(POLY_ALPHA(31));
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
 #endif
 #if TWLHD_DEMO_SCENE == 1
     draw_scene_tri_list();
@@ -418,7 +418,7 @@ void twlhd_demo_draw_frame(unsigned angle) {
 #elif TWLHD_DEMO_DIAGSCREEN == 9
     glPolyFmt(POLY_ALPHA(31) | POLY_CULL_BACK);
 #else
-    glPolyFmt(POLY_ALPHA(31));
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
 #endif
     draw_cube();
     glPopMatrix(1);
@@ -463,7 +463,7 @@ void twlhd_demo_draw_frame(unsigned angle) {
         glRotateXi((int)angle);
         glRotateYi((int)angle);
         glScalef32(floattof32(0.12), floattof32(0.12), floattof32(0.12));
-        glPolyFmt(POLY_ALPHA(31)); /* mirrors the single-cube path */
+        glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE); /* mirrors the single-cube path */
         draw_cube();
         glPopMatrix(1);
     }

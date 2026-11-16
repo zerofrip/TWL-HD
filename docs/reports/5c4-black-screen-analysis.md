@@ -618,6 +618,8 @@ sha256sum arm9v2/twlhd-arm9v2-s5-diag4.nds
 `glPolyFmt(POLY_ALPHA(31))` alone and therefore still render nothing on a real
 DS. Fixing them would change the recorded `POLYGON_ATTR` word and the
 golden/expected literals, so that work is intentionally NOT done in this round.
+BUILD-only follow-up (2026-11-16): all `arm9v2` demo draw paths now carry
+`POLY_CULL_NONE`; see `docs/EMULATOR_VALIDATION.md` for the impact table.
 
 ### Suffix composition example
 
