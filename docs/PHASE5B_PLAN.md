@@ -839,11 +839,17 @@ sha256 `f5e3c89b...`), same method as Runs 18/19. Details and hashes:
   tolerance 24: quads 0-6 pass every cell (worst per-channel deviation 3..5),
   decoded row 0 at the TOP of each quad (the corrected orientation). Quad 7
   (16x16 I4, cells of about 6 px) passes 254/256 cells, worst deviation 26 > 24 on
-  two cells, so the script exits 1 at the default tolerance; with
-  `--tolerance 28` it passes 256/256. Interpretation: JPEG chroma blur at small
+  two cells, so the script exits 1 at the then-default tolerance; with
+  `--tolerance 28` it passes 256/256 (28 is now the default, see the status
+  line below). Interpretation: JPEG chroma blur at small
   cells, not a mis-render (a mirrored or permuted render deviates by 100+ levels).
-  OPEN ITEM: the default tolerance of `check_tex_formats.py` is slightly tight
-  for 16x16 cells on a JPEG capture.
+  **STATUS 2026-11-16 (tolerance review, BUILD/UNIT):** re-measured on the same
+  capture (`sha256 4a2451a3...`) with `tools/measure_tex_formats_deviation.py`:
+  704 cells, overall worst 26 (two quad-7 cells; next worst 22), quads 0-6
+  worst 3..5. The default is now **28** (worst 26 + headroom, below the
+  closest distinct expected colours' midpoint of 33), `--tolerance` still
+  overrides, and the closed item, the per-quad separation margins and what the
+  new tolerance does NOT catch are in `docs/reports/tex-formats-tolerance.md`.
 - Over-budget frame: no hang; capture colour counts identical to Run 19.
 - Original `/twlhd_frame.bin` restored with read-back OK.
 - Result: on the real console the corrected orientation and all seven DS texture

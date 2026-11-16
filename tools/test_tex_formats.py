@@ -14,6 +14,7 @@ Covers tools/gen_tex_format_frames.py and tools/check_tex_formats.py:
 Runs under `make test` via `python3 -m unittest discover -s tools`.
 """
 
+import hashlib
 import os
 import shutil
 import struct
@@ -29,9 +30,15 @@ if TOOLS_DIR not in sys.path:
 
 import gen_tex_format_frames as gen  # noqa: E402
 import tex_decode_oracle as oracle  # noqa: E402
+import check_tex_formats  # noqa: E402
 
 SCRIPT = os.path.join(TOOLS_DIR, "check_tex_formats.py")
 VALIDATE = os.path.join(TOOLS_DIR, "twlhd_v2_dump.py")
+FIXTURE = os.path.join(TOOLS_DIR, "fixtures", "formats_top_0_run20.ppm")
+# Run 20 hardware capture, copied verbatim from
+# /home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm.
+FIXTURE_SHA256 = \
+    "4a2451a3b760afac828888e881465834e532872524cb3968b9a9745bd2547988"
 
 WIDTH = 400
 HEIGHT = 480
@@ -362,6 +369,110 @@ class CheckerTest(unittest.TestCase):
             rc, out, _ = run_checker(path)
             self.assertNotEqual(rc, 0)
             self.assertIn("quad 7 fmt=3 I4 16x16 MISSING", out)
+
+    def test_tolerance_rule_is_pinned(self):
+        # The documented default (docs/reports/tex-formats-tolerance.md):
+        # measured Run 20 worst 26, below the 33-level midpoint of the
+        # closest distinct expected colours (quad 4 blend pair, distance 66).
+        self.assertEqual(check_tex_formats.TOLERANCE, 28)
+
+    def test_run20_capture_passes_at_default(self):
+        with open(FIXTURE, "rb") as handle:
+            digest = hashlib.sha256(handle.read()).hexdigest()
+        self.assertEqual(digest, FIXTURE_SHA256)
+        self.assert_passes(FIXTURE)
+        _, out, _ = run_checker(FIXTURE)
+        self.assertIn("quad 7 fmt=3 I4 16x16 cells=256/256", out)
+        # Measurement pin: this same capture needs the new default; the old
+        # default 24 rejects the two worst 16x16 cells.
+        rc, out, _ = run_checker(FIXTURE, ["--tolerance", "24"])
+        self.assertNotEqual(rc, 0)
+        self.assertIn("quad 7 fmt=3 I4 16x16 cells=254/256", out)
+
+    def test_measured_worst_case_deviation_passes(self):
+        # Synthetic capture with the Run 20 measured worst case (26) on every
+        # 16x16 cell; the new default must accept it (the old 24 did not).
+        def at_worst(index, tx, ty):
+            base = _expected_colour(index, tx, ty)
+            if index != 7:
+                return base
+            delta = -26 if base[0] > 229 else 26
+            return (base[0] + delta, base[1], base[2])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_image(tmp, "worst26.ppm", at_worst)
+            self.assert_passes(path)
+            _, out, _ = run_checker(path)
+            self.assertIn("quad 7 fmt=3 I4 16x16 cells=256/256", out)
+            self.assertIn("worst=26", out)
+            rc, out, _ = run_checker(path, ["--tolerance", "25"])
+            self.assertNotEqual(rc, 0)
+            self.assertIn("FAIL", out)
+
+    def test_nearest_palette_neighbour_fails(self):
+        # Quad 7's closest distinct expected colours are azure (0,132,255)
+        # and spring green (0,255,132): max-channel distance 123. Cell (0,11)
+        # is azure; painting it spring green must fail at the new default.
+        def substituted(index, tx, ty):
+            if index == 7 and (tx, ty) == (0, 11):
+                return (0, 255, 132)
+            return _expected_colour(index, tx, ty)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assert_fails(write_image(tmp, "neighbour.ppm", substituted))
+
+    def test_mirrored_16x16_quad_fails(self):
+        def mirrored(index, tx, ty):
+            if index == 7:
+                return _expected_colour(index, 15 - tx, ty)
+            return _expected_colour(index, tx, ty)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assert_fails(write_image(tmp, "mirror16.ppm", mirrored))
+
+    def test_shifted_quad_beyond_shift_search_fails(self):
+        # A 1 px shift is absorbed by the checker's dx/dy search; 6 px clips
+        # the quad on its grid-cell edge and misaligns the sampling grid.
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_image(tmp, "shift6.ppm", _expected_colour, dx=-6)
+            self.assert_fails(path)
+
+    def test_failure_exit_code_is_one(self):
+        def swapped(index, tx, ty):
+            if index == 0 and (tx, ty) == (0, 0):
+                return _expected_colour(index, 7, 0)
+            return _expected_colour(index, tx, ty)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_image(tmp, "exit1.ppm", swapped)
+            rc, out, _ = run_checker(path)
+            self.assertEqual(rc, 1)
+            self.assertIn("FAIL", out)
+
+    def test_perfect_image_reports_zero_worst(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = write_image(tmp, "zero.ppm", _expected_colour)
+            _, out, _ = run_checker(path)
+            for line in out.splitlines():
+                self.assertIn("worst=0 ", line)
+
+    def test_one_pixel_halo_still_passes(self):
+        # A non-clear halo pixel expands the bbox of quad 7 by one pixel on
+        # each axis; the cell-centre sampling still lands inside every texel
+        # cell, so the capture passes (this is the real-capture halo case).
+        spec = gen.QUAD_SPECS[7]
+        body = image_bytes(_expected_colour, height=HEIGHT)
+        header = b"P6\n400 %d\n255\n" % HEIGHT
+        data = bytearray(body)
+        offset = len(header) + ((spec["rect"][1] - 1) * WIDTH +
+                                (spec["rect"][0] - 1)) * 3
+        data[offset:offset + 3] = bytes((255, 255, 0))
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "halo.ppm")
+            with open(path, "wb") as handle:
+                handle.write(data)
+            self.assert_passes(path)
 
 
 if __name__ == "__main__":

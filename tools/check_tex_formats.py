@@ -15,7 +15,14 @@ TOP screen edge of the quad, matching the corrected PICA memory layout
 (memory tile row 0 = image top row). There is no flip search.
 
 Palettes are rich, so the checker does not snap colours; it uses a per-channel
-tolerance (default 24, JPEG-capture friendly).
+tolerance (default 28, JPEG-capture friendly). The default is bounded by
+measurement: the worst cell on the Run 20 hardware capture is 26 (16x16 I4
+quad), while the closest two distinct expected colours of any quad are 66
+levels apart (4x4 blend colours), so a totally substituted texel still fails
+with a margin of 38, and a 50/50 edge blend against that pair deviates by 33
+and so still fails at 28. The 3x3 centre sampling rule is unchanged. See
+docs/reports/tex-formats-tolerance.md for the measured table and the
+separation-margin arithmetic.
 
 Usage:
     python3 tools/check_tex_formats.py <ppm> [--tolerance N]
@@ -34,7 +41,7 @@ if TOOLS_DIR not in sys.path:
 from check_tex_shot import parse_ppm  # noqa: E402
 import gen_tex_format_frames as gen  # noqa: E402
 
-TOLERANCE = 24
+TOLERANCE = 28
 CLEAR = (16, 16, 24)
 SHIFTS = (-1, 0, 1)
 
@@ -89,8 +96,13 @@ def _cell_centre(left, size, texels, cell):
     return int(left + (cell + 0.5) * size / texels)
 
 
-def check_quad(data, width, top, spec, expected, tolerance):
-    """Return (bbox, dx, dy, matched, total, worst) or None when missing."""
+def sample_quad(data, width, top, spec, expected, tolerance):
+    """Return (bbox, dx, dy, matched, worst, cells) or None.
+
+    `cells` lists one tuple per sampled texel, (tx, ty, expected RGB, sampled
+    RGB, per-channel deviation), in the best-shift order. Shared with
+    tools/measure_tex_formats_deviation.py so both use the same cell logic.
+    """
     bbox = find_bbox(data, width, top, spec["cell"], tolerance)
     if bbox is None:
         return None
@@ -104,6 +116,7 @@ def check_quad(data, width, top, spec, expected, tolerance):
         for dy in SHIFTS:
             matched = 0
             worst = 0
+            cells = []
             for ty in range(tex_h):
                 y = _cell_centre(upper, box_h, tex_h, ty) + dy
                 for tx in range(tex_w):
@@ -112,14 +125,24 @@ def check_quad(data, width, top, spec, expected, tolerance):
                     # Decoded row 0 is the top screen edge (corrected pin).
                     want = expected[ty * tex_w + tx]
                     deviation = max(abs(got[i] - want[i]) for i in range(3))
+                    cells.append((tx, ty, want[:3], got, deviation))
                     if deviation > worst:
                         worst = deviation
                     if deviation <= tolerance:
                         matched += 1
             score = (-matched, worst, abs(dx) + abs(dy))
             if best is None or score < best[0]:
-                best = (score, dx, dy, matched, worst)
+                best = (score, dx, dy, matched, worst, cells)
     return (bbox,) + best[1:]
+
+
+def check_quad(data, width, top, spec, expected, tolerance):
+    """Return (bbox, dx, dy, matched, worst) or None when missing."""
+    result = sample_quad(data, width, top, spec, expected, tolerance)
+    if result is None:
+        return None
+    bbox, dx, dy, matched, _worst, _cells = result
+    return bbox, dx, dy, matched, _worst
 
 
 def main(argv=None):
@@ -128,7 +151,7 @@ def main(argv=None):
         description="Validate a multi-format texture frame screenshot.")
     parser.add_argument("ppm", help="input P6 PPM file")
     parser.add_argument("--tolerance", type=int, default=TOLERANCE,
-                        help="per-channel RGB tolerance (default 24)")
+                        help="per-channel RGB tolerance (default 28)")
     parser.add_argument("--emulator-expected", action="store_true",
                         help="accepted for CLI compatibility; no effect")
     args = parser.parse_args(argv)
