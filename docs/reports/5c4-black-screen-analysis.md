@@ -67,12 +67,12 @@ Our code references are against the current `arm9v2` source.
 | 2 | Which physical screen shows the main engine | Neither our demo nor the examples call `lcdMainOnTop()` / `lcdSwap()` | Same | Unknown. If the launch environment leaves the main engine mapped to the bottom screen, both would be affected unless something resets it. | **FACT** (no call either side); screen assignment hypothesis is **HYPOTHESIS** |
 | 3 | `consoleDemoInit` usage | Called **after** `videoSetMode` and **before** `glInit` at `main.cpp:184/189/214` | **Not called** by either example | Unlikely by itself (`consoleDemoInit` targets the sub engine / VRAM C, `console.h:228` comment). It is a real difference and moves `glInit` later. | **FACT**; top-screen effect is **HYPOTHESIS** |
 | 4 | Init-time 3D state order | Default: `videoSetMode -> consoleDemoInit -> glInit -> rec_init`; per-frame state is re-issued inside `demo_frame.cpp` | `videoSetMode -> glInit`, then `glEnable(GL_ANTIALIAS)`, clear, viewport, projection, lookAt **once at init** (`Simple_Tri:13-33`, `Textured_Quad:20-50`) | Possibly. We re-issue the same state per frame, but the *initial* state before the first frame differs, and `glInit` runs after `consoleDemoInit` instead of immediately after `videoSetMode`. | **FACT**; black-screen causality is **HYPOTHESIS** |
-| 5 | `glEnable(GL_ANTIALIAS)` | Per frame at `demo_frame.cpp:341/383/418` | Once at init at `Simple_Tri:16`, `Textured_Quad:26` | No. Same control bit ends up set before draw. | **FACT** |
+| 5 | `glEnable(GL_ANTIALIAS)` | Per frame at `demo_frame.cpp:341/385/420` | Once at init at `Simple_Tri:16`, `Textured_Quad:26` | No. Same control bit ends up set before draw. | **FACT** |
 | 6 | Clear colour / polygon ID / depth | `glClearColor(0,0,0,31)`, `glClearPolyID(63)`, `glClearDepth(GL_MAX_DEPTH)` per frame (`demo_frame.cpp:342-344` etc.) | Same values (`Simple_Tri:19-21`, `Textured_Quad:29-31`); `GL_MAX_DEPTH == 0x7FFF` (`videoGL.h:87`) | No. Identical values. | **FACT** |
-| 7 | Viewport | `glViewport(0,0,255,191)` per frame (`demo_frame.cpp:345-346/387-388/422-423`) | Same once at init (`Simple_Tri:24`, `Textured_Quad:34`) | No. Identical value. | **FACT** |
-| 8 | Polygon format alpha | `glPolyFmt(POLY_ALPHA(31))` per frame (`demo_frame.cpp:365/403/447`) | `POLY_ALPHA(31) \| POLY_CULL_NONE` (`Simple_Tri:50`) or `\| POLY_CULL_BACK` (`Textured_Quad:73`) | No. Alpha is the same full-opaque value; cull mode does not blank the whole screen. | **FACT** |
-| 9 | Projection / camera matrix | `gluPerspective(70, 256/192, 0.1, 100.0)`, camera z=4 (`demo_frame.cpp:390-392/394-396`) | `gluPerspective(70, 256/192, 0.1, 40.0)`, camera z=1 (`Simple_Tri:27-33`) | No. Different view volume but object is in view in both; would produce a picture, not black. | **FACT** |
-| 10 | `glFlush(0)` path | Proxied `GFX_FLUSH` write (`demo_frame.cpp:380/407/452`) | Raw `GFX_FLUSH` write (`Simple_Tri:78`, `Textured_Quad:106`) | No. The proxy forwards the `0x04000540` write identically. | **FACT** |
+| 7 | Viewport | `glViewport(0,0,255,191)` per frame (`demo_frame.cpp:345-346/389-390/424-425`) | Same once at init (`Simple_Tri:24`, `Textured_Quad:34`) | No. Identical value. | **FACT** |
+| 8 | Polygon format alpha / cull mode | `glPolyFmt(POLY_ALPHA(31))` per frame (`demo_frame.cpp:367/407/451`) | `POLY_ALPHA(31) \| POLY_CULL_NONE` (`Simple_Tri:50`) or `\| POLY_CULL_BACK` (`Textured_Quad:73`) | **Yes.** Cull mode 0 renders neither face; this blanks the whole screen. | **SUPERSEDED** — the "cull mode does not blank the whole screen" conclusion was wrong; see §Hardware results and conclusion. |
+| 9 | Projection / camera matrix | `gluPerspective(70, 256/192, 0.1, 100.0)`, camera z=4 (`demo_frame.cpp:392-394/396-398`) | `gluPerspective(70, 256/192, 0.1, 40.0)`, camera z=1 (`Simple_Tri:27-33`) | No. Different view volume but object is in view in both; would produce a picture, not black. | **FACT** |
+| 10 | `glFlush(0)` path | Proxied `GFX_FLUSH` write (`demo_frame.cpp:382/409/454`) | Raw `GFX_FLUSH` write (`Simple_Tri:78`, `Textured_Quad:106`) | No. The proxy forwards the `0x04000540` write identically. | **FACT** |
 | 11 | Default cube: VRAM bank setup | None (`SCENE=0` path does not touch VRAM) | `Simple_Tri` does not touch VRAM | N/A for the default cube. | **FACT** |
 | 12 | Textured scene: VRAM bank setup | `vramSetBankA(VRAM_A_LCD)`, `vramSetBankE(VRAM_E_LCD)`, copy, then `VRAM_A_TEXTURE`/`VRAM_E_TEX_PALETTE` at init (`demo_frame.cpp:173-182`) | `vramSetBankA(VRAM_A_TEXTURE)` once at init (`Textured_Quad:36`); no palette bank because it uses 16bpp direct colour | For `SCENE=5` only. The final mapping is equivalent for texture; palette bank is required by our I4 format. Could matter if the LCDC→texture switch races the first 3D frame. | **FACT**; black-screen causality for s5 is **HYPOTHESIS** |
 | 13 | Textured scene: texture upload path | Manual 16-bit copy to `0x06800000`/`0x06880000` + explicit `GFX_TEX_FORMAT`/`GFX_PAL_FORMAT` writes through proxy (`demo_frame.cpp:195-196`) | `glGenTextures`/`glBindTexture`/`glTexImage2D` out-of-line (`Textured_Quad:38-40`) | No. The same hardware registers end up written; proxy forwards ours. | **FACT** |
@@ -86,7 +86,7 @@ Our code references are against the current `arm9v2` source.
 
 The round-2 evidence already ruled out the recorder, display-setup order and
 `lcdMainOnTop()` as the *sole* cause. Round 3 isolates the draw content of the
-default cube scene (`arm9v2/source/demo_frame.cpp:386-422`) from the
+default cube scene (`arm9v2/source/demo_frame.cpp:388-424`) from the
 `Simple_Tri` / `Textured_Quad` example draw bodies.
 
 ### Polygon attributes: the key factual difference
@@ -110,7 +110,7 @@ visibility table (`docs/DS_GX_RESEARCH.md:62-65`) returns `false` for both
 back-facing and front-facing rows when the mode is 0. This is a **FACT** from
 source code, not a hardware measurement.
 
-Our cube issues `glPolyFmt(POLY_ALPHA(31))` (`demo_frame.cpp:417`), which writes
+Our cube issues `glPolyFmt(POLY_ALPHA(31))` (`demo_frame.cpp:419`), which writes
 mode 0. Both `Simple_Tri` (`5c4-libnds-simple_tri.cpp:50`) and
 `Textured_Quad` (`5c4-libnds-textured_quad.cpp:73`) set bits 6-7 to a non-zero
 mode (`POLY_CULL_NONE` and `POLY_CULL_BACK` respectively), and both display on
@@ -141,14 +141,14 @@ semantics beyond the DeSmuME bit table are still **UNVERIFIED**.
 
 | # | Difference | Our cube | Example | Could blank? | Fact / Hypothesis |
 |---|---|---|---|---|---|
-| 17 | Cull bits in POLYGON_ATTR | `POLY_ALPHA(31)` → mode 0 (`demo_frame.cpp:417`) | `\| POLY_CULL_NONE` (`Simple_Tri:50`); `\| POLY_CULL_BACK` (`Textured_Quad:73`) | **Yes.** Mode 0 renders neither face. | **FACT** (register + DeSmuME bit table) |
-| 18 | Projection far plane | `gluPerspective(70, 256/192, 0.1, 100.0)` (`demo_frame.cpp:400`) | far 40.0 (`Simple_Tri:29`, `Textured_Quad:46`) | No. The cube is inside both view volumes (computed below). | **FACT** |
-| 19 | Camera z / lookAt | `gluLookAtf32(0,0,inttof32(4), ...)` (`demo_frame.cpp:405`) | `gluLookAt(0,0,1.0, ...)` (`Simple_Tri:31-33`, `Textured_Quad:48-50`) | No. Both cameras contain the object (computed below). | **FACT** |
-| 20 | Scale | `glScalef32(1,1,1)` (`demo_frame.cpp:409`) | implicit 1 for the triangle; `Textured_Quad` also uses `glScalef32`? — no, it uses raw `floattov16(-0.5)` vertices | No. Object fits in view. | **FACT** |
+| 17 | Cull bits in POLYGON_ATTR | `POLY_ALPHA(31)` → mode 0 (`demo_frame.cpp:419`) | `\| POLY_CULL_NONE` (`Simple_Tri:50`); `\| POLY_CULL_BACK` (`Textured_Quad:73`) | **Yes.** Mode 0 renders neither face. | **FACT** (register + DeSmuME bit table) |
+| 18 | Projection far plane | `gluPerspective(70, 256/192, 0.1, 100.0)` (`demo_frame.cpp:402`) | far 40.0 (`Simple_Tri:29`, `Textured_Quad:46`) | No. The cube is inside both view volumes (computed below). | **FACT** |
+| 19 | Camera z / lookAt | `gluLookAtf32(0,0,inttof32(4), ...)` (`demo_frame.cpp:407`) | `gluLookAt(0,0,1.0, ...)` (`Simple_Tri:31-33`, `Textured_Quad:48-50`) | No. Both cameras contain the object (computed below). | **FACT** |
+| 20 | Scale | `glScalef32(1,1,1)` (`demo_frame.cpp:411`) | implicit 1 for the triangle; `Textured_Quad` also uses `glScalef32`? — no, it uses raw `floattov16(-0.5)` vertices | No. Object fits in view. | **FACT** |
 | 21 | Primitive type | `GL_QUADS` (`demo_frame.cpp:77`) | `GL_TRIANGLE` (`Simple_Tri:63`); `GL_QUAD` (`Textured_Quad:87`) | No. DS supports both. | **FACT** |
 | 22 | Vertex count / shape | 6 quad faces, 24 vertices (`demo_frame.cpp:38-91`) | 1 triangle or 1 quad | No. More geometry should produce *more* pixels, not none. | **FACT** |
 | 23 | Per-vertex colour vs material | `glColor3b` per face (`demo_frame.cpp:81-82`) | `glColor3b` per vertex (`Simple_Tri:65-72`); material + texture (`Textured_Quad`) | No. Missing material would change shading, not blank the screen. | **FACT** |
-| 24 | Matrix mode quirk | `glMatrixMode(GL_MODELVIEW)` before rotates (`demo_frame.cpp:403-407`) | `glMatrixMode(GL_MODELVIEW)` *after* rotates (`Simple_Tri:45`) | Possibly. `Simple_Tri` rotates in projection space then switches; our cube rotates in modelview space. A pure rotation commutes with perspective only at the origin; the effect on a centred cube is a different orientation, not disappearance. | **FACT**; causality **HYPOTHESIS** (tested by keeping default cube with cull off in `DIAGSCREEN=7`) |
+| 24 | Matrix mode quirk | `glMatrixMode(GL_MODELVIEW)` before rotates (`demo_frame.cpp:405-409`) | `glMatrixMode(GL_MODELVIEW)` *after* rotates (`Simple_Tri:45`) | Possibly. `Simple_Tri` rotates in projection space then switches; our cube rotates in modelview space. A pure rotation commutes with perspective only at the origin; the effect on a centred cube is a different orientation, not disappearance. | **FACT**; causality **HYPOTHESIS** (tested by keeping default cube with cull off in `DIAGSCREEN=7`) |
 
 ### Cube face winding (shoelace)
 
@@ -207,7 +207,7 @@ the top *remaining* hardware-unverified suspect and is tested by
 
 ### View-volume / clip-space check
 
-Default cube scene (`demo_frame.cpp:395-409`):
+Default cube scene (`demo_frame.cpp:397-411`):
 
 ```
 gluPerspective(70, 256.0 / 192.0, 0.1, 100.0);
@@ -258,7 +258,7 @@ the view volume at both angles. **FACT** (arithmetic).
 ### View-volume check for the proposed `DIAGSCREEN=8` camera/projection
 
 `DIAGSCREEN=8` keeps the default camera `z=4` and scale `1`, only changing the
-projection far plane to `40.0` (`demo_frame.cpp:398`). Near/far clip for the
+projection far plane to `40.0` (`demo_frame.cpp:400`). Near/far clip for the
 cube's eye-z range `[-5, -3]`:
 
 ```
@@ -325,19 +325,18 @@ the list:
    renders nothing, while modes 2/3 (`POLY_CULL_BACK` / `POLY_CULL_NONE`)
    render something. This is the only difference that directly explains a
    fully black top screen while host/PICA render the same capture correctly.
-   Tested by `DIAGSCREEN=7`. **FACT-supported, HARDWARE UNVERIFIED.**
+   `DIAGSCREEN=7` displays on hardware. **CONFIRMED by hardware.**
 
 2. **Projection / camera numbers.** The clip-space arithmetic in §2.5 proves
    the default cube is inside the view volume at angle 0 and at 45°, and
    `DIAGSCREEN=8` (far 40, same camera) is also contained. Expected to be
-   exonerated; the hardware run confirms it. **FACT** (arithmetic).
+   exonerated; the hardware run confirms it. **FACT** (arithmetic +
+   `DIAGSCREEN=8` black).
 
 3. **Hardware front-face sign.** The shoelace arithmetic says our faces are
-   front under the DeSmuME-derived convention, but that convention is marked
-   **UNVERIFIED** on real hardware (`docs/DS_GX_RESEARCH.md:67-70`). If the DS
-   uses the opposite sign, our faces would be back-facing and
-   `POLY_CULL_BACK` would cull them. Tested by `DIAGSCREEN=9`.
-   **HARDWARE UNVERIFIED.**
+   front under the DeSmuME-derived convention. `DIAGSCREEN=9` displays with
+   `POLY_CULL_BACK`, confirming the cube faces are hardware-front and the
+   convention is correct. **SETTLED by hardware.**
 
 4. **ARM11 / PICA-side or firmware environment** — if the owner runs our ROMs
    under a patched TWL-HD firmware/arm11 setup that is not used for the stock
@@ -364,11 +363,9 @@ Historical hypotheses now considered ruled out or subsumed:
    that differs between our `.nds` and the examples?
 3. (Round 2 answered) Does `DIAGSCREEN=1` (example display setup order) or
    `DIAGSCREEN=4` (`lcdMainOnTop`) produce a picture? — both were black.
-4. (Round 3) What happens with the new draw-content variants?
-   - `DIAGSCREEN=7` (`POLY_CULL_NONE`) — displays or black?
-   - `DIAGSCREEN=8` (far plane 40, same camera) — displays or black?
-   - `DIAGSCREEN=9` (`POLY_CULL_BACK`) — displays or black?
-   See the outcome decoding table in §2.5.
+4. **(Answered)** `DIAGSCREEN=7` displays, `DIAGSCREEN=8` is black,
+   `DIAGSCREEN=9` displays. See the outcome decoding table in §2.5 and the
+   "Hardware results and conclusion" section above.
 5. For `SCENE=5`, does `DIAGSCREEN=3` (VRAM bank switch settled one vblank
    before the first draw) change the picture? Does `DIAGSCREEN=2` (recorder
    bypass) produce a picture?
@@ -394,9 +391,9 @@ assignments, so the rejection test passes such values through the environment.
 | `DIAGSCREEN=4` | Forces the main engine onto the top physical screen with `lcdMainOnTop()`. | `arm9v2/source/main.cpp:184-189` |
 | `DIAGSCREEN=5` | Default cube demo with `consoleDemoInit()`, every `iprintf` / `consoleClear` call and the recorder removed; no `fatInitDefault`. The variant number is not printed (the ROM file name carries it). | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269` |
 | `DIAGSCREEN=6` | The unmodified libnds `Simple_Tri` example draw logic (`videoSetMode -> glInit -> AA/clear/viewport/projection/lookAt -> counter-rotated coloured triangle -> glFlush`) compiled by our Makefile, flags, startup and link line. No console, no recorder. | `arm9v2/source/main.cpp:20-30`, `:195-210`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:19-27`, `:307-337` |
-| `DIAGSCREEN=7` | Same no-console/no-recorder base as `DIAGSCREEN=5`, but the single cube is drawn with `glPolyFmt(POLY_ALPHA(31) \| POLY_CULL_NONE)` instead of `POLY_ALPHA(31)` alone. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:412-413` |
-| `DIAGSCREEN=8` | Same base, but the projection far plane is `40.0` (matching `Simple_Tri`/`Textured_Quad`) instead of `100.0`; camera z=4 and scale=1 are unchanged. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:397-398` |
-| `DIAGSCREEN=9` | Same base, but the single cube is drawn with `glPolyFmt(POLY_ALPHA(31) \| POLY_CULL_BACK)`. This tests whether our faces are hardware-back under the real DS front-face sign. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:414-415` |
+| `DIAGSCREEN=7` | Same no-console/no-recorder base as `DIAGSCREEN=5`, but the single cube is drawn with `glPolyFmt(POLY_ALPHA(31) \| POLY_CULL_NONE)` instead of `POLY_ALPHA(31)` alone. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:414-415` |
+| `DIAGSCREEN=8` | Same base, but the projection far plane is `40.0` (matching `Simple_Tri`/`Textured_Quad`) instead of `100.0`; camera z=4 and scale=1 are unchanged. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:399-400` |
+| `DIAGSCREEN=9` | Same base, but the single cube is drawn with `glPolyFmt(POLY_ALPHA(31) \| POLY_CULL_BACK)`. This tests whether our faces are hardware-back under the real DS front-face sign. | `arm9v2/source/main.cpp:20-30`, `:190-194`, `:225-229`, `:247-269`; `arm9v2/source/demo_frame.cpp:416-417` |
 
 `DIAGSCREEN=5` deliberately prints nothing, so the bottom screen is left
 untouched; the variant number can only be told from the ROM file name.
@@ -438,6 +435,42 @@ is the problem; if it is black, our build/link/ROM structure is the problem.
 `DIAGSCREEN=7/8/9` keep the same no-console/no-recorder base as
 `DIAGSCREEN=5` and change exactly one draw parameter each (culling, far plane,
 culling direction), per §2.5.
+
+## Hardware results and conclusion
+
+**HARDWARE (New 3DS TWL mode via TWiLight Menu++ / nds-bootstrap-hb), owner
+run, 2026-11-16:**
+
+- `DIAGSCREEN=1` (example display-setup order): **black** top screen.
+- `DIAGSCREEN=2` (recorder bypass, raw libnds macros): **black** top screen.
+- `DIAGSCREEN=4` (`lcdMainOnTop()`): **black** top screen.
+- `DIAGSCREEN=5` (default cube, no console/recorder): **black** top screen.
+- `DIAGSCREEN=6` (verbatim `Simple_Tri` draw code): **displayed** on top screen.
+- `DIAGSCREEN=7` (cube + `POLY_CULL_NONE`): **displayed** on top screen.
+- `DIAGSCREEN=8` (far plane 40.0, same camera, cull bits left 0): **black** top
+  screen.
+- `DIAGSCREEN=9` (cube + `POLY_CULL_BACK`): **displayed** on top screen.
+
+**Confirmed cause:** `glPolyFmt(POLY_ALPHA(31))` leaves `POLYGON_ATTR` bits 6-7
+(cull mode) at 0. On DS hardware cull mode 0 renders **neither** face, so the
+top screen is completely black. The cube winding is correct: `DIAGSCREEN=9`
+displays with `POLY_CULL_BACK`, which means the cube faces are hardware-front
+under the real DS front-face convention. `DIAGSCREEN=8` staying black rules out
+the far plane / depth-clipping interaction as the cause.
+
+**Settled hypotheses (was hypothesis, now fact):**
+
+- §2 row 8 "cull mode does not blank the whole screen" is **falsified** and
+  marked superseded below.
+- §2.5 "POLYGON_ATTR bits 6-7 = 0 → render neither face" is **confirmed**.
+- §3 item 1 (cull bits are the cause) is **confirmed**.
+- §3 item 2 (projection/camera numbers) is **settled**: `DIAGSCREEN=8` is black,
+  so the default far plane / depth-clipping interaction is not the cause.
+- §3 item 3 (hardware front-face sign) is **settled**: `DIAGSCREEN=9` displays,
+  so the cube faces are hardware-front and the DeSmuME-derived front-face
+  convention used in §2.5 is correct.
+- §4 question 4 is **answered**: `DIAGSCREEN=7` displays, `DIAGSCREEN=8` is
+  black, `DIAGSCREEN=9` displays.
 
 ---
 
@@ -539,6 +572,50 @@ sha256sum arm9v2/twlhd-arm9v2-s5-diag4.nds
 # df461b179fedfce7c31ba596ddb7072c28f2c10fb66fd5c411a2e1315ba8a0e1
 ```
 
+### Round-4 `SCENE=5` fix (`POLY_CULL_NONE`)
+
+Round 4 changes only the shared `glPolyFmt` call in the `SCENE=5` build path
+(`arm9v2/source/demo_frame.cpp`), so the default ROM and the cube
+`DIAGSCREEN=1..9` hashes above are byte-identical to round 3. The `SCENE=5`
+ROMs and their `DIAGSCREEN=1..4` variants change because the recorded
+`POLYGON_ATTR` word is now `0x001F00C0` (`POLY_ALPHA(31) | POLY_CULL_NONE`)
+instead of `0x001F0000`.
+
+```
+make -C arm9v2 clean && make -C arm9v2
+sha256sum arm9v2/twlhd-arm9v2.nds
+# 5beefa30303b1a2b36654e09b41a77f3cdbf4892b20f135c2a7be7e2c10c47db
+
+make -C arm9v2 clean SCENE=5 && make -C arm9v2 SCENE=5
+sha256sum arm9v2/twlhd-arm9v2-s5.nds
+# 1bde37007ab36c05b0457874dce56e633670aedf2c66e840b0c5e219fe8afd01
+
+make -C arm9v2 clean SCENE=5 AUTODUMP_FRAME=240 && make -C arm9v2 SCENE=5 AUTODUMP_FRAME=240
+sha256sum arm9v2/twlhd-arm9v2-autodump-s5.nds
+# 35a50aadc30dbf26d7fa389192a908024cffaa515614c378e389e3efd45d82bd
+
+make -C arm9v2 clean SCENE=5 DIAGSCREEN=1 && make -C arm9v2 SCENE=5 DIAGSCREEN=1
+sha256sum arm9v2/twlhd-arm9v2-s5-diag1.nds
+# 1259131b79ba54795912494185b1c487965627b4ccecb575f571d83796389ff9
+
+make -C arm9v2 clean SCENE=5 DIAGSCREEN=2 && make -C arm9v2 SCENE=5 DIAGSCREEN=2
+sha256sum arm9v2/twlhd-arm9v2-s5-diag2.nds
+# 8942a85e0c8ecfcc9293bfe8d4d64e7f5c6a56fe47b19a08a3d8600e595c46bd
+
+make -C arm9v2 clean SCENE=5 DIAGSCREEN=3 && make -C arm9v2 SCENE=5 DIAGSCREEN=3
+sha256sum arm9v2/twlhd-arm9v2-s5-diag3.nds
+# 4811fa37523c1bd434b87a50c1abd131cb958f78a136c77cc38377e365c738a7
+
+make -C arm9v2 clean SCENE=5 DIAGSCREEN=4 && make -C arm9v2 SCENE=5 DIAGSCREEN=4
+sha256sum arm9v2/twlhd-arm9v2-s5-diag4.nds
+# 1753396032373a60828e5b6906acfdaab36769e8186398660c1dd81da5ee8b02
+```
+
+**Owner decision:** the default cube and `SCENE=1..4` still issue
+`glPolyFmt(POLY_ALPHA(31))` alone and therefore still render nothing on a real
+DS. Fixing them would change the recorded `POLYGON_ATTR` word and the
+golden/expected literals, so that work is intentionally NOT done in this round.
+
 ### Suffix composition example
 
 ```
@@ -608,7 +685,7 @@ No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
   condition to cover 7/8/9; added an `#error` guard rejecting `DIAGSCREEN >= 7`
   combined with `SCENE != 0` or `CUBES > 1`; added the three one-change draw
   edits in the single-cube path
-  (`arm9v2/source/demo_frame.cpp:19-27`, `:134-138`, `:397-418`).
+  (`arm9v2/source/demo_frame.cpp:19-27`, `:134-138`, `:399-420`).
 - `tools/test_arm9v2_diagscreen.py` — accepted `7`, `8`, `9`, moved `"7"` and
   `"9"` out of the bad list and added `"10"`, and updated the asserted error
   message to `1..9`.
@@ -625,3 +702,42 @@ No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
 No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
 `arm9v2/include/`, `tests/host/`, `tools/emulator/`, root `Makefile`, or the v2
 format (`common/twlhd_v2_format.h`, parser/writer) were changed in round 3.
+
+### Round 4
+
+- `arm9v2/source/demo_frame.cpp` — guarded the shared `glPolyFmt(POLY_ALPHA(31))`
+  call so only `TWLHD_DEMO_SCENE == 5` issues
+  `glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE)`
+  (`arm9v2/source/demo_frame.cpp:370-374`). Scenes 1-4, the default cube and the
+  multi-cube path are textually unchanged.
+- `tools/emulator/compare_texture_capture.py` — added `CMD_POLYGON_ATTR = 0x29`
+  and the hand-computed `POLYGON_ATTR = 0x001F00C0` literal; `_check_shape` now
+  requires exactly one `POLYGON_ATTR` entry with that value before
+  `BEGIN_VTXS`.
+- `tools/test_emulator_texture_compare.py` — updated the `scene5_entries()`
+  fixture to `0x001F00C0`; added
+  `test_polygon_attr_cull_bits_zero_fails` (regression test for cull mode 0);
+  extended `DemoSourceCrossCheckTest` with a parser for the scene-5
+  `glPolyFmt` literal.
+- `tests/host/test_demo_frame.cpp` — added a `TWLHD_TEST_EXPECT_SCENE == 5`
+  guarded assertion that the recorded `POLYGON_ATTR` value is `0x001F00C0`.
+- `docs/reports/5c4-black-screen-analysis.md` — added the "Hardware results and
+  conclusion" section with the owner's observations, marked superseded
+  hypotheses, settled §3 items, answered §4 question 4, and added round-4 build
+  commands/hashes.
+- `docs/TEXTURE_CAPTURE_DESIGN.md` — updated the 5C-4 status (capture content
+  hardware-verified earlier; on-screen texture check pending because of cull
+  bits; `SCENE=5` now sets `CULL_NONE`; BUILD only).
+- `docs/PHASE5B_PLAN.md` — updated the 5C-4 status line.
+- `docs/EMULATOR_VALIDATION.md` — added the polygon-cull-bits note for demo
+  ROMs and listed the new `POLYGON_ATTR` check in the textured-scene
+  comparator checklist.
+
+`docs/reports/5c3-mutation-report.md` counts (187 mutants, 171 killed, 16
+survivors) are now slightly stale for the new `POLYGON_ATTR` check; they were
+not regenerated in this round.
+
+No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
+`arm9v2/include/`, `arm9v2/source/main.cpp`, `arm9v2/Makefile`, root `Makefile`,
+`tools/emulator/compare_capture.py`, `tools/test_emulator_compare.py`, or the v2
+format (`common/twlhd_v2_format.h`, parser/writer) were changed in round 4.

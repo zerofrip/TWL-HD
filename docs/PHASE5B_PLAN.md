@@ -996,4 +996,4 @@ The renderer emits the following markers on the texture path:
 Do not run this on hardware until the owner explicitly approves the procedure,
 the test frame, and the build hash. The assistant never executes hardware runs.
 - 5C-3: EMULATOR (DeSmuME) PASS for the textured SCENE=5 capture (see docs/TEXTURE_CAPTURE_DESIGN.md section 6.6); hardware not run (5C-4).
-- 5C-4: `DIAGSCREEN=1..9` opt-in bisection variants for the arm9v2 black-top-screen symptom are implemented as BUILD/UNIT only; every hardware statement is `HARDWARE UNVERIFIED`. See `docs/reports/5c4-black-screen-analysis.md`.
+- 5C-4: `DIAGSCREEN=1..9` opt-in bisection variants for the arm9v2 black-top-screen symptom are implemented as BUILD/UNIT only; the owner hardware run confirmed cull mode 0 is the cause. `SCENE=5` now sets `POLY_CULL_NONE`; the default cube and `SCENE=1..4` still use cull mode 0 by owner decision. See `docs/reports/5c4-black-screen-analysis.md`.

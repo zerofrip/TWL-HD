@@ -194,6 +194,10 @@ static int has_rsta_addr(uint32_t addr) {
     return 0;
 }
 
+static uint32_t find_first_cmd_value(const TwlhdV2CmdEntry *entries,
+                                     uint32_t count, uint32_t cmd,
+                                     uint32_t value);
+
 /* Ordering rules verified on the captured GX command stream.
  *  - first MTX_MODE has value 0 (projection) and is immediately followed by
  *    MTX_IDENTITY;
@@ -300,6 +304,11 @@ static void test_frame_is_self_contained(void) {
     /* Viewport and polygon state. */
     CHECK(has_cmd_word(TWLHD_V2_CMD_VIEWPORT));
     CHECK(has_cmd_word(TWLHD_V2_CMD_POLYGON_ATTR));
+#if TWLHD_TEST_EXPECT_SCENE == 5
+    CHECK(find_first_cmd_value(g_rec.gxcm, g_rec.gxcm_count,
+                               TWLHD_V2_CMD_POLYGON_ATTR,
+                               0x001F00C0u) != UINT32_MAX);
+#endif
 
     /* Cube: one BEGIN_VTXS with quad primitive, 24 VTX_16 vertices. */
     CHECK(has_cmd_word(TWLHD_V2_CMD_BEGIN_VTXS));
