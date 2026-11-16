@@ -17,8 +17,7 @@
 #define TWLHD_DEMO_DIAGSCREEN 0
 #endif
 
-#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN == 5 || \
-    TWLHD_DEMO_DIAGSCREEN == 6
+#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
 /* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
 #include <fat.h>
 #include <nds.h>
@@ -53,7 +52,7 @@ static uint8_t g_serialize[TWLHD_GX_REC_SERIALIZE_MAX];
 static int g_fat_ready;
 
 static void refresh_console(void) {
-#if TWLHD_DEMO_DIAGSCREEN == 5
+#if TWLHD_DEMO_DIAGSCREEN == 5 || TWLHD_DEMO_DIAGSCREEN >= 7
     (void)0;
 #else
     TwlhdGxRecorder *rec = twlhd_gx_rec_global();
@@ -89,7 +88,7 @@ static void refresh_console(void) {
 }
 
 static int dump_frame(void) {
-#if TWLHD_DEMO_DIAGSCREEN == 5
+#if TWLHD_DEMO_DIAGSCREEN == 5 || TWLHD_DEMO_DIAGSCREEN >= 7
     (void)0;
     return -1;
 #else
@@ -188,9 +187,9 @@ int main(void) {
     lcdMainOnTop();
     consoleDemoInit(); /* statistics console on the sub screen */
     glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
-#elif TWLHD_DEMO_DIAGSCREEN == 5
-    /* DIAGSCREEN=5: default cube demo with no console and no recorder. The
-     * variant number cannot be printed; the ROM file name carries it. */
+#elif TWLHD_DEMO_DIAGSCREEN == 5 || TWLHD_DEMO_DIAGSCREEN >= 7
+    /* DIAGSCREEN=5/7/8/9: default cube demo with no console and no recorder.
+     * The variant number cannot be printed; the ROM file name carries it. */
     videoSetMode(MODE_0_3D);
     glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
 #elif TWLHD_DEMO_DIAGSCREEN == 6
@@ -223,8 +222,7 @@ int main(void) {
      * HARDWARE UNVERIFIED. */
 #endif
 
-#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN != 5 && \
-    TWLHD_DEMO_DIAGSCREEN != 6
+#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN < 5
     twlhd_gx_rec_init(rec);
 #else
     (void)rec; /* recorder bypassed for this variant */
@@ -240,14 +238,13 @@ int main(void) {
     refresh_console();
 
     while (1) {
-#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN != 5 && \
-    TWLHD_DEMO_DIAGSCREEN != 6
+#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN < 5
         twlhd_gx_rec_arm(rec);
 #endif
         twlhd_demo_draw_frame((unsigned)angle);
         swiWaitForVBlank();
 
-#if TWLHD_DEMO_DIAGSCREEN != 5 && TWLHD_DEMO_DIAGSCREEN != 6
+#if TWLHD_DEMO_DIAGSCREEN < 5
         scanKeys();
         if (keysDown() & KEY_A) {
             (void)dump_frame();
@@ -265,7 +262,7 @@ int main(void) {
         /* binary angle: 32768 == 360 degrees */
         angle += 256;
 
-#if TWLHD_DEMO_DIAGSCREEN != 5 && TWLHD_DEMO_DIAGSCREEN != 6
+#if TWLHD_DEMO_DIAGSCREEN < 5
         if (++frame % 60 == 0) refresh_console();
 #else
         ++frame;

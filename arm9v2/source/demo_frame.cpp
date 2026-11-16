@@ -16,8 +16,7 @@
 
 #include "demo_frame.hpp"
 
-#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN == 5 || \
-    TWLHD_DEMO_DIAGSCREEN == 6
+#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
 /* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
 #include <nds.h>
 #include "twlhd_gx_shim.hpp"
@@ -130,6 +129,12 @@ static void draw_cube(void) {
 
 #if TWLHD_DEMO_SCENE != 0 && TWLHD_DEMO_CUBES != 1
 #error "TWLHD_DEMO_SCENE and TWLHD_DEMO_CUBES > 1 are mutually exclusive"
+#endif
+
+#if TWLHD_DEMO_DIAGSCREEN >= 7
+#if TWLHD_DEMO_SCENE != 0 || TWLHD_DEMO_CUBES > 1
+#error "DIAGSCREEN >= 7 variants are only defined for the single-cube base scene"
+#endif
 #endif
 
 /*
@@ -389,7 +394,11 @@ void twlhd_demo_draw_frame(unsigned angle) {
 
     glMatrixMode(GL_PROJECTION);
     glLoadIdentity();
+#if TWLHD_DEMO_DIAGSCREEN == 8
+    gluPerspective(70, 256.0 / 192.0, 0.1, 40.0);
+#else
     gluPerspective(70, 256.0 / 192.0, 0.1, 100.0);
+#endif
 
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
@@ -400,7 +409,13 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glScalef32(inttof32(1), inttof32(1), inttof32(1));
 
     glPushMatrix();
+#if TWLHD_DEMO_DIAGSCREEN == 7
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+#elif TWLHD_DEMO_DIAGSCREEN == 9
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_BACK);
+#else
     glPolyFmt(POLY_ALPHA(31));
+#endif
     draw_cube();
     glPopMatrix(1);
 
