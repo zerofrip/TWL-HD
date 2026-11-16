@@ -1,63 +1,85 @@
-# /opt/devkitpro/libnds/include/nds/arm9/video.h snippets
+# `/opt/devkitpro/libnds/include/nds/arm9/video.h` snippets
 
-## MODE_0_3D / videoSetMode / ENABLE_3D (lines 424-559)
+## Display control registers (`REG_DISPCNT`, `ENABLE_3D`, `DISPLAY_BG0_ACTIVE`) — lines 420-432
+
+```
+   420	void vramSetBankI(VRAM_I_TYPE i) { VRAM_I_CR = VRAM_ENABLE | i; }
+   421	
+   422	
+   423	// Display control registers
    424	#define	REG_DISPCNT		(*(vu32*)0x04000000)
    425	#define	REG_DISPCNT_SUB	(*(vu32*)0x04001000)
    426	
    427	#define ENABLE_3D    (1<<3)
    428	#define DISPLAY_ENABLE_SHIFT 8
    429	#define DISPLAY_BG0_ACTIVE    (1 << 8)
-   430		MODE_0_3D    = (0x10000 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
-   431	void videoSetMode( u32 mode)  { REG_DISPCNT = mode; }
-   432	
-   433	static inline
-   434	/** \brief  the sub 2D engine video mode
-   435	*    \param mode the video mode to set
-   436	*/
+   430	#define DISPLAY_BG1_ACTIVE    (1 << 9)
+   431	#define DISPLAY_BG2_ACTIVE    (1 << 10)
+   432	#define DISPLAY_BG3_ACTIVE    (1 << 11)
+```
 
-## vramSetBankA / VRAM_A_TEXTURE (lines 360-396)
-   360	*/
-   361	void vramRestorePrimaryBanks(u32 vramTemp);
-   362	
-   363	/** \brief  Restore the E,F,G bank modes.
-   364		\param vramTemp restores the E,F,G bank modes to the value encoded in vramTemp (returned from vramSetBanks_EFG)
-   365	*/
-   366	void vramRestoreBanks_EFG(u32 vramTemp);
-   367	
+## `MODE_0_3D` and related modes — lines 472-483
+
+```
+   472		MODE_3_2D    =  0x10003, /**< \brief  4 2D backgrounds */
+   473		MODE_4_2D    =  0x10004, /**< \brief  4 2D backgrounds */
+   474		MODE_5_2D    =  0x10005, /**< \brief  4 2D backgrounds */
+   475		MODE_6_2D    =  0x10006, /**< \brief  4 2D backgrounds */
+   476		MODE_0_3D    = (0x10000 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   477		MODE_1_3D    = (0x10001 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   478		MODE_2_3D    = (0x10002 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   479		MODE_3_3D    = (0x10003 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   480		MODE_4_3D    = (0x10004 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   481		MODE_5_3D    = (0x10005 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   482		MODE_6_3D    = (0x10006 | DISPLAY_BG0_ACTIVE | ENABLE_3D), /**< \brief  3 2D backgrounds 1 3D background (Main engine only)*/
+   483	
+   484		MODE_FIFO    = (3<<16),		/**< \brief  video display from main memory */
+```
+
+## `videoSetMode` — lines 533-537
+
+```
+   533	/** \brief  the main 2D engine video mode
+   534	*    \param mode the video mode to set
+   535	*/
+   536	void videoSetMode( u32 mode)  { REG_DISPCNT = mode; }
+```
+
+## VRAM bank A modes (`VRAM_A_TEXTURE` etc.) — lines 155-174
+
+```
+   155	//! Allowed VRAM bank A modes
+   156	typedef enum {
+   157		VRAM_A_LCD						= 0,					//!< maps vram bank a to lcd.
+   158		VRAM_A_MAIN_BG					= 1,					//!< maps vram bank a to main engine background slot 0.
+   159		VRAM_A_MAIN_BG_0x06000000		= 1 | VRAM_OFFSET(0),	//!< maps vram bank a to main engine background slot 0.
+   160		VRAM_A_MAIN_BG_0x06020000		= 1 | VRAM_OFFSET(1),	//!< maps vram bank a to main engine background slot 1.
+   161		VRAM_A_MAIN_BG_0x06040000		= 1 | VRAM_OFFSET(2),	//!< maps vram bank a to main engine background slot 2.
+   162		VRAM_A_MAIN_BG_0x06060000		= 1 | VRAM_OFFSET(3),	//!< maps vram bank a to main engine background slot 3.
+   163		VRAM_A_MAIN_SPRITE				= 2,					//!< maps vram bank a to main engine sprites slot 0.
+   164		VRAM_A_MAIN_SPRITE_0x06400000	= 2 | VRAM_OFFSET(0),	//!< maps vram bank a to main engine sprites slot 0.
+   165		VRAM_A_MAIN_SPRITE_0x06420000	= 2 | VRAM_OFFSET(1),	//!< maps vram bank a to main engine sprites slot 1.
+   166		VRAM_A_TEXTURE					= 3,					//!< maps vram bank a to 3d texture slot 0.
+   167		VRAM_A_TEXTURE_SLOT0			= 3 | VRAM_OFFSET(0),	//!< maps vram bank a to 3d texture slot 0.
+   168		VRAM_A_TEXTURE_SLOT1			= 3 | VRAM_OFFSET(1),	//!< maps vram bank a to 3d texture slot 1.
+   169		VRAM_A_TEXTURE_SLOT2			= 3 | VRAM_OFFSET(2),	//!< maps vram bank a to 3d texture slot 2.
+   170		VRAM_A_TEXTURE_SLOT3			= 3 | VRAM_OFFSET(3)	//!< maps vram bank a to 3d texture slot 3.
+   171	} VRAM_A_TYPE;
+```
+
+## `vramSetBankA` — lines 368-372
+
+```
    368	static inline
    369	/** \brief  Set bank A to the indicated mapping.
    370		\param a the mapping of the bank
    371	*/
    372	void vramSetBankA(VRAM_A_TYPE a) { VRAM_A_CR = VRAM_ENABLE | a; }
-   373	
-   374	static inline
-   375	/** \brief  Set bank B to the indicated mapping.
-   376		\param b the mapping of the bank
-   377	*/
-   378	void vramSetBankB(VRAM_B_TYPE b) { VRAM_B_CR = VRAM_ENABLE | b; }
-   379	
-   380	static inline
-   381	/** \brief  Set bank C to the indicated mapping.
-   382		\param c the mapping of the bank
-   383	*/
-   384	void vramSetBankC(VRAM_C_TYPE c) { VRAM_C_CR = VRAM_ENABLE | c; }
-   385	
-   386	static inline
-   387	/** \brief  Set bank D to the indicated mapping.
-   388		\param d the mapping of the bank
-   389	*/
-   390	void vramSetBankD(VRAM_D_TYPE d) { VRAM_D_CR = VRAM_ENABLE | d; }
-   391	
-   392	static inline
-   393	/** \brief  Set bank E to the indicated mapping.
-   394		\param e the mapping of the bank
-   395	*/
-   396	void vramSetBankE(VRAM_E_TYPE e) { VRAM_E_CR = VRAM_ENABLE | e; }
+```
 
-## vramSetBankE / VRAM_E_TEX_PALETTE (lines 230-240)
-   230		VRAM_D_TEXTURE_SLOT3 		= 3 | VRAM_OFFSET(3)	//!< maps vram bank d to 3d texture slot 3.
-   231	} VRAM_D_TYPE;
-   232	
+## VRAM bank E modes (`VRAM_E_TEX_PALETTE` etc.) — lines 233-242
+
+```
    233	//! Allowed VRAM bank E modes
    234	typedef enum {
    235		VRAM_E_LCD					= 0,		//!< maps vram bank e to lcd.
@@ -66,3 +88,14 @@
    238		VRAM_E_TEX_PALETTE			= 3,		//!< maps vram bank e to 3d texture palette slot 0-3.
    239		VRAM_E_BG_EXT_PALETTE		= 4,		//!< maps vram bank e to main engine background extended palette.
    240	} VRAM_E_TYPE;
+```
+
+## `vramSetBankE` — lines 392-396
+
+```
+   392	static inline
+   393	/** \brief  Set bank E to the indicated mapping.
+   394		\param e the mapping of the bank
+   395	*/
+   396	void vramSetBankE(VRAM_E_TYPE e) { VRAM_E_CR = VRAM_ENABLE | e; }
+```
