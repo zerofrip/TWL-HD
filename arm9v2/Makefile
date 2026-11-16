@@ -152,7 +152,7 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
-# Optional diagnostic build: DIAGSCREEN=1..4 produces a variant ROM that changes
+# Optional diagnostic build: DIAGSCREEN=1..6 produces a variant ROM that changes
 # exactly one suspected display factor so the owner can bisect on real hardware.
 # Unset/empty/0 leaves TARGET, BUILD and CFLAGS untouched so the default ROM is
 # byte-identical. The suffix composes after SCENE/AUTODUMP/VP/CUBES.
@@ -162,10 +162,15 @@ DIAGSCREEN_STRIPPED	:=	$(strip $(DIAGSCREEN))
 ifeq ($(DIAGSCREEN_STRIPPED),)
 DIAGSCREEN_STRIPPED	:=	0
 endif
+ifneq ($(DIAGSCREEN),)
+ifneq ($(DIAGSCREEN),$(DIAGSCREEN_STRIPPED))
+$(error DIAGSCREEN must be empty, 0, or a decimal integer in 1..6 (got: $(DIAGSCREEN)))
+endif
+endif
 ifneq ($(DIAGSCREEN_STRIPPED),0)
-DIAGSCREEN_OK := $(shell echo '$(DIAGSCREEN_STRIPPED)' | grep -Eq '^[1-4]$$' && echo ok)
+DIAGSCREEN_OK := $(shell echo '$(DIAGSCREEN_STRIPPED)' | grep -Eq '^[1-6]$$' && echo ok)
 ifeq ($(DIAGSCREEN_OK),)
-$(error DIAGSCREEN must be empty, 0, or a decimal integer in 1..4 (got: $(DIAGSCREEN)))
+$(error DIAGSCREEN must be empty, 0, or a decimal integer in 1..6 (got: $(DIAGSCREEN)))
 endif
 TARGET		:=	$(TARGET)-diag$(DIAGSCREEN_STRIPPED)
 BUILD		:=	$(BUILD)-diag$(DIAGSCREEN_STRIPPED)

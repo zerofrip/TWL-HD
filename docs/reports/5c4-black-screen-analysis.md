@@ -45,7 +45,7 @@ Writes that the recorder counts as *ignored* or *invalid* still reach hardware:
 `glInit()` is libnds out-of-line. Its internal writes (power-on, matrix reset,
 clear colour/depth, `GFX_CONTROL`, etc.) hit hardware directly and are **not**
 recorded, which is why the recorder declares `TWLHD_V2_COVERAGE_INITIAL_STATE_UNKNOWN`
-(`common/twlhd_gx_record.c:65-67`, `arm9v2/source/main.cpp:163/180/185`).
+(`common/twlhd_gx_record.c:65-67`, `arm9v2/source/main.cpp:173/190/216`).
 
 ---
 
@@ -63,21 +63,21 @@ Our code references are against the current `arm9v2` source.
 
 | # | Difference | Our code | Example code | Could blank top screen? | Fact / Hypothesis |
 |---|---|---|---|---|---|
-| 1 | `videoSetMode` / BG0-3D bit | `videoSetMode(MODE_0_3D)` at `main.cpp:162/177/182` | Same: `videoSetMode(MODE_0_3D)` at `Simple_Tri:10`, `Textured_Quad:17` | No. Identical value (`MODE_0_3D = 0x10000 \| DISPLAY_BG0_ACTIVE \| ENABLE_3D`, `video.h:476`). | **FACT** |
+| 1 | `videoSetMode` / BG0-3D bit | `videoSetMode(MODE_0_3D)` at `main.cpp:172/187/213` | Same: `videoSetMode(MODE_0_3D)` at `Simple_Tri:10`, `Textured_Quad:17` | No. Identical value (`MODE_0_3D = 0x10000 \| DISPLAY_BG0_ACTIVE \| ENABLE_3D`, `video.h:476`). | **FACT** |
 | 2 | Which physical screen shows the main engine | Neither our demo nor the examples call `lcdMainOnTop()` / `lcdSwap()` | Same | Unknown. If the launch environment leaves the main engine mapped to the bottom screen, both would be affected unless something resets it. | **FACT** (no call either side); screen assignment hypothesis is **HYPOTHESIS** |
-| 3 | `consoleDemoInit` usage | Called **after** `videoSetMode` and **before** `glInit` at `main.cpp:174/179/183` | **Not called** by either example | Unlikely by itself (`consoleDemoInit` targets the sub engine / VRAM C, `console.h:228` comment). It is a real difference and moves `glInit` later. | **FACT**; top-screen effect is **HYPOTHESIS** |
+| 3 | `consoleDemoInit` usage | Called **after** `videoSetMode` and **before** `glInit` at `main.cpp:184/189/214` | **Not called** by either example | Unlikely by itself (`consoleDemoInit` targets the sub engine / VRAM C, `console.h:228` comment). It is a real difference and moves `glInit` later. | **FACT**; top-screen effect is **HYPOTHESIS** |
 | 4 | Init-time 3D state order | Default: `videoSetMode -> consoleDemoInit -> glInit -> rec_init`; per-frame state is re-issued inside `demo_frame.cpp` | `videoSetMode -> glInit`, then `glEnable(GL_ANTIALIAS)`, clear, viewport, projection, lookAt **once at init** (`Simple_Tri:13-33`, `Textured_Quad:20-50`) | Possibly. We re-issue the same state per frame, but the *initial* state before the first frame differs, and `glInit` runs after `consoleDemoInit` instead of immediately after `videoSetMode`. | **FACT**; black-screen causality is **HYPOTHESIS** |
-| 5 | `glEnable(GL_ANTIALIAS)` | Per frame at `demo_frame.cpp:302/344/379` | Once at init at `Simple_Tri:16`, `Textured_Quad:26` | No. Same control bit ends up set before draw. | **FACT** |
-| 6 | Clear colour / polygon ID / depth | `glClearColor(0,0,0,31)`, `glClearPolyID(63)`, `glClearDepth(GL_MAX_DEPTH)` per frame (`demo_frame.cpp:303-305` etc.) | Same values (`Simple_Tri:19-21`, `Textured_Quad:29-31`); `GL_MAX_DEPTH == 0x7FFF` (`videoGL.h:87`) | No. Identical values. | **FACT** |
-| 7 | Viewport | `glViewport(0,0,255,191)` per frame (`demo_frame.cpp:306/348/383`) | Same once at init (`Simple_Tri:24`, `Textured_Quad:34`) | No. Identical value. | **FACT** |
-| 8 | Polygon format alpha | `glPolyFmt(POLY_ALPHA(31))` per frame (`demo_frame.cpp:326/364/408`) | `POLY_ALPHA(31) \| POLY_CULL_NONE` (`Simple_Tri:50`) or `\| POLY_CULL_BACK` (`Textured_Quad:73`) | No. Alpha is the same full-opaque value; cull mode does not blank the whole screen. | **FACT** |
-| 9 | Projection / camera matrix | `gluPerspective(70, 256/192, 0.1, 100.0)`, camera z=4 (`demo_frame.cpp:311/315`) | `gluPerspective(70, 256/192, 0.1, 40.0)`, camera z=1 (`Simple_Tri:27-33`) | No. Different view volume but object is in view in both; would produce a picture, not black. | **FACT** |
-| 10 | `glFlush(0)` path | Proxied `GFX_FLUSH` write (`demo_frame.cpp:341/368/413`) | Raw `GFX_FLUSH` write (`Simple_Tri:78`, `Textured_Quad:106`) | No. The proxy forwards the `0x04000540` write identically. | **FACT** |
+| 5 | `glEnable(GL_ANTIALIAS)` | Per frame at `demo_frame.cpp:341/383/418` | Once at init at `Simple_Tri:16`, `Textured_Quad:26` | No. Same control bit ends up set before draw. | **FACT** |
+| 6 | Clear colour / polygon ID / depth | `glClearColor(0,0,0,31)`, `glClearPolyID(63)`, `glClearDepth(GL_MAX_DEPTH)` per frame (`demo_frame.cpp:342-344` etc.) | Same values (`Simple_Tri:19-21`, `Textured_Quad:29-31`); `GL_MAX_DEPTH == 0x7FFF` (`videoGL.h:87`) | No. Identical values. | **FACT** |
+| 7 | Viewport | `glViewport(0,0,255,191)` per frame (`demo_frame.cpp:345-346/387-388/422-423`) | Same once at init (`Simple_Tri:24`, `Textured_Quad:34`) | No. Identical value. | **FACT** |
+| 8 | Polygon format alpha | `glPolyFmt(POLY_ALPHA(31))` per frame (`demo_frame.cpp:365/403/447`) | `POLY_ALPHA(31) \| POLY_CULL_NONE` (`Simple_Tri:50`) or `\| POLY_CULL_BACK` (`Textured_Quad:73`) | No. Alpha is the same full-opaque value; cull mode does not blank the whole screen. | **FACT** |
+| 9 | Projection / camera matrix | `gluPerspective(70, 256/192, 0.1, 100.0)`, camera z=4 (`demo_frame.cpp:390-392/394-396`) | `gluPerspective(70, 256/192, 0.1, 40.0)`, camera z=1 (`Simple_Tri:27-33`) | No. Different view volume but object is in view in both; would produce a picture, not black. | **FACT** |
+| 10 | `glFlush(0)` path | Proxied `GFX_FLUSH` write (`demo_frame.cpp:380/407/452`) | Raw `GFX_FLUSH` write (`Simple_Tri:78`, `Textured_Quad:106`) | No. The proxy forwards the `0x04000540` write identically. | **FACT** |
 | 11 | Default cube: VRAM bank setup | None (`SCENE=0` path does not touch VRAM) | `Simple_Tri` does not touch VRAM | N/A for the default cube. | **FACT** |
-| 12 | Textured scene: VRAM bank setup | `vramSetBankA(VRAM_A_LCD)`, `vramSetBankE(VRAM_E_LCD)`, copy, then `VRAM_A_TEXTURE`/`VRAM_E_TEX_PALETTE` at init (`demo_frame.cpp:165-174`) | `vramSetBankA(VRAM_A_TEXTURE)` once at init (`Textured_Quad:36`); no palette bank because it uses 16bpp direct colour | For `SCENE=5` only. The final mapping is equivalent for texture; palette bank is required by our I4 format. Could matter if the LCDC→texture switch races the first 3D frame. | **FACT**; black-screen causality for s5 is **HYPOTHESIS** |
-| 13 | Textured scene: texture upload path | Manual 16-bit copy to `0x06800000`/`0x06880000` + explicit `GFX_TEX_FORMAT`/`GFX_PAL_FORMAT` writes through proxy (`demo_frame.cpp:187-188`) | `glGenTextures`/`glBindTexture`/`glTexImage2D` out-of-line (`Textured_Quad:38-40`) | No. The same hardware registers end up written; proxy forwards ours. | **FACT** |
+| 12 | Textured scene: VRAM bank setup | `vramSetBankA(VRAM_A_LCD)`, `vramSetBankE(VRAM_E_LCD)`, copy, then `VRAM_A_TEXTURE`/`VRAM_E_TEX_PALETTE` at init (`demo_frame.cpp:173-182`) | `vramSetBankA(VRAM_A_TEXTURE)` once at init (`Textured_Quad:36`); no palette bank because it uses 16bpp direct colour | For `SCENE=5` only. The final mapping is equivalent for texture; palette bank is required by our I4 format. Could matter if the LCDC→texture switch races the first 3D frame. | **FACT**; black-screen causality for s5 is **HYPOTHESIS** |
+| 13 | Textured scene: texture upload path | Manual 16-bit copy to `0x06800000`/`0x06880000` + explicit `GFX_TEX_FORMAT`/`GFX_PAL_FORMAT` writes through proxy (`demo_frame.cpp:195-196`) | `glGenTextures`/`glBindTexture`/`glTexImage2D` out-of-line (`Textured_Quad:38-40`) | No. The same hardware registers end up written; proxy forwards ours. | **FACT** |
 | 14 | Textured scene: material / lighting | Not issued | `glMaterialf`, `glMaterialShinyness` (`Textured_Quad:64-70`) | No. Missing material calls would change shading, not blank the screen. | **FACT** |
-| 15 | Source include order / proxy bypass | `#include "twlhd_gx_shim.hpp"` **before** `<nds.h>` (`main.cpp:20-24`, `demo_frame.cpp:19-26`) | Only `<nds.h>`; no proxy | No. The proxy forwards every write; the hardware byte stream is identical for the same high-level calls. | **FACT**; a compiler/TU codegen side effect is **HYPOTHESIS** tested by `DIAGSCREEN=2` |
+| 15 | Source include order / proxy bypass | `#include "twlhd_gx_shim.hpp"` **before** `<nds.h>` (`main.cpp:20-31`, `demo_frame.cpp:19-27`) | Only `<nds.h>`; no proxy | No. The proxy forwards every write; the hardware byte stream is identical for the same high-level calls. | **FACT**; a compiler/TU codegen side effect is **HYPOTHESIS** tested by `DIAGSCREEN=2` |
 | 16 | libnds out-of-line writes we never issue | None beyond `glInit` for the cube; for s5 we manually issue `GFX_TEX_FORMAT`/`GFX_PAL_FORMAT` | `glInit` for both; `glTexImage2D` and material calls for `Textured_Quad` | For the cube, none identified. For s5, our manual writes cover the registers the example sets through `glTexImage2D`. | **FACT** |
 
 ---
@@ -134,7 +134,7 @@ Our code references are against the current `arm9v2` source.
 4. For `SCENE=5`, does `DIAGSCREEN=3` (VRAM bank switch settled one vblank
    before the first draw) change the picture? Does `DIAGSCREEN=2` (recorder
    bypass) produce a picture?
-5. If all four `DIAGSCREEN` variants still show a black top screen, the cause
+5. If all six `DIAGSCREEN` variants still show a black top screen, the cause
    is almost certainly outside the ARM9 ROM and must be investigated in the
    launch environment or firmware.
 
@@ -144,17 +144,55 @@ Our code references are against the current `arm9v2` source.
 
 All variants are opt-in via `make -C arm9v2 DIAGSCREEN=N ...`. `DIAGSCREEN=0`
 or unset builds the normal ROM and keeps it byte-identical to the pre-change
-ROM.
+ROM. Values containing whitespace are rejected by the Makefile's raw-vs-stripped
+check; note that Make itself strips leading/trailing spaces from command-line
+assignments, so the rejection test passes such values through the environment.
 
 | Variant | What it changes | Code location |
 |---|---|---|
-| `DIAGSCREEN=1` | Replicates the libnds example display-setup order: `videoSetMode -> glInit -> glEnable(GL_ANTIALIAS) / clear / viewport / projection / lookAt -> consoleDemoInit -> recorder init`. | `arm9v2/source/main.cpp:158-174` |
-| `DIAGSCREEN=2` | **Recorder proxy bypass:** includes `<nds.h>` before the shim so libnds inline helpers compile against raw `GFX_*` macros; never arms the recorder; console prints "recorder disabled". | `arm9v2/source/main.cpp:20-24`, `:195-199`; `arm9v2/source/demo_frame.cpp:19-26` |
-| `DIAGSCREEN=3` | Settle VRAM mapping/timing before the first 3D frame: for `SCENE=5` it waits one vblank after texture upload so the LCDC→texture/palette switch is committed before the first draw; for the default cube it is a no-op beyond the banner. | `arm9v2/source/main.cpp:188-193`, `:200-207` |
-| `DIAGSCREEN=4` | Forces the main engine onto the top physical screen with `lcdMainOnTop()`. | `arm9v2/source/main.cpp:175-180` |
+| `DIAGSCREEN=1` | Replicates the libnds example display-setup order: `videoSetMode -> glInit -> glEnable(GL_ANTIALIAS) / clear / viewport / projection / lookAt -> consoleDemoInit -> recorder init`. | `arm9v2/source/main.cpp:168-184` |
+| `DIAGSCREEN=2` | **Recorder proxy bypass:** includes `<nds.h>` before the shim so libnds inline helpers compile against raw `GFX_*` macros; never arms the recorder; console prints "recorder disabled". | `arm9v2/source/main.cpp:20-31`, `:226-230`; `arm9v2/source/demo_frame.cpp:19-27` |
+| `DIAGSCREEN=3` | Settle VRAM mapping/timing before the first 3D frame: for `SCENE=5` it waits one vblank after texture upload so the LCDC→texture/palette switch is committed before the first draw; for the default cube it is a no-op beyond the banner. | `arm9v2/source/main.cpp:219-224`, `:232-238` |
+| `DIAGSCREEN=4` | Forces the main engine onto the top physical screen with `lcdMainOnTop()`. | `arm9v2/source/main.cpp:185-190` |
+| `DIAGSCREEN=5` | Default cube demo with `consoleDemoInit()`, every `iprintf` / `consoleClear` call and the recorder removed; no `fatInitDefault`. The variant number is not printed (the ROM file name carries it). | `arm9v2/source/main.cpp:20-31`, `:191-195`, `:226-230`, `:242-272` |
+| `DIAGSCREEN=6` | The unmodified libnds `Simple_Tri` example draw logic (`videoSetMode -> glInit -> AA/clear/viewport/projection/lookAt -> counter-rotated coloured triangle -> glFlush`) compiled by our Makefile, flags, startup and link line. No console, no recorder. | `arm9v2/source/main.cpp:20-31`, `:196-211`, `:226-230`, `:242-272`; `arm9v2/source/demo_frame.cpp:19-27`, `:307-337` |
 
-Every variant prints `DIAGSCREEN=N ... HARDWARE UNVERIFIED` on the bottom
-console (`arm9v2/source/main.cpp:75-81`).
+`DIAGSCREEN=5` deliberately prints nothing, so the bottom screen is left
+untouched; the variant number can only be told from the ROM file name.
+`DIAGSCREEN=6` copies the example's quirks verbatim, including calling
+`glMatrixMode(GL_MODELVIEW)` after the projection-space rotates, and rotates
+by a counter so a frozen picture is distinguishable from live animation.
+
+### Hardware evidence and narrowed hypotheses (HARDWARE)
+
+**Owner photos, 2026-11-16, New 3DS TWL mode via TWiLight Menu++**
+(`HARDWARE UNVERIFIED` evidence — observed, not reproduced by this assistant):
+
+- The unmodified libnds examples `Simple_Tri` and `Textured_Quad` **display**
+  on the top screen.
+- Our `arm9v2` default cube ROM and `DIAGSCREEN=1`, `DIAGSCREEN=2` (no
+  recorder, raw libnds macros) and `DIAGSCREEN=4` (`lcdMainOnTop`) **all show
+  a black top screen**.
+- The bottom-screen console is alive and the recorder counts are correct.
+- `ndstool` headers of our ROM and the example are equal in unit code / ARM7 /
+  entry addresses; only the ARM9 size differs (ours `0x21DDC`, example
+  `0x45B0`).
+
+Because the examples display and our ROMs do not, the recorder, the display
+setup order and `lcdMainOnTop()` are ruled out as the sole cause. The
+remaining hypotheses are:
+
+1. `consoleDemoInit()` + `iprintf` / console traffic on the sub screen.
+2. Large static buffers / `libfat` link in our ROM.
+3. Our build flags / Makefile / link line / ROM structure.
+4. Our draw content itself (scene geometry, camera, polygon attributes).
+
+`DIAGSCREEN=5` removes hypothesis 1 (console). If it still blacks, the console
+is not the cause.
+
+`DIAGSCREEN=6` replaces our draw content with the exact `Simple_Tri` logic
+while keeping our build/link/ROM structure. If it displays, our scene content
+is the problem; if it is black, our build/link/ROM structure is the problem.
 
 ---
 
@@ -200,10 +238,21 @@ sha256sum arm9v2/twlhd-arm9v2-diag4.nds
 # 8dfc92469d31fa6fe0edb47f2b3a34ea6a8a0e938ef06e12c8f6e89abc01f670
 ```
 
-`DIAGSCREEN=3` changed because defect 4 removed the overwritten `vramSetBankA/E`
-calls and, for `SCENE=5`, added a post-upload `swiWaitForVBlank()` so the bank
-switch settles before the first draw; `DIAGSCREEN=1/2/4` were left untouched,
-so their hashes stayed identical.
+Round 2 added only `DIAGSCREEN=5` and `DIAGSCREEN=6` branches inside `#if`
+guards, so the default ROM and `DIAGSCREEN=1/2/3/4` cube ROMs are byte-identical
+to their round-1 hashes (the `DIAGSCREEN=3` change happened in round 1).
+
+### Round-2 `DIAGSCREEN=5` and `DIAGSCREEN=6` variants
+
+```
+make -C arm9v2 clean DIAGSCREEN=5 && make -C arm9v2 DIAGSCREEN=5
+sha256sum arm9v2/twlhd-arm9v2-diag5.nds
+# ffdd5bfbf4a616673bd1a8003cbc15f33bf7cc27c5f62ecb39f051546c6f5c97
+
+make -C arm9v2 clean DIAGSCREEN=6 && make -C arm9v2 DIAGSCREEN=6
+sha256sum arm9v2/twlhd-arm9v2-diag6.nds
+# 374cf632b21111315a8ebbd1da8586e25ca108b5a1643d1ed074dafe81bc9501
+```
 
 ### `SCENE=5` variants (the failing textured scene)
 
@@ -238,7 +287,9 @@ make -C arm9v2 -n SCENE=5 DIAGSCREEN=2 AUTODUMP_FRAME=240
 
 ---
 
-## 7. Files changed for this repair round
+## 7. Files changed
+
+### Round 1
 
 - `docs/reports/5c4-black-screen-analysis.md` — corrected hook/write order,
   fixed all line-number citations, updated `DIAGSCREEN=3` semantics and hashes.
@@ -256,4 +307,28 @@ make -C arm9v2 -n SCENE=5 DIAGSCREEN=2 AUTODUMP_FRAME=240
 
 No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
 `arm9v2/include/`, `arm9v2/source/demo_frame.cpp`, `arm9v2/Makefile`, or the v2
-format (`common/twlhd_v2_format.h`, parser/writer) were changed in this round.
+format (`common/twlhd_v2_format.h`, parser/writer) were changed in round 1.
+
+### Round 2
+
+- `arm9v2/Makefile` — extended `DIAGSCREEN` validation range from 1..4 to
+  1..6, updated the error message, and added a raw-vs-stripped whitespace
+  rejection check (`arm9v2/Makefile:160-174`).
+- `arm9v2/source/main.cpp` — added `DIAGSCREEN=5` (cube demo without console,
+  recorder or `fatInitDefault`) and `DIAGSCREEN=6` (`Simple_Tri` example init
+  order, no console/recorder); extended recorder-bypass and include-order
+  conditions to cover 5 and 6 (`arm9v2/source/main.cpp:20-31`, `:55-89`,
+  `:91-161`, `:168-217`, `:226-230`, `:242-273`).
+- `arm9v2/source/demo_frame.cpp` — added `DIAGSCREEN=6` draw branch with the
+  verbatim `Simple_Tri` triangle logic and counter-driven rotation
+  (`arm9v2/source/demo_frame.cpp:19-27`, `:29-34`, `:307-338`).
+- `tools/test_arm9v2_diagscreen.py` — accepted `5` and `6`, added `7`,
+  `"1 2"` and environment-based whitespace rejection cases, and updated the
+  asserted error message to `1..6`.
+- `docs/reports/5c4-black-screen-analysis.md` — added the HARDWARE evidence
+  section, narrowed hypotheses, round-2 build commands/hashes, and this
+  files-changed subsection.
+
+No files under `common/`, `arm9/`, `arm11/`, `arm11_ucode/`, `arm7/`,
+`arm9v2/include/`, `tools/emulator/`, or the v2 format
+(`common/twlhd_v2_format.h`, parser/writer) were changed in round 2.

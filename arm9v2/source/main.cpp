@@ -17,7 +17,8 @@
 #define TWLHD_DEMO_DIAGSCREEN 0
 #endif
 
-#if TWLHD_DEMO_DIAGSCREEN == 2
+#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN == 5 || \
+    TWLHD_DEMO_DIAGSCREEN == 6
 /* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
 #include <fat.h>
 #include <nds.h>
@@ -52,6 +53,9 @@ static uint8_t g_serialize[TWLHD_GX_REC_SERIALIZE_MAX];
 static int g_fat_ready;
 
 static void refresh_console(void) {
+#if TWLHD_DEMO_DIAGSCREEN == 5
+    (void)0;
+#else
     TwlhdGxRecorder *rec = twlhd_gx_rec_global();
 
     consoleClear();
@@ -81,9 +85,14 @@ static void refresh_console(void) {
 #endif
     iprintf("frames self-contained except glInit state\n");
     iprintf("A = dump /twlhd_frame_v2.bin\n");
+#endif
 }
 
 static int dump_frame(void) {
+#if TWLHD_DEMO_DIAGSCREEN == 5
+    (void)0;
+    return -1;
+#else
     TwlhdGxRecorder *rec = twlhd_gx_rec_global();
     TwlhdV2Result result;
     size_t written = 0;
@@ -148,6 +157,7 @@ static int dump_frame(void) {
 
     iprintf("dumped %lu bytes\n", (unsigned long)written);
     return (int)written;
+#endif
 }
 
 int main(void) {
@@ -178,6 +188,27 @@ int main(void) {
     lcdMainOnTop();
     consoleDemoInit(); /* statistics console on the sub screen */
     glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+#elif TWLHD_DEMO_DIAGSCREEN == 5
+    /* DIAGSCREEN=5: default cube demo with no console and no recorder. The
+     * variant number cannot be printed; the ROM file name carries it. */
+    videoSetMode(MODE_0_3D);
+    glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+#elif TWLHD_DEMO_DIAGSCREEN == 6
+    /* DIAGSCREEN=6: unmodified libnds Simple_Tri example init order, compiled
+     * and linked by our Makefile/flags/startup. No console, no recorder.
+     * HARDWARE UNVERIFIED. */
+    videoSetMode(MODE_0_3D);
+    glInit(); /* library-internal writes are not proxied: INITIAL_STATE_UNKNOWN */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(0, 0, 255, 191);
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    gluPerspective(70, 256.0 / 192.0, 0.1, 40.0);
+    gluLookAt(0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0);
+    glMatrixMode(GL_MODELVIEW);
 #else
     videoSetMode(MODE_0_3D);
     consoleDemoInit(); /* statistics console on the sub screen */
@@ -192,7 +223,8 @@ int main(void) {
      * HARDWARE UNVERIFIED. */
 #endif
 
-#if TWLHD_DEMO_DIAGSCREEN != 2
+#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN != 5 && \
+    TWLHD_DEMO_DIAGSCREEN != 6
     twlhd_gx_rec_init(rec);
 #else
     (void)rec; /* recorder bypassed for this variant */
@@ -208,12 +240,14 @@ int main(void) {
     refresh_console();
 
     while (1) {
-#if TWLHD_DEMO_DIAGSCREEN != 2
+#if TWLHD_DEMO_DIAGSCREEN != 2 && TWLHD_DEMO_DIAGSCREEN != 5 && \
+    TWLHD_DEMO_DIAGSCREEN != 6
         twlhd_gx_rec_arm(rec);
 #endif
         twlhd_demo_draw_frame((unsigned)angle);
         swiWaitForVBlank();
 
+#if TWLHD_DEMO_DIAGSCREEN != 5 && TWLHD_DEMO_DIAGSCREEN != 6
         scanKeys();
         if (keysDown() & KEY_A) {
             (void)dump_frame();
@@ -226,11 +260,16 @@ int main(void) {
                     TWLHD_DEMO_AUTODUMP_FRAME);
         }
 #endif
+#endif
 
         /* binary angle: 32768 == 360 degrees */
         angle += 256;
 
+#if TWLHD_DEMO_DIAGSCREEN != 5 && TWLHD_DEMO_DIAGSCREEN != 6
         if (++frame % 60 == 0) refresh_console();
+#else
+        ++frame;
+#endif
     }
 
     return 0;

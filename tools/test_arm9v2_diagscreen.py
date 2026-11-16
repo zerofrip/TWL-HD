@@ -10,26 +10,41 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 class TestArm9v2DiagScreen(unittest.TestCase):
-    """Option validation for DIAGSCREEN=1..4 build variants."""
+    """Option validation for DIAGSCREEN=1..6 build variants."""
 
     @unittest.skipUnless(
         os.environ.get("DEVKITARM") and os.environ.get("DEVKITPRO"),
         "devkitPro environment not available")
     def test_diagscreen_bad_values_fail(self):
-        for bad in ("abc", "-1", "1.5", "9", "01"):
+        for bad in ("abc", "-1", "1.5", "9", "01", "7", "1 2"):
             completed = subprocess.run(
                 ["make", "-C", "arm9v2", "-n", "DIAGSCREEN=%s" % bad],
                 cwd=ROOT, capture_output=True, text=True)
             self.assertNotEqual(completed.returncode, 0, bad)
             self.assertIn(
-                "DIAGSCREEN must be empty, 0, or a decimal integer in 1..4",
+                "DIAGSCREEN must be empty, 0, or a decimal integer in 1..6",
+                completed.stderr)
+
+    def test_diagscreen_whitespace_values_fail(self):
+        # Leading/trailing spaces are stripped by Make's command-line parser,
+        # so whitespace-containing values must be passed through the environment
+        # to be detected by the raw-vs-stripped check.
+        for bad in (" ", " 5", "5 "):
+            env = os.environ.copy()
+            env["DIAGSCREEN"] = bad
+            completed = subprocess.run(
+                ["make", "-C", "arm9v2", "-n"],
+                cwd=ROOT, env=env, capture_output=True, text=True)
+            self.assertNotEqual(completed.returncode, 0, bad)
+            self.assertIn(
+                "DIAGSCREEN must be empty, 0, or a decimal integer in 1..6",
                 completed.stderr)
 
     @unittest.skipUnless(
         os.environ.get("DEVKITARM") and os.environ.get("DEVKITPRO"),
         "devkitPro environment not available")
     def test_diagscreen_valid_succeeds(self):
-        for valid in ("1", "2", "3", "4"):
+        for valid in ("1", "2", "3", "4", "5", "6"):
             completed = subprocess.run(
                 ["make", "-C", "arm9v2", "-n", "DIAGSCREEN=%s" % valid],
                 cwd=ROOT, capture_output=True, text=True)
