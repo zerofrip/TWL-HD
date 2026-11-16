@@ -152,6 +152,29 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
+# Optional diagnostic build: DIAGSCREEN=1..4 produces a variant ROM that changes
+# exactly one suspected display factor so the owner can bisect on real hardware.
+# Unset/empty/0 leaves TARGET, BUILD and CFLAGS untouched so the default ROM is
+# byte-identical. The suffix composes after SCENE/AUTODUMP/VP/CUBES.
+#---------------------------------------------------------------------------------
+DIAGSCREEN	?=	0
+DIAGSCREEN_STRIPPED	:=	$(strip $(DIAGSCREEN))
+ifeq ($(DIAGSCREEN_STRIPPED),)
+DIAGSCREEN_STRIPPED	:=	0
+endif
+ifneq ($(DIAGSCREEN_STRIPPED),0)
+DIAGSCREEN_OK := $(shell echo '$(DIAGSCREEN_STRIPPED)' | grep -Eq '^[1-4]$$' && echo ok)
+ifeq ($(DIAGSCREEN_OK),)
+$(error DIAGSCREEN must be empty, 0, or a decimal integer in 1..4 (got: $(DIAGSCREEN)))
+endif
+TARGET		:=	$(TARGET)-diag$(DIAGSCREEN_STRIPPED)
+BUILD		:=	$(BUILD)-diag$(DIAGSCREEN_STRIPPED)
+CFLAGS		+=	-DTWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
+endif
+
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
@@ -171,7 +194,7 @@ $(shell mkdir -p $(BUILD))
 
 # make cannot see -D changes in the object prerequisites, so record the define
 # set in the variant BUILD directory and drop stale objects when it changes.
-TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0)
+TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
 ifneq ($(strip $(TWLHD_FLAGS_STAMP)),$(strip $(shell cat $(BUILD)/flags.stamp 2>/dev/null)))
 $(shell rm -f $(BUILD)/*.o $(BUILD)/*.d)
 endif
@@ -232,6 +255,8 @@ clean:
 	@rm -f twlhd-arm9v2*c*.elf twlhd-arm9v2*c*.nds twlhd-arm9v2*c*.arm9 twlhd-arm9v2*c*.guard twlhd-arm9v2*c*.guard.nm twlhd-arm9v2*c*.map
 	@rm -fr build-s[0-9]* build-*-s[0-9]*
 	@rm -f twlhd-arm9v2*-s[0-9]*.elf twlhd-arm9v2*-s[0-9]*.nds twlhd-arm9v2*-s[0-9]*.arm9 twlhd-arm9v2*-s[0-9]*.guard twlhd-arm9v2*-s[0-9]*.guard.nm twlhd-arm9v2*-s[0-9]*.map
+	@rm -fr build-diag* build-*-diag*
+	@rm -f twlhd-arm9v2*-diag*.elf twlhd-arm9v2*-diag*.nds twlhd-arm9v2*-diag*.arm9 twlhd-arm9v2*-diag*.guard twlhd-arm9v2*-diag*.guard.nm twlhd-arm9v2*-diag*.map
 
 #---------------------------------------------------------------------------------
 else

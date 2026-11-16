@@ -108,6 +108,12 @@ they do not replace the real run.
   `build-autodump-c64/`. The limit of 170 is 6120 clip vertices (≤ the ARM11 `CLIP_VERTEX_CAPACITY` of 6144), fewer than 16384
   recorder entries, and below the 1 MiB v2 file size. `make test` also builds `-DTWLHD_DEMO_CUBES=170` and `=2` host binaries that
   check the recorded VTX_16 count and the interpreter's vertex output against fixed literals.
+- `DIAGSCREEN=<n>` (`n` = 1..4) produces an opt-in hardware-bisection variant of
+  the `arm9v2` demo that changes exactly one suspected display factor at a time
+  (**BUILD/UNIT only**; `HARDWARE UNVERIFIED`). `0`/unset leaves the normal ROM
+  byte-identical. The `-diag<n>` suffix composes with `SCENE`, `AUTODUMP_FRAME`,
+  `VP_*` and `CUBES`. See `docs/reports/5c4-black-screen-analysis.md` for the
+  analysis, variant semantics and build hashes.
 - `SCENE=<n>` replaces the cube with a flat primitive scene for the same demo (**BUILD/UNIT only**; no EMULATOR or HARDWARE claim).
   `SCENE=1` draws a triangle list (24 vertices / 8 triangles), `SCENE=2` a triangle strip (12 input vertices / 10 triangles),
   `SCENE=3` a quad strip (12 input vertices / 5 quads / 10 triangles) and `SCENE=4` four flat quads, one quad-list each, with a

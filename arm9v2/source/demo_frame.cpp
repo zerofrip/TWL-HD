@@ -10,10 +10,20 @@
  * mocked registers; no DS runtime has executed it.
  */
 
+#ifndef TWLHD_DEMO_DIAGSCREEN
+#define TWLHD_DEMO_DIAGSCREEN 0
+#endif
+
 #include "demo_frame.hpp"
 
+#if TWLHD_DEMO_DIAGSCREEN == 2
+/* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
+#include <nds.h>
+#include "twlhd_gx_shim.hpp"
+#else
 #include "twlhd_gx_shim.hpp"
 #include <nds.h>
+#endif
 
 /* 4.12 fixed point vertex for the unit cube. */
 #define V16_ONE ((int16_t)(1 << 12))
