@@ -16,13 +16,21 @@
 
 #include "demo_frame.hpp"
 
-#if TWLHD_DEMO_DIAGSCREEN == 2
+#if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN == 5 || \
+    TWLHD_DEMO_DIAGSCREEN == 6
 /* Recorder bypass: compile libnds' inline helpers against raw GFX_* macros. */
 #include <nds.h>
 #include "twlhd_gx_shim.hpp"
 #else
 #include "twlhd_gx_shim.hpp"
 #include <nds.h>
+#endif
+
+#if TWLHD_DEMO_DIAGSCREEN == 6
+/* Counter-driven rotation for the Simple_Tri variant. File-scope POD statics
+ * avoid a function-local dynamic init that would emit __cxa_guard_acquire. */
+static float simple_tri_rotateX = 0.0f;
+static float simple_tri_rotateY = 0.0f;
 #endif
 
 /* 4.12 fixed point vertex for the unit cube. */
@@ -297,6 +305,37 @@ static void draw_scene_alpha_quads(void) {
 #endif
 
 void twlhd_demo_draw_frame(unsigned angle) {
+#if TWLHD_DEMO_DIAGSCREEN == 6
+    /* Exact Simple_Tri example draw logic, including the quirk that
+     * glMatrixMode(GL_MODELVIEW) is called after the projection-space rotates.
+     * Rotates by a counter so a frozen picture is distinguishable from animation.
+     * GL_TRIANGLE is the libnds name used by the example. */
+    glPushMatrix();
+    glTranslatef32(0, 0, floattof32(-1));
+    glRotateX(simple_tri_rotateX);
+    glRotateY(simple_tri_rotateY);
+
+    glMatrixMode(GL_MODELVIEW);
+
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+
+    glBegin(GL_TRIANGLE);
+    glColor3b(255, 0, 0);
+    glVertex3v16(inttov16(-1), inttov16(-1), 0);
+    glColor3b(0, 255, 0);
+    glVertex3v16(inttov16(1), inttov16(-1), 0);
+    glColor3b(0, 0, 255);
+    glVertex3v16(inttov16(0), inttov16(1), 0);
+    glEnd();
+
+    glPopMatrix(1);
+
+    simple_tri_rotateX += 3.0f;
+    simple_tri_rotateY += 3.0f;
+
+    glFlush(0);
+    return;
+#endif
 #if TWLHD_DEMO_SCENE != 0
     /* Re-issue all state needed to replay this frame independently. */
     glEnable(GL_ANTIALIAS);
