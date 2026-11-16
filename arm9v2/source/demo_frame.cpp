@@ -367,7 +367,11 @@ void twlhd_demo_draw_frame(unsigned angle) {
     /* Each quad issues its own POLYGON_ATTR alpha. */
     draw_scene_alpha_quads();
 #else
+#if TWLHD_DEMO_SCENE == 5
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+#else
     glPolyFmt(POLY_ALPHA(31));
+#endif
 #if TWLHD_DEMO_SCENE == 1
     draw_scene_tri_list();
 #elif TWLHD_DEMO_SCENE == 2

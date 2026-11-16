@@ -1009,10 +1009,11 @@ Corrections to this design, found while implementing:
   `twlhd_gx_record.c:205/209` are now killed by new tests; the mutation report
   and run log were regenerated with real numbers.
 
-Open items: 5C-3 is DeSmuME validation of scene 5; 5C-4 is a hardware dump
-byte-compare; 5C-5 (VRAM readback backend) remains deferred. The source-buffer
-backend covers only game-registered source arrays; generic capture from
-arbitrary VRAM is not implemented.
+Open items: 5C-3 is DeSmuME validation of scene 5; 5C-4 hardware dump
+byte-compare is now a BUILD-only source change (SCENE=5 now issues
+`POLY_CULL_NONE`); 5C-5 (VRAM readback backend) remains deferred. The
+source-buffer backend covers only game-registered source arrays; generic capture
+from arbitrary VRAM is not implemented.
 
 ---
 
@@ -1038,10 +1039,11 @@ What exists:
   byte-identical): checks one `TXDS` record against the literal
   `TEXIMAGE_PARAM`/`PLTT_BASE` and the 32/32/0 sizes, the `TXDT`/`PLDT` bytes
   against the known arrays, exactly `FRAME_COMPLETE` (OVERFLOW = texture drop =
-  FAIL), META backend/coverage, and the structural `BEGIN`/`TEXIMAGE_PARAM`/
-  `PLTT_BASE`/`VTX`/`END`/`SWAP` shape plus the shared analytic camera checks.
-  The expected arrays live once and a unit test parses
-  `arm9v2/source/demo_frame.cpp` and fails if the arrays or key literals change.
+  FAIL), META backend/coverage, and the structural `POLYGON_ATTR`/`BEGIN`/
+  `TEXIMAGE_PARAM`/`PLTT_BASE`/`VTX`/`END`/`SWAP` shape plus the shared analytic
+  camera checks. The expected arrays live once and a unit test parses
+  `arm9v2/source/demo_frame.cpp` and fails if the arrays, key literals or the
+  scene-5 `glPolyFmt` literal change.
 - Negative tests for every listed failure (flipped TXDT/PLDT byte, wrong
   param/pltt key, two/zero `TXDS` records, wrong TXDT length, missing PLDT,
   OVERFLOW, truncated chunk, textured capture through the unchanged
@@ -1090,8 +1092,23 @@ unvendored checkout (`fc504ee0`, wifi off, built outside the repository):
 This shows recorder + `twlhd_gx_rec_serialize_tex` + source-buffer backend
 capture the registered arrays in DeSmuME. It does not show that the DS hardware
 does the same (VRAM LCDC upload order, 16-bit stores and the texture-enable
-state are modelled by DeSmuME); that is stage 5C-4 and needs the owner's
-approval per run.
+state are modelled by DeSmuME).
+
+### 5C-4 status (round 4, 2026-11-16)
+
+**BUILD only.** No emulator or hardware run was performed for this change.
+
+- The owner previously verified the captured texture content (key, texel and
+  palette bytes) on DS hardware; the on-screen texture check was pending
+  because `SCENE=5` issued `glPolyFmt(POLY_ALPHA(31))`, leaving cull mode 0.
+- `SCENE=5` now issues `glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE)` (recorded
+  `POLYGON_ATTR` word `0x001F00C0`). The shape check in
+  `tools/emulator/compare_texture_capture.py` now requires exactly one
+  `POLYGON_ATTR` entry with that value before `BEGIN_VTXS`.
+- The default cube and `SCENE=1..4` still issue `POLY_ALPHA(31)` alone; they
+  will still render nothing on a real DS because of cull mode 0. Fixing them
+  would change the recorded `POLYGON_ATTR` word and the golden/expected
+  literals, so that is left as an owner decision and was NOT done here.
 
 ---
 

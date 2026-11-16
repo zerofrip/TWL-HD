@@ -81,6 +81,7 @@ PALETTE = bytes((
 
 CMD_TEX_COORD = 0x22
 CMD_VTX_16 = 0x23
+CMD_POLYGON_ATTR = 0x29
 CMD_TEXIMAGE_PARAM = 0x2A
 CMD_PLTT_BASE = 0x2B
 CMD_BEGIN_VTXS = 0x40
@@ -89,6 +90,10 @@ CMD_SWAP_BUFFERS = 0x50
 
 GL_QUADS = 1
 VERTEX_COUNT = 4
+
+# arm9v2/source/demo_frame.cpp: glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE)
+# POLY_ALPHA(31) = 31 << 16 = 0x001F0000; POLY_CULL_NONE = 3 << 6 = 0xC0.
+POLYGON_ATTR = 0x001F00C0
 
 BACKEND_REGISTER_PROXY = 1
 COVERAGE_ALL = 0x7
@@ -152,6 +157,7 @@ def _group_ok(group):
 def _check_shape(entries, angle, failures):
     teximage = _positions(entries, CMD_TEXIMAGE_PARAM)
     pltt = _positions(entries, CMD_PLTT_BASE)
+    polygon_attr = _positions(entries, CMD_POLYGON_ATTR)
     begins = _positions(entries, CMD_BEGIN_VTXS)
     ends = _positions(entries, CMD_END_VTXS)
 
@@ -169,6 +175,14 @@ def _check_shape(entries, angle, failures):
         failures.add("pltt-value", "0x%08X, expected 0x%08X"
                      % (entries[pltt[0]][1], PLTT_BASE))
 
+    if len(polygon_attr) != 1:
+        failures.add("polygon-attr-count",
+                     "%d POLYGON_ATTR entries, expected 1"
+                     % len(polygon_attr))
+    elif entries[polygon_attr[0]][1] != POLYGON_ATTR:
+        failures.add("polygon-attr", "0x%08X, expected 0x%08X"
+                     % (entries[polygon_attr[0]][1], POLYGON_ATTR))
+
     begin = None
     if len(begins) != 1:
         failures.add("begin-count", "%d BEGIN_VTXS entries, expected 1"
@@ -178,6 +192,12 @@ def _check_shape(entries, angle, failures):
         if entries[begin][1] != GL_QUADS:
             failures.add("begin-type", "%d, expected GL_QUADS (1)"
                          % entries[begin][1])
+
+    if len(polygon_attr) == 1 and begin is not None:
+        if not polygon_attr[0] < begin:
+            failures.add("polygon-attr-order",
+                         "expected POLYGON_ATTR (%d) before BEGIN_VTXS (%d)"
+                         % (polygon_attr[0], begin))
 
     if len(teximage) == 1 and len(pltt) == 1 and begin is not None:
         if not teximage[0] < pltt[0] < begin:

@@ -109,7 +109,7 @@ def scene5_entries(angle=ANGLE):
     entries += [(0x1A, f32(value)) for value in block1]
     entries += [(0x1C, 0)] * 3
     entries += [(0x1B, 4096)] * 3
-    entries += [(0x11, 0), (0x29, 0x001F0000),
+    entries += [(0x11, 0), (0x29, 0x001F00C0),
                 (0x2A, tex.TEXIMAGE_PARAM), (0x2B, tex.PLTT_BASE)]
     entries += [(0x40, 1)]
     for texcoord in (0x00000000, 0x00008000, 0x80008000, 0x80000000):
@@ -298,6 +298,23 @@ class TextureCompareTest(unittest.TestCase):
         entries[index] = (0x2B, tex.PLTT_BASE + 1)
         self.assert_rejected(texture_file(entries=entries), "pltt-value")
 
+    def test_polygon_attr_cull_bits_zero_fails(self):
+        """Regression: cull mode 0 renders nothing on DS hardware."""
+        entries = scene5_entries()
+        index = next(i for i, entry in enumerate(entries) if entry[0] == 0x29)
+        entries[index] = (0x29, 0x001F0000)  # POLY_ALPHA(31), cull bits 0
+        self.assert_rejected(texture_file(entries=entries), "polygon-attr")
+
+    def test_polygon_attr_after_begin_fails(self):
+        entries = scene5_entries()
+        poly_index = next(i for i, entry in enumerate(entries)
+                          if entry[0] == 0x29)
+        begin = next(i for i, entry in enumerate(entries) if entry[0] == 0x40)
+        entry = entries.pop(poly_index)
+        entries.insert(begin + 1, entry)
+        self.assert_rejected(texture_file(entries=entries),
+                             "polygon-attr-order")
+
     def test_extra_perspective_group_fails(self):
         entries = scene5_entries()
         index = next(i for i, entry in enumerate(entries) if entry[0] == 0x18)
@@ -444,6 +461,16 @@ class DemoSourceCrossCheckTest(unittest.TestCase):
         match = re.search(r"uint32_t\s+pltt\s*=\s*(\d+)u;", self.source)
         self.assertIsNotNone(match, "pltt literal not found")
         self.assertEqual(int(match.group(1)), tex.PLTT_BASE)
+
+    def test_scene5_polygon_attr_literal_matches(self):
+        """The SCENE==5 branch must set POLY_ALPHA(31) | POLY_CULL_NONE."""
+        match = re.search(
+            r"#if\s+TWLHD_DEMO_SCENE\s*==\s*5\s*\n"
+            r"[^\n]*glPolyFmt\s*\(\s*POLY_ALPHA\s*\(\s*31\s*\)\s*\|\s*"
+            r"POLY_CULL_NONE\s*\)\s*;", self.source)
+        self.assertIsNotNone(match, "scene-5 glPolyFmt(POLY_ALPHA(31) | "
+                             "POLY_CULL_NONE) not found")
+        self.assertEqual(tex.POLYGON_ATTR, 0x001F00C0)
 
     def test_sizes_match_the_shared_formula(self):
         self.assertEqual(v2.tex_sizes(tex.TEXIMAGE_PARAM),
