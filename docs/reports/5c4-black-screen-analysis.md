@@ -92,7 +92,8 @@ default cube scene (`arm9v2/source/demo_frame.cpp:390-426`) from the
 ### Polygon attributes: the key factual difference
 
 `glPolyFmt` is a direct `GFX_POLY_FORMAT = params;` register write
-(`docs/reports/5c4-libnds-system-videogl.h-snippet.md:775-776`). The real
+(`/opt/devkitpro/libnds/include/nds/arm9/videoGL.h:775-776`; excerpt in
+`docs/reports/5c4-libnds-system-videogl.h-snippet.md`, section "glPolyFmt — lines 770-776"). The real
 libnds header defines the cull bits as
 (`/opt/devkitpro/libnds/include/nds/arm9/videoGL.h:187-189`):
 
@@ -366,11 +367,12 @@ Historical hypotheses now considered ruled out or subsumed:
 4. **(Answered)** `DIAGSCREEN=7` displays, `DIAGSCREEN=8` is black,
    `DIAGSCREEN=9` displays. See the outcome decoding table in §2.5 and the
    "Hardware results and conclusion" section above.
-5. For `SCENE=5`, does `DIAGSCREEN=3` (VRAM bank switch settled one vblank
-   before the first draw) change the picture? Does `DIAGSCREEN=2` (recorder
-   bypass) produce a picture?
-6. If all nine `DIAGSCREEN` variants still show a black top screen, the cause
-   is almost certainly outside the ARM9 ROM and must be investigated in the
+5. **(Answered, hardware)** `DIAGSCREEN=2` (recorder bypass) is black on the
+   cube, as are 1, 4 and 5; 6, 7 and 9 display (see "Hardware results and
+   conclusion"). `DIAGSCREEN=3` (SCENE=5 VRAM bank switch) has not been run
+   on hardware; it is moot for the black screen, whose cause is the cull bits.
+6. **(Answered)** Not all variants were black: 6, 7 and 9 displayed, so the
+   cause is inside the ARM9 ROM's draw content (cull bits 6-7 = 0), not in the
    launch environment or firmware.
 
 ---
