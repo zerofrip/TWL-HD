@@ -1112,6 +1112,38 @@ state are modelled by DeSmuME).
 
 ---
 
+## 6.7 HARDWARE result 5C-4 (2026-11-16)
+
+**HARDWARE: New 3DS running DS software in TWL mode via TWiLight Menu++
+(hb-bootstrap), not a DS Phat/Lite.** Owner-operated runs, evidence in the
+owner's photos and the dumped file (details in `RUN2_RESULTS.md`, Run 23):
+
+- Capture content: `twlhd-arm9v2-autodump-s5` dumped a 952-byte v2 file; the
+  validate step passed and `compare_texture_capture.py` PASSed: key
+  `0x0C000000`/`0x00000000`, TXDT = the 32 texel bytes, PLDT = the 32 palette
+  bytes (`scene5_texel`/`scene5_palette`). The recorder counts on the console were
+  GXCM 78 / RSTA 5, no drops, no ignored or invalid writes.
+- Black top screen, diagnosed by bisection ROMs (`DIAGSCREEN=1..9`, report
+  `docs/reports/5c4-black-screen-analysis.md`): the unmodified libnds examples
+  and a build of their draw code with our Makefile display; our cube demo did
+  not, with or without recorder and console. `glPolyFmt(POLY_ALPHA(31))` leaves
+  POLYGON_ATTR cull bits 6-7 = 0 (DS: render neither face). Adding
+  `POLY_CULL_NONE` or `POLY_CULL_BACK` makes the cube appear (cube winding is
+  correct); other projection/camera alone does not.
+- After the fix for SCENE=5 (`POLY_CULL_NONE`), both SCENE=5 ROMs show the
+  textured quad(s) with the palette colours and rotating: the VRAM LCDC upload,
+  bank switch, 16-bit stores, texture enable and palette path work on this
+  hardware (qualitative; texels were not compared pixel by pixel).
+- The autodump fired at loop frame 240 (file frame 241, angle 28672). The first
+  dump, taken at file frame 2566, was therefore not the autodump (most likely the
+  A button held during the TWiLight launch; not proven).
+
+Not shown: DS Phat/Lite behaviour; the default cube and SCENE=1..4 still carry
+cull bits 0 and render nothing on a real DS (changing them alters the recorded
+POLYGON_ATTR word and golden literals: owner decision pending).
+
+---
+
 ## 7. What cannot be claimed yet
 
 | Claim | Status |
