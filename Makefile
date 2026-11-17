@@ -1,4 +1,4 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 host-test clean arm11-diag \
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 host-test clean arm11-diag \
 	emu-expected emu-validate emu-validate-tex azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
@@ -578,11 +578,16 @@ tools/ntr_capture/build/ntr_input: tools/ntr_capture/ntr_input.c \
 test-eq2:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_eq2_compare.py'
 
+# EQ-3b suite (tools/eq3_compare.py). Run explicitly; the discover pass in
+# `test` sets EQ3_DISCOVER_SKIP so this suite is not executed twice.
+test-eq3:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_eq3_compare.py'
+
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli \
 	tests/host/build/tex_capture_cli \
-	test-eq2
-	EQ2_DISCOVER_SKIP=1 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
+	test-eq2 test-eq3
+	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:
 	$(MAKE) -C arm7 clean
