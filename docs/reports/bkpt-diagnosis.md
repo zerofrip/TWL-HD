@@ -250,7 +250,7 @@ For the other rows the branch sites are, on the matching ELF:
 | scene2 | `0x0200F55C` | newlib `setvbuf` epilogue | `0x0200C3C0` `mutexUnlock` |
 | scene3 | `0x0201C384` | not mapped in `.text` of the s3 ELF (`?? ??:0`), LR is `__libc_lock_release_recursive` | `0x020166B1` `__libc_lock_release_recursive` |
 | cube2 | `0x01FF86A0` | inside `__arm_excpt_irq` (`0x01FF8604-0x01FF86E8`); SP `0x0380FE80` is **inside the DLDI region** `0x0380B000+0x4E80` | `0x02380074` (RAM, not a ROM address) |
-| cube64/AF120 | `0x0200269A` | `common/twlhd_tex_capture.c:208` | `0x02002767` `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:215`) |
+| cube64/AF120 | `0x0200269A` | `twlhd_tex_capture_plan` epilogue (`common/twlhd_tex_capture.c:264`) | `0x02002767` `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:263`) |
 
 **The stack was not recoverable by unwinding** (FACT, and a correction of a
 first attempt): R13 at the fault points into a region that reads as all zeros,
@@ -382,7 +382,7 @@ So the "autopatch required" relation is measured for scene2 (the discriminator
 rows) and is consistent with CUBES=2 (faults 1/1 with the patch, no fault
 without it in 30 s); scene3 does not fault without the patch in 30 s but also
 presents no frame; CUBES=64 without the patch does **not** reproduce the
-`0x01FF853C`/`common/twlhd_tex_capture.c:208` fault, it reaches a different
+`0x01FF853C`/`twlhd_tex_capture_plan:263-264` fault, it reaches a different
 wild jump later.
 
 ### 3.3 The non-autodump variant, in the harness
@@ -418,8 +418,9 @@ Rebuilt as `make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64` and run through the
 diagnostic CLI. It faults too — but the comparison changes the picture
 (details in 2.1/2.2): frame **129** (the autodump frame 120 *was* reached and
 120+ frames were presented), LR `0x02002767` =
-`twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:215`), branch site
-`0x0200269A` = `common/twlhd_tex_capture.c:208`. So the record
+`twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:263`), branch site
+`0x0200269A` = the `pop {pc}` epilogue of `twlhd_tex_capture_plan`
+(`common/twlhd_tex_capture.c:264`). So the record
 "aborted before the autodump frame" (`docs/EMULATOR_VALIDATION.md:286`) does not
 describe this run: the fault is *after* the dump frame, in the texture-capture
 plan, and is a different branch site from scene2's.
@@ -471,9 +472,9 @@ rows our code is neither implicated nor excluded.
 
 **CUBES=64/AF120 is different: its branch site IS in our code (FACT, cause
 UNRESOLVED).** For that row the ring's last real PC `0x0200269A` maps by
-`addr2line` on the CUBES=64 ELF to `common/twlhd_tex_capture.c:208`, with LR
-`0x02002767` in `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:215`)
-(section 2.2). The cause of that branch is **UNRESOLVED**; nothing below scopes
+`addr2line` on the CUBES=64 ELF to `common/twlhd_tex_capture.c:264` (the
+`pop {pc}` epilogue of `twlhd_tex_capture_plan`), with LR `0x02002767` in
+`twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:263`) (section 2.2). The cause of that branch is **UNRESOLVED**; nothing below scopes
 it out, and it is the one failing row that may be a real ROM defect that could
 also occur on hardware.
 
@@ -485,13 +486,13 @@ invokes it indirectly at `:119`, `:127` and `:136`; a NULL or corrupted function
 pointer there would branch to address 0 exactly as observed. The function guards
 its own pointers on entry at `:163` (`if (!limits || !gxcm || !read || !out)
 return TWLHD_TEX_CAP_ERR_NULL;`), so this hypothesis needs a pointer or return
-address corrupted *after* that check. Caveat: in the current source `:208` is
-`if (last_write_seq[key] != write_seq) {`, not a call site; `:208`/`:215` are
-the `addr2line` result for the CUBES=64 ELF recorded in section 2.2. A fresh
-rebuild disassembles the instruction at `0x0200269A` as `pop {pc}` — a function
-return from a zeroed saved LR, not an indirect call — see
-`docs/reports/cubes64-branch0-diagnosis.md`. The mechanism is therefore
-HYPOTHESIS/UNVERIFIED, not a measured cause.
+address corrupted *after* that check. The `:208`/`:215` attributions in the
+original version of this report were an earlier wrong attribution: a fresh
+rebuild maps `0x0200269A` to `common/twlhd_tex_capture.c:264` and
+`0x02002766`/`0x02002767` to `:263`, and disassembles the instruction at
+`0x0200269A` as `pop {pc}` — a function return from a zeroed saved LR, not an
+indirect call — see `docs/reports/cubes64-branch0-diagnosis.md` section 1. The
+mechanism is therefore HYPOTHESIS/UNVERIFIED, not a measured cause.
 
 **HYPOTHESIS (not proven).**
 
@@ -587,7 +588,8 @@ Ranked by size. All are for a later stage; none is applied here.
 5. **FACT that contradicts the existing record:**
    `docs/EMULATOR_VALIDATION.md:286` describes the CUBES=64 AF=120 failure as
    "control reaching `0x01ff853c`"; the measured run reaches the autodump frame
-   and faults at frame 129 from `common/twlhd_tex_capture.c:208`. That document
+   and faults at frame 129 from `twlhd_tex_capture_plan`
+   (`common/twlhd_tex_capture.c:264`). That document
    was not edited by this task (out of scope).
 6. **Observer effect / one unexplained run.** In these runs the fault is
    reproducible to the instruction (identical registers and ring in six runs,
@@ -607,7 +609,7 @@ which is why the capture log ends with `ARM OP_BKPT triggered` — scene2 at fra
 0 from newlib `setvbuf`'s `bx r1` with `r1=0` (`0x0200F55C`, called by libnds
 `consoleInit` in the boot path), scene3 at frame 0 from a different site, cube2
 at frame 6 with SP inside the DLDI region, cube64/AF120 at frame 129 from
-`common/twlhd_tex_capture.c:208`; scene2, scene3 and cube2 never present a 3D
+`twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:264`); scene2, scene3 and cube2 never present a 3D
 frame at all, and, **for the scene2 autodump ROM in the tested configurations**,
 the fault requires DeSmuME's in-place DLDI autopatch of the ROM image (6/6 with
 it, 0/9 without); that is the only ROM the with/without discriminator ran on, and
@@ -624,7 +626,7 @@ the scene2 fault.
 **HYPOTHESIS:** for scene2/scene3 the zero return address is a stack-content
 artefact of the patched-emulator boot, not a ROM-code defect; for
 CUBES=64/AF120 the branch site is in our own `twlhd_tex_capture_plan`
-(`common/twlhd_tex_capture.c:208`, LR `:215`), where a NULL/corrupted `read`
+(`common/twlhd_tex_capture.c:264`, LR `:263`), where a NULL/corrupted `read`
 callback (`common/twlhd_tex_capture.h:65`, called at `:119,127,136`) is the
 HYPOTHESIS, so that row could be a real ROM defect. **UNVERIFIED:** the mechanism
 that turns the emulator's `.dldi` write into that zero (scene2), the CUBES=64
@@ -715,3 +717,21 @@ so the check is that nothing regressed.
   scene3/cube2. Section 2.2 (`:246-253`) and section 3.2 (`:364-386`) were not
   edited. Line refs in REQ-2/3/4 were re-derived after the edit. `TESTS: make
   test` — the docs are not parsed by the tests, so the check is no regression.
+
+- **REQ-8 (CUBES=64/AF120 line-number correction, 2026-11-18).** This is a
+  follow-up docs repair of `docs/reports/cubes64-branch0-diagnosis.md`,
+  `docs/EQ_SCENES.md` and this report. The Opus review found that the `:208`/
+  `:215` attributions for the CUBES=64 AF=120 branch site/LR were inconsistent
+  with a fresh rebuild: `arm-none-eabi-addr2line -f -i -e
+  arm9v2/twlhd-arm9v2-autodump-c64.elf 0x0200269A 0x02002766 0x02002767` maps
+  `0x0200269A` to `common/twlhd_tex_capture.c:264` and `0x02002766`/`0x02002767`
+  to `:263`. The corrected references are: `docs/reports/bkpt-diagnosis.md:253`
+  (table row), `:385`, `:421-422`, `:474-476`, `:589-591` (open item 5),
+  `:611-612`, `:628-629` (CAUSE); `docs/EQ_SCENES.md:279-280` and `:318-319`;
+  `docs/reports/cubes64-branch0-diagnosis.md` section 1 (source lines + mismatch
+  explanation) and the new requirement traceability section at the end of that
+  file. The ring evidence is also reconciled: the planner made an ordinary call
+  to `twlhd_tex_capture_layout` and returned before the `pop {pc}` loaded PC=0,
+  which is evidence against both "entered mid-loop" and "saved LR overwritten
+  later". No code, test, Makefile, tool or fixture was changed. `TESTS: make
+  test` — no regression.
