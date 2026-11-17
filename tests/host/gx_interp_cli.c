@@ -6,6 +6,10 @@
  * output vertex followed by the stats block. With --tex it also prints one
  * "tex <i> <s> <t> <param> <pltt>" line per output vertex and appends
  * tex_transform_unsupported to the stats line.
+ *
+ * --eq2 prints the integer-only interchange format read by
+ * tools/eq2_compare.py (docs/EQ2_COMPARE.md): every float field is the
+ * IEEE-754 binary32 bit pattern as 8 uppercase hex digits.
  */
 
 #include <stdio.h>
@@ -14,6 +18,12 @@
 
 #include "twlhd_gx_interp.h"
 #include "twlhd_v2_parse.h"
+
+static unsigned float_bits(float value) {
+    uint32_t bits;
+    memcpy(&bits, &value, sizeof(bits));
+    return (unsigned)bits;
+}
 
 int main(int argc, char **argv) {
     FILE *file;
@@ -31,11 +41,15 @@ int main(int argc, char **argv) {
     uint32_t capacity;
     uint32_t i;
     int want_tex = 0;
+    int want_eq2 = 0;
     const char *path = NULL;
 
     for (i = 1u; i < (uint32_t)argc; i++) {
         if (strcmp(argv[i], "--tex") == 0) {
             want_tex = 1;
+        } else if (strcmp(argv[i], "--eq2") == 0) {
+            want_eq2 = 1;
+            want_tex = 1; /* the eq2 format always carries tex state */
         } else if (!path) {
             path = argv[i];
         } else {
@@ -44,7 +58,7 @@ int main(int argc, char **argv) {
         }
     }
     if (!path) {
-        fprintf(stderr, "usage: %s [--tex] <frame_v2.bin>\n", argv[0]);
+        fprintf(stderr, "usage: %s [--tex|--eq2] <frame_v2.bin>\n", argv[0]);
         return 2;
     }
 
@@ -112,6 +126,29 @@ int main(int argc, char **argv) {
 
     gr = twlhd_gx_interpret_ex(&view, out, capacity, &out_count, &viewport,
                                &stats, tex_out);
+
+    if (want_eq2) {
+        printf("twlhd-eq2-clip 1\n");
+        printf("frame %lu\n", (unsigned long)view.frame_index);
+        printf("viewport %u %u %u %u %d\n",
+               (unsigned)viewport.x1, (unsigned)viewport.y1,
+               (unsigned)viewport.x2, (unsigned)viewport.y2,
+               viewport.present);
+        for (i = 0; i < out_count; i++) {
+            printf("v %u %08X %08X %08X %08X %08X %08X %08X %08X "
+                   "%08X %08X %lu %lu\n",
+                   (unsigned)i,
+                   float_bits(out[i].clip[0]), float_bits(out[i].clip[1]),
+                   float_bits(out[i].clip[2]), float_bits(out[i].clip[3]),
+                   float_bits(out[i].rgba[0]), float_bits(out[i].rgba[1]),
+                   float_bits(out[i].rgba[2]), float_bits(out[i].rgba[3]),
+                   float_bits(tex_out[i].s), float_bits(tex_out[i].t),
+                   (unsigned long)tex_out[i].teximage_param,
+                   (unsigned long)tex_out[i].pltt_base);
+        }
+        goto print_stats;
+    }
+
     printf("result=%s\n", twlhd_gx_result_string(gr));
     printf("viewport %u %u %u %u %d\n",
            (unsigned)viewport.x1, (unsigned)viewport.y1,
@@ -134,6 +171,7 @@ int main(int argc, char **argv) {
         }
     }
 
+print_stats:
     printf("stats commands=%lu vertices_in=%lu triangles_out=%lu "
            "quads_split=%lu dropped_incomplete=%lu ignored_outside_begin=%lu "
            "ignored_no_effect=%lu unsupported=%lu raw_fifo_skipped=%lu "
