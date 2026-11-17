@@ -1,0 +1,46 @@
+{
+  "label": "EMULATOR",
+  "note": "Pass/NOT-COMPARABLE subset of manifest.json: no FAIL row, used by tools/test_eq_scenes.py.",
+  "rows": [
+    {
+      "scene": "cube",
+      "build": "AUTODUMP_FRAME=240",
+      "harness": "../eq2/harness_cube_f240.txt",
+      "ours": "../eq2/ours_cube_f240.txt",
+      "expected_polys": 6,
+      "expected_verts": 24,
+      "eq3": "valid",
+      "eq3_harness": "../eq3/harness_cube_f240.ppm",
+      "eq3_ours": "../eq3/ours_cube_f240_top.ppm"
+    },
+    {
+      "scene": "scene1",
+      "build": "SCENE=1 AUTODUMP_FRAME=240",
+      "harness": "harness_s1_f240.txt",
+      "ours": "ours_s1_f240.txt",
+      "expected_polys": 8,
+      "expected_verts": 24,
+      "eq3": "not-comparable",
+      "eq3_reason": "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes cannot model 24 distinct red shades"
+    },
+    {
+      "scene": "scene2",
+      "build": "SCENE=2 AUTODUMP_FRAME=240",
+      "harness": "harness_s2_f240.txt",
+      "expected_polys": 10,
+      "expected_verts": 30,
+      "not_comparable": "DeSmuME capture aborted with ARM OP_BKPT before the autodump frame; no our-side v2 stream, so EQ-2 cannot run (the harness reference itself succeeded)",
+      "eq3": "not-comparable"
+    },
+    {
+      "scene": "scene4",
+      "build": "SCENE=4 AUTODUMP_FRAME=240",
+      "harness": "harness_s4_f240.txt",
+      "ours": "ours_s4_f240.txt",
+      "expected_polys": 4,
+      "expected_verts": 16,
+      "eq3": "not-comparable",
+      "eq3_reason": "blended pixels need the design section 5.1 blended tolerance 16 (alpha convention a/31 vs (a+1)/32 UNVERIFIED); eq3 models neither blending nor the alpha-0 wireframe (design 2.3)"
+    }
+  ]
+}
