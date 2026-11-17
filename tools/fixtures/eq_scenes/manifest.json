@@ -29,16 +29,16 @@
       "harness": "harness_s2_f240.txt",
       "expected_polys": 10,
       "expected_verts": 30,
-      "not_comparable": "DeSmuME capture aborted with ARM OP_BKPT before the autodump frame; no our-side v2 stream, so EQ-2 cannot run (the harness reference itself succeeded)",
+      "not_comparable": "the capture aborted with ARM OP_BKPT triggered before the autodump frame (no recorder/demo_frame limit is reached, and the faulting PC was not measurable here; docs/EQ_SCENES.md section 3); no our-side v2 stream, so EQ-2 cannot run (the harness reference itself succeeded)",
       "eq3": "not-comparable",
-      "eq3_reason": "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes cannot model 24 distinct red shades"
+      "eq3_reason": "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes cannot model 12 distinct red shades"
     },
     {
       "scene": "scene3",
       "build": "SCENE=3 AUTODUMP_FRAME=240",
-      "not_comparable": "the SCENE=3 ROM never presents a 3D frame in DeSmuME (harness exit 1: 'ROM never presented a 3D frame within 1200 frames'; the capture logs ARM OP_BKPT), so there is no reference geometry",
+      "not_comparable": "the SCENE=3 ROM presents no 3D frame in the harness (exit 1: 'ROM never presented a 3D frame within 1200 frames') and the capture logs ARM OP_BKPT, so there is no reference geometry",
       "eq3": "not-comparable",
-      "eq3_reason": "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes cannot model 24 distinct red shades"
+      "eq3_reason": "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes cannot model 12 distinct red shades"
     },
     {
       "scene": "scene4",

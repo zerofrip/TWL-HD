@@ -29,7 +29,7 @@
       "harness": "harness_s2_f240.txt",
       "expected_polys": 10,
       "expected_verts": 30,
-      "not_comparable": "DeSmuME capture aborted with ARM OP_BKPT before the autodump frame; no our-side v2 stream, so EQ-2 cannot run (the harness reference itself succeeded)",
+      "not_comparable": "the capture aborted with ARM OP_BKPT triggered before the autodump frame (no recorder/demo_frame limit is reached, and the faulting PC was not measurable here; docs/EQ_SCENES.md section 3); no our-side v2 stream, so EQ-2 cannot run (the harness reference itself succeeded)",
       "eq3": "not-comparable"
     },
     {
