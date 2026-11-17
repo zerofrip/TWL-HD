@@ -47,6 +47,23 @@ separately.
 Only the first `cmd_count` slots are read; the remaining ring-buffer slots are
 zero-fill.
 
+## EQ-2b geometry comparison
+
+`eq2_compare.py` compares our GX interpreter's clip-space output with a geometry
+dump from the out-of-tree GPL DeSmuME harness (`format geometry-dump 1`), per
+polygon and per vertex, under the tolerances of
+`docs/EQUALITY_CHECK_DESIGN.md` section 5.2. It reads only the documented text
+format; no harness or DeSmuME source lives here. See `docs/EQ2_COMPARE.md` for
+both interchange formats, the unit conversions and the frame alignment.
+
+```sh
+tests/host/build/gx_interp_cli --eq2 frame_v2.bin > ours.txt
+python3 tools/eq2_compare.py harness_dump.txt ours.txt
+```
+
+Exit codes: 0 within tolerance, 1 mismatch (worst deviation per field with
+polygon/vertex indices), 2 usage or format error.
+
 ## Errors
 
 Malformed input exits non-zero with a one-line message instead of a traceback:
