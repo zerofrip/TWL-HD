@@ -455,16 +455,19 @@ plan, and is a different branch site from scene2's.
 5. `setvbuf`'s return-address slot reads 0, and the 16 words around SP read 0,
    so the return address is not recoverable from the stack.
 
-**Not our ROM code's write path for the scene2, scene3 and cube2 rows (FACT for
-the tested configurations):** no recorder capacity is near a limit (unchanged
-from the existing record, `common/twlhd_gx_record.h:30,41-45`), the non-autodump
-scene2 ROM presents frame 242, and scene2's fault happens before any 3D frame,
-before `dump_frame`'s frame 240 trigger (`arm9v2/source/main.cpp:253-259`) and
-before any DLDI-region code executes (0 executions in
-`0x03800000-0x03810000` in the first 120 000 records of the trace). scene3's and
-cube2's branch sites are newlib/calico startup, an unmapped s3 site, and
-`__arm_excpt_irq` with SP inside the DLDI region (section 2.2), none of them our
-code either.
+**Not our ROM code's write path for the scene2 row (FACT for the tested
+configurations):** no recorder capacity is near a limit (unchanged from the
+existing record, `common/twlhd_gx_record.h:30,41-45`), the non-autodump scene2
+ROM presents frame 242, and scene2's fault happens before any 3D frame, before
+`dump_frame`'s frame 240 trigger (`arm9v2/source/main.cpp:253-259`) and before
+any DLDI-region code executes (0 executions in
+`0x03800000-0x03810000` in the first 120 000 records of the scene2 trace). The
+scene3 and cube2 branch sites are **UNVERIFIED** (open items 3-4): scene3's site
+`0x0201C384` is unmapped in the s3 ELF (`?? ??:0`, section 2.2); cube2's branch
+is inside calico `__arm_excpt_irq` with LR `0x02380074` an unmapped RAM address
+and SP `0x0380FE80` inside the DLDI region (section 2.2), and an IRQ dispatcher
+branching to 0 could be a NULL handler that our code registered. For those two
+rows our code is neither implicated nor excluded.
 
 **CUBES=64/AF120 is different: its branch site IS in our code (FACT, cause
 UNRESOLVED).** For that row the ring's last real PC `0x0200269A` maps by
@@ -549,9 +552,10 @@ Ranked by size. All are for a later stage; none is applied here.
    either, so the autodump ROM cannot write; the real capture fix would be to
    have the ROM write through a path that neither needs the emulator's patched
    DLDI driver nor a Slot-2 card.
-4. **Do not** add a BKPT/assert workaround in our ROM code. For the scene2,
-   scene3 and cube2 rows the measurements implicate nothing in `arm9v2/`,
-   `common/` or `tools/` (section 4). For CUBES=64/AF120 the implicated file
+4. **Do not** add a BKPT/assert workaround in our ROM code. For the scene2 row
+   the measurements implicate nothing in `arm9v2/`, `common/` or `tools/`
+   (section 4); the scene3 and cube2 sites are not attributed (UNVERIFIED,
+   section 4, open items 3-4). For CUBES=64/AF120 the implicated file
    **is** `common/twlhd_tex_capture.c` (branch site `:208`, LR in
    `twlhd_tex_capture_plan` at `:215`) and its cause is UNRESOLVED, so settle it
    with the watchpoint path in item 2 before changing anything; the
@@ -607,9 +611,10 @@ the fault requires DeSmuME's in-place DLDI autopatch of the ROM image (6/6 with
 it, 0/9 without); that is the only ROM the with/without discriminator ran on, and
 the scratch run `run-pcB` (scene2, autopatch on, 78 swap prints, no BKPT,
 unrecorded extra variable; open item 6) is an unexplained counter-example to the
-blanket claim. scene3 and CUBES=2 were measured with the patch only (1/1 each,
-plus stock 2/2 each) and CUBES=64 with the patch in one run (the AF120 analogue);
-this repair's patch-free runs (section 3.2) show CUBES=2 faulting only with the
+blanket claim. scene3 and CUBES=2 were **not part of the original with/without
+discriminator** (with the patch: 1/1 each, plus stock 2/2 each; CUBES=64 with the
+patch in one run, the AF120 analogue); this repair's patch-free runs (section
+3.2) show CUBES=2 faulting only with the
 patch, scene3 not faulting but also presenting no frame,
 and CUBES=64 not reaching the `0x01FF853C` fault at all — it wild-jumps to
 `PC=0x0500049C` at ~frame 490 instead. The patched bytes alone do not reproduce
@@ -644,23 +649,23 @@ so the check is that nothing regressed.
   the tested configurations, with `run-pcB` named.
 - **REQ-2 (autopatch claim applied to every row, `docs/EQ_SCENES.md`).** Before,
   the section 5 bullet said the emulator's in-place DLDI auto-patch "is required
-  for it" for the scene2/scene3/cubes rows. After, `docs/EQ_SCENES.md:308-325`
+  for it" for the scene2/scene3/cubes rows. After, `docs/EQ_SCENES.md:308-326`
   limits the measured requirement to scene2 in the tested configurations
-  (`:318`), names `run-pcB` as the unexplained counter-example (`:319-320`),
-  states that the CUBES=64 AF=120 branch site is in our code (`:315-317`), and
-  reports this repair's patch-free results (`:320-325`; the runs themselves in
+  (`:319-320`), names `run-pcB` as the unexplained counter-example (`:320-321`),
+  states that the CUBES=64 AF=120 branch site is in our code (`:316-318`), and
+  reports this repair's patch-free results (`:321-326`; the runs themselves in
   section 3.2 of this report, `:364-386`).
 - **REQ-3 (the "not our ROM code" claim contradicts the measured CUBES=64
   site).** Before, section 4 said "**Not our ROM code's write path (FACT for the
   tested configurations)**" and section 5 item 4 said "nothing in `arm9v2/`,
   `common/` or `tools/` is implicated". After, the section 4 heading is scoped to
-  the scene2/scene3/cube2 rows (`:458-467`), a separate paragraph states that the
+  the scene2 row (`:458-470`), a separate paragraph states that the
   CUBES=64/AF120 branch site `0x0200269A` is `common/twlhd_tex_capture.c:208`
   with LR in `twlhd_tex_capture_plan` (`:215`) and that its cause is
-  **UNRESOLVED** (`:469-475`), the NULL/corrupted `read` callback mechanism is
+  **UNRESOLVED** (`:472-478`), the NULL/corrupted `read` callback mechanism is
   HYPOTHESIS only with the `:119,127,136` / `:163` code lines and the
-  addr2line-vs-current-source caveat (`:477-489`), and §5 item 4 carries the
-  same scope (`:552-558`).
+  addr2line-vs-current-source caveat (`:480-492`), and §5 item 4 carries the
+  same scope (`:555-563`).
 - **REQ-4 (CAUSE overclaim and unnamed ROMs in the 3.2 table).** Before, the
   CAUSE FACT said "the fault requires DeSmuME's in-place DLDI autopatch of the
   ROM image (6/6 with it, 0/9 without)" for every failing ROM, and the 3.2 table
@@ -669,7 +674,7 @@ so the check is that nothing regressed.
   (`:318-323`), FACT 1 is scoped to scene2 (`:333-335`), §4 FACT 4 is scoped with
   `run-pcB` (`:445-453`), and the CAUSE FACT restricts the requirement to the
   scene2 autodump ROM, names `run-pcB` and the other rows' status
-  (`:605-616`).
+  (`:609-621`).
 - **REQ-5 (typo).** Before, `:182` wrote the CPU name with a `C` where the `M`
   belongs (`ARC` + `7`); after it reads "ARM7 is never involved: `cpu=ARM9` in
   every row."
@@ -681,3 +686,30 @@ so the check is that nothing regressed.
   per-ROM results and the script's exit-1-on-missing-`AUTO-PATCHING` caveat are
   in section 3.2 (`:364-386`). No result was invented; nothing was run on
   hardware.
+- **REQ-7 (third repair: "not our code" overclaims for scene3 and cube2).** Four
+  defects fixed, docs only, every measured fact kept (PCs, LRs, run counts,
+  SHA-256s). (a) §4 heading and paragraph: before, "Not our ROM code's write path
+  for the scene2, scene3 and cube2 rows (FACT…)" and "…an unmapped s3 site, and
+  `__arm_excpt_irq` … (section 2.2), none of them our code either"; after, the
+  FACT covers the scene2 row only (`:458-470`), the 0-DLDI-executions fact is
+  scoped to the scene2 trace, and scene3/cube2 are stated **UNVERIFIED** with
+  the unmapped s3 site `0x0201C384`, the calico `__arm_excpt_irq` context, the
+  unmapped RAM LR `0x02380074`, and the possible NULL-handler registration, so
+  our code is "neither implicated nor excluded". (b) §5 item 4: before, the
+  measurements "implicate nothing" for "the scene2, scene3 and cube2 rows";
+  after, only scene2 is attributed and scene3/cube2 are "not attributed
+  (UNVERIFIED)" (`:555-563`). (c) `docs/EQ_SCENES.md:314-316`: before, the
+  branch sites for scene2/scene3/CUBES=2 were "newlib/calico startup, an unmapped
+  site and the calico exception handler — not our code"; after, only scene2's
+  site (newlib `setvbuf`) is stated as outside our code and scene3/CUBES=2 read
+  "not attributed (UNVERIFIED, see the report's open items 3-4)". (d) CAUSE
+  paragraph (`:614-618`): before, "scene3 and CUBES=2 were measured with the
+  patch only (1/1 each, plus stock 2/2 each)", which contradicted the patch-free
+  runs cited next; after, they "were **not part of the original with/without
+  discriminator**" with the 1/1 and 2/2 counts and the CUBES=64 AF120 analogue
+  kept as measured facts, deferring to section 3.2 (`:364-386`) for the
+  patch-free results. Labels follow the policy at `:10-13`; the consistency
+  anchor is open items 3-4 (`:577-584`), which already said UNVERIFIED for
+  scene3/cube2. Section 2.2 (`:246-253`) and section 3.2 (`:364-386`) were not
+  edited. Line refs in REQ-2/3/4 were re-derived after the edit. `TESTS: make
+  test` — the docs are not parsed by the tests, so the check is no regression.
