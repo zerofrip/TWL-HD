@@ -730,8 +730,10 @@ so the check is that nothing regressed.
   `:611-612`, `:628-629` (CAUSE); `docs/EQ_SCENES.md:279-280` and `:318-319`;
   `docs/reports/cubes64-branch0-diagnosis.md` section 1 (source lines + mismatch
   explanation) and the new requirement traceability section at the end of that
-  file. The ring evidence is also reconciled: the planner made an ordinary call
-  to `twlhd_tex_capture_layout` and returned before the `pop {pc}` loaded PC=0,
-  which is evidence against both "entered mid-loop" and "saved LR overwritten
-  later". No code, test, Makefile, tool or fixture was changed. `TESTS: make
+  file. The ring evidence is also reconciled: the disassembly shows the `bl` at
+  `0x02002762` calling `twlhd_tex_capture_layout`, and the ring shows the return
+  to `0x02002766` (LR `0x02002767`), the `b.n` to the shared epilogue, and the
+  `pop {pc}` at `0x0200269A` loading a saved LR that was already `0`. The 16-entry
+  ring window does not show whether the planner ran its full body and is not
+  evidence against "saved LR overwritten later". No code, test, Makefile, tool or fixture was changed. `TESTS: make
   test` — no regression.
