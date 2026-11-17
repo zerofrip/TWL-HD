@@ -179,7 +179,7 @@ Four facts fall out of the ring, which is chronological (oldest first):
   scene2/scene3/cube2 — so those ROMs never present a 3D frame. The harness
   record ("scene3 presents no 3D frame even there") is confirmed for the
   emulator side (FACT).
-- ARC7 is never involved: `cpu=ARM9` in every row.
+- ARM7 is never involved: `cpu=ARM9` in every row.
 
 ### 2.2 Mapping (`arm-none-eabi-addr2line -f -e arm9v2/twlhd-arm9v2-autodump-s2.elf`)
 
@@ -305,15 +305,22 @@ zero there.
 Every combination was run through the same script and CLI. Fault counts are
 runs that printed `ARM OP_BKPT`:
 
-| configuration | emulated ROM patched? | faults | note |
-|---|---|---|---|
-| `--cflash-image` (documented path), no extra env | yes | **6/6** scene2 (`run-s2img`, `run-s2img2`, `run-rep-img1..3`, `f-s2b`), 1/1 scene3, 1/1 cube2; the **stock** CLI adds 2/2 (scene2), 2/2 (scene3), 2/2 (cube2) | identical PC/registers every run |
-| `TWLHD_NODLDI=1 --cflash-image` | no | **0/4** | 98-101 swaps printed, no BKPT |
-| `--cflash-path <dir>` (PassME 0x08, no patch) | no | **0/1** | 139 swaps, no BKPT, writes nothing |
-| `TWLHD_SCRATCHPATCH=1 --cflash-image` (patch a throwaway copy) | no | **0/1** | 120 swaps, no BKPT |
-| patched image fed **as the input file**, no Slot-2 device | n/a | **0/1** | 240 swaps, no BKPT |
-| patched image + `--cflash-image` + `TWLHD_NODLDI=1` | bytes present, patch act not repeated | **0/1** | 240 swaps, no BKPT |
-| unpatched ROM + `--cflash-image` + `TWLHD_NODLDI=1` | no | **0/1** | 239 swaps (control) |
+| ROM (from each run's `ROM crc` log line) | configuration | emulated ROM patched? | faults | note |
+|---|---|---|---|---|
+| scene2 `twlhd-arm9v2-autodump-s2.nds` (`F80EC60B`), scene3 (`45ABC2FF`), cube2 (`33A1AD3F`) | `--cflash-image` (documented path), no extra env | yes | **6/6** scene2 (`run-s2img`, `run-s2img2`, `run-rep-img1..3`, `f-s2b`), 1/1 scene3, 1/1 cube2; the **stock** CLI adds 2/2 (scene2), 2/2 (scene3), 2/2 (cube2) | identical PC/registers every run |
+| scene2 autodump (`F80EC60B`) | `TWLHD_NODLDI=1 --cflash-image` | no | **0/4** | 98-101 swaps printed, no BKPT |
+| scene2 autodump (`F80EC60B`) | `--cflash-path <dir>` (PassME 0x08, no patch) | no | **0/1** | 139 swaps, no BKPT, writes nothing |
+| scene2 autodump (`F80EC60B`) | `TWLHD_SCRATCHPATCH=1 --cflash-image` (patch a throwaway copy) | no | **0/1** | 120 swaps, no BKPT |
+| patched scene2 image (`8370E1B5`) | patched image fed **as the input file**, no Slot-2 device | n/a | **0/1** | 240 swaps, no BKPT |
+| patched scene2 image (`8370E1B5`) | patched image + `--cflash-image` + `TWLHD_NODLDI=1` | bytes present, patch act not repeated | **0/1** | 240 swaps, no BKPT |
+| scene2 autodump (`F80EC60B`) | unpatched ROM + `--cflash-image` + `TWLHD_NODLDI=1` | no | **0/1** | 239 swaps (control) |
+
+The ROM column is a FACT read from the `ROM crc:` line DeSmuME prints in each
+run's `desmume.log`: every unpatched/scene2 row logs `F80EC60B` (the scene2
+autodump ROM, the same identification open item 6 makes), and the two
+patched-image rows log `8370E1B5`, i.e. they fed the `TWLHD_DUMPROM` patched
+copy as the input file, as the configuration column says. None of those runs
+logged `AUTO-PATCHING DLDI`.
 
 One scratch run left by the earlier attempt is **excluded** from these counts
 because its configuration was not recorded: `run-pcB` (`ROM crc F80EC60B`, i.e.
@@ -323,9 +330,9 @@ observer-effect knob (open item 6).
 
 Two further FACTs from this table:
 
-1. The fault needs the **emulator's in-place patch of the ROM image**, not the
-   patched bytes: the same bytes fed as the input file (or present with the
-   patch disabled) do not fault.
+1. For scene2, the fault needs the **emulator's in-place patch of the ROM
+   image**, not the patched bytes: the same bytes fed as the input file (or
+   present with the patch disabled) do not fault.
 2. The patch itself does not touch code. Diffing the emulator's patched ROM dump
    (`TWLHD_DUMPROM`) against the file on disk:
 
@@ -354,6 +361,30 @@ returns at that gate (`main.cpp:136-142`) and no file is ever opened — which i
 also why that configuration cannot fault: the ROM never faults before the mount
 point at all. UNVERIFIED: a direct print of `fatInitDefault()`'s result.
 
+**Without the patch — scene3, CUBES=2 and CUBES=64 (FACT, real output, this
+repair's runs, 2026-11-17).** The three ROMs were rebuilt with the documented
+variables (`SCENE=3 AUTODUMP_FRAME=240`, `CUBES=2 AUTODUMP_FRAME=240`,
+`CUBES=64 AUTODUMP_FRAME=120`; the CUBES=2 build's SHA-256
+`703dcad6…` matches `tools/fixtures/eq_scenes/README.md:40`) and run with the
+same method as the table above: `TWLHD_NODLDI=1`, the documented capture
+script, the same scratch CLI, `DESMUME_TIMEOUT=30`. The script itself exits 1
+because it requires the `AUTO-PATCHING DLDI` log line that `TWLHD_NODLDI=1`
+suppresses; the measurement is the emulator log, and no run logged
+`AUTO-PATCHING DLDI` (the same shape as the `0/4` row above).
+
+| ROM (rebuilt, `ROM crc` in log) | `ARM OP_BKPT` | swap prints | outcome |
+|---|---|---|---|
+| scene3 autodump (`45ABC2FF`) | 0 | 0 | no fault in 30 s, but no 3D frame presented either (scene3 presents none in the harness too — the scene3 row in section 3 of `docs/EQ_SCENES.md`) |
+| CUBES=2 autodump (`33A1AD3F`) | 0 | to `n=30120` (frame 30120) | no fault in 30 s; frames present continuously |
+| CUBES=64 autodump (`1B79DB9D`) | 0 | to `n=480` (frame 490) | **still fails, differently**: at ~frame 490 the log shows `ARM9: Undefined instruction: 0x3C000000 PC=0x0500049C`; no swap print after it, while the `TWLHD_FRAME` counter runs on to 10620. Reproduced in a second run at the same PC. Cause UNVERIFIED. |
+
+So the "autopatch required" relation is measured for scene2 (the discriminator
+rows) and is consistent with CUBES=2 (faults 1/1 with the patch, no fault
+without it in 30 s); scene3 does not fault without the patch in 30 s but also
+presents no frame; CUBES=64 without the patch does **not** reproduce the
+`0x01FF853C`/`common/twlhd_tex_capture.c:208` fault, it reaches a different
+wild jump later.
+
 ### 3.3 The non-autodump variant, in the harness
 
 `make -C arm9v2 SCENE=2` (no `AUTODUMP_FRAME`, so no `fatInitDefault` and no
@@ -377,8 +408,9 @@ FACT: scene2's scene code, geometry and submission work; the ROM presents frame
 242 and its geometry dump parses. The same ROM through the capture script
 (`--cflash-image`, no autodump code, but the emulator still autopatches) also
 runs to 108 swap prints without a BKPT. So neither `demo_frame`'s scene-2 path
-nor the geometry/write-less path is implicated; the fault is reached only in the
-autodump configurations **and** only when the emulator patches the ROM.
+nor the geometry/write-less path is implicated for this ROM; scene2's fault is
+reached only in the autodump configuration **and** only when the emulator patches
+the ROM.
 
 ### 3.4 The CUBES=64 AF=120 analogue
 
@@ -410,21 +442,51 @@ plan, and is a different branch site from scene2's.
    with `r1 = 0`, called from libnds `consoleInit` (`source/arm9/console.c:504`)
    via our `consoleDemoInit()` at `arm9v2/source/main.cpp:183`; the chain runs
    through calico's recursive lock release (`mutex.c:143`, `:57`, `:82`).
-4. The failure correlates with the **emulator's DLDI autopatch act** (it faults in
-   all six plain runs with the patch, none of the nine runs without it), not
-   with the patched bytes (0/2 with the same bytes present but the patch not
-   performed) and not with the scene code alone (the non-autodump scene-2 ROM
-   presents frame 242 in the harness).
+4. For the scene2 autodump ROM, the failure correlates with the **emulator's
+   DLDI autopatch act** (it faults in all six plain runs with the patch, none of
+   the nine runs without it — one scratch run, `run-pcB`, is an unexplained
+   counter-example, section 3.2), not with the patched bytes (0/2 with the same
+   bytes present but the patch not performed) and not with the scene code alone
+   (the non-autodump scene-2 ROM presents frame 242 in the harness). scene3 and
+   CUBES=2/64 were not part of that discriminator; section 3.2 gives this
+   repair's patch-free runs for them (CUBES=2: no fault in 30 s; scene3: no
+   fault, no frame; CUBES=64: no `0x01FF853C` fault, a different wild jump at
+   `PC=0x0500049C`).
 5. `setvbuf`'s return-address slot reads 0, and the 16 words around SP read 0,
    so the return address is not recoverable from the stack.
 
-**Not our ROM code's write path (FACT for the tested configurations):** no
-recorder capacity is near a limit (unchanged from the existing record,
-`common/twlhd_gx_record.h:30,41-45`), the non-autodump scene2 ROM presents frame
-242, and scene2's fault happens before any 3D frame, before `dump_frame`'s frame
-240 trigger (`arm9v2/source/main.cpp:253-259`) and before any DLDI-region code
-executes (0 executions in `0x03800000-0x03810000` in the first 120 000 records
-of the trace).
+**Not our ROM code's write path for the scene2, scene3 and cube2 rows (FACT for
+the tested configurations):** no recorder capacity is near a limit (unchanged
+from the existing record, `common/twlhd_gx_record.h:30,41-45`), the non-autodump
+scene2 ROM presents frame 242, and scene2's fault happens before any 3D frame,
+before `dump_frame`'s frame 240 trigger (`arm9v2/source/main.cpp:253-259`) and
+before any DLDI-region code executes (0 executions in
+`0x03800000-0x03810000` in the first 120 000 records of the trace). scene3's and
+cube2's branch sites are newlib/calico startup, an unmapped s3 site, and
+`__arm_excpt_irq` with SP inside the DLDI region (section 2.2), none of them our
+code either.
+
+**CUBES=64/AF120 is different: its branch site IS in our code (FACT, cause
+UNRESOLVED).** For that row the ring's last real PC `0x0200269A` maps by
+`addr2line` on the CUBES=64 ELF to `common/twlhd_tex_capture.c:208`, with LR
+`0x02002767` in `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:215`)
+(section 2.2). The cause of that branch is **UNRESOLVED**; nothing below scopes
+it out, and it is the one failing row that may be a real ROM defect that could
+also occur on hardware.
+
+**HYPOTHESIS — the CUBES=64/AF120 mechanism (not measured, could be a ROM
+defect).** `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:144`) receives
+the `read` callback (`TwlhdTexCapReadFn`, `common/twlhd_tex_capture.h:65`) and
+passes it to `cap_classify_key` (`common/twlhd_tex_capture.c:223-225`), which
+invokes it indirectly at `:119`, `:127` and `:136`; a NULL or corrupted function
+pointer there would branch to address 0 exactly as observed. The function guards
+its own pointers on entry at `:163` (`if (!limits || !gxcm || !read || !out)
+return TWLHD_TEX_CAP_ERR_NULL;`), so this hypothesis needs a pointer or return
+address corrupted *after* that check. Caveat: in the current source `:208` is
+`if (last_write_seq[key] != write_seq) {`, not a call site; `:208`/`:215` are
+the `addr2line` result for the CUBES=64 ELF recorded in section 2.2, and the
+instruction at `0x0200269A` was never disassembled. The mechanism is therefore
+HYPOTHESIS/UNVERIFIED, not a measured cause.
 
 **HYPOTHESIS (not proven).**
 
@@ -432,10 +494,11 @@ of the trace).
   zero in scene2's boot and holds the real LR in scene1's), rather than a
   corrupted SP: SP is a plausible 0x02FF3E18 (DTCM) in scene2 and the trace
   shows well-formed call/return pairs around it.
-- That the causal link from "DeSmuME wrote the DLDI section in place" to "a guest
-  stack slot reads 0" is an emulator load-time/ordering effect rather than a ROM
-  bug: the bytes that change are only the 16 KB `.dldi` copy, and the same bytes
-  in the same place do not reproduce it. The mechanism is **UNVERIFIED**.
+- That, for scene2, the causal link from "DeSmuME wrote the DLDI section in
+  place" to "a guest stack slot reads 0" is an emulator load-time/ordering effect
+  rather than a ROM bug: the bytes that change are only the 16 KB `.dldi` copy,
+  and the same bytes in the same place do not reproduce it. The mechanism is
+  **UNVERIFIED**.
 - That `--cflash-path` writes nothing because `fatInitDefault()` fails without a
   driver (section 3.2).
 
@@ -449,14 +512,17 @@ reaches frame 1620 after the BKPT). On real hardware `bkpt` is likewise
 not have a working capture either — but the *reason* it reaches `bkpt` there is
 unknown.
 
-**Real hardware (HYPOTHESIS, not run):** the same BKPT is **not** expected on a
-real DS, because the faulting step is a branch to address 0 in code that the
-hardware executes from a different memory state, and the fault needs DeSmuME's
-autopatch act. The experiment that would settle it: run the scene2 autodump ROM
-from the flashcard on hardware and watch the bottom-screen frame counter and the
-SD/flash write — a written `twlhd_frame_v2.bin` would prove the fault is
-emulator-only. That experiment was **not** run (out of scope: no console/SD
-action).
+**Real hardware (HYPOTHESIS, not run):** for the scene2/scene3/cube2 rows the
+same BKPT is **not** expected on a real DS, because the faulting step is a
+branch to address 0 in code that the hardware executes from a different memory
+state, and those faults need DeSmuME's autopatch act. That expectation does not
+cover CUBES=64/AF120: its branch is inside our own
+`twlhd_tex_capture_plan`, so a hardware occurrence of that row cannot be
+excluded (HYPOTHESIS; the mechanism is in section 4). The experiment that would
+settle it: run the scene2 autodump ROM from the flashcard on hardware and watch
+the bottom-screen frame counter and the SD/flash write — a written
+`twlhd_frame_v2.bin` would prove the fault is emulator-only. That experiment was
+**not** run (out of scope: no console/SD action).
 
 ---
 
@@ -483,9 +549,14 @@ Ranked by size. All are for a later stage; none is applied here.
    either, so the autodump ROM cannot write; the real capture fix would be to
    have the ROM write through a path that neither needs the emulator's patched
    DLDI driver nor a Slot-2 card.
-4. **Do not** add a BKPT/assert workaround in our ROM code: nothing in
-   `arm9v2/`, `common/` or `tools/` is implicated by the measurements (section
-   4).
+4. **Do not** add a BKPT/assert workaround in our ROM code. For the scene2,
+   scene3 and cube2 rows the measurements implicate nothing in `arm9v2/`,
+   `common/` or `tools/` (section 4). For CUBES=64/AF120 the implicated file
+   **is** `common/twlhd_tex_capture.c` (branch site `:208`, LR in
+   `twlhd_tex_capture_plan` at `:215`) and its cause is UNRESOLVED, so settle it
+   with the watchpoint path in item 2 before changing anything; the
+   NULL/corrupted `read` callback (`common/twlhd_tex_capture.h:65`, called at
+   `common/twlhd_tex_capture.c:119,127,136`) is a HYPOTHESIS only.
 
 ---
 
@@ -495,9 +566,10 @@ Ranked by size. All are for a later stage; none is applied here.
    for scene1.** The slot address is known from the trace (`SP` at the
    `pop {r1}`); a watchpoint run (recommendation 2) would settle it.
 2. **UNVERIFIED — the causal step from DeSmuME's in-place `.dldi` write to that
-   slot.** The patch act is required (6/6 vs 0/9, open item 6 for the one
-   exception) and its byte footprint is confined to the DLDI section (1630
-   bytes, measured), so the link is not through ROM content.
+   slot.** The patch act is required for scene2 in the tested configurations
+   (6/6 vs 0/9; open item 6 for `run-pcB`, the one exception) and its byte
+   footprint is confined to the DLDI section (1630 bytes, measured), so the link
+   is not through ROM content.
 3. **UNVERIFIED — scene3.** Its branch site `0x0201C384` is not mapped in the
    s3 ELF's `.text` and its LR is `__libc_lock_release_recursive`; it is the
    same "branch to 0" shape as scene2 but a different site. Treat scene3 as a
@@ -530,10 +602,82 @@ which is why the capture log ends with `ARM OP_BKPT triggered` — scene2 at fra
 `consoleInit` in the boot path), scene3 at frame 0 from a different site, cube2
 at frame 6 with SP inside the DLDI region, cube64/AF120 at frame 129 from
 `common/twlhd_tex_capture.c:208`; scene2, scene3 and cube2 never present a 3D
-frame at all, and the fault requires DeSmuME's in-place DLDI autopatch of the
-ROM image (6/6 with it, 0/9 without); the patched bytes alone do not reproduce
-it.
-**HYPOTHESIS:** the zero return address is a stack-content artefact of the
-patched-emulator boot, not a ROM-code defect; **UNVERIFIED:** the mechanism that
-turns the emulator's `.dldi` write into that zero, and therefore whether real
-hardware would fault (expected: **no**, HYPOTHESIS).
+frame at all, and, **for the scene2 autodump ROM in the tested configurations**,
+the fault requires DeSmuME's in-place DLDI autopatch of the ROM image (6/6 with
+it, 0/9 without); that is the only ROM the with/without discriminator ran on, and
+the scratch run `run-pcB` (scene2, autopatch on, 78 swap prints, no BKPT,
+unrecorded extra variable; open item 6) is an unexplained counter-example to the
+blanket claim. scene3 and CUBES=2 were measured with the patch only (1/1 each,
+plus stock 2/2 each) and CUBES=64 with the patch in one run (the AF120 analogue);
+this repair's patch-free runs (section 3.2) show CUBES=2 faulting only with the
+patch, scene3 not faulting but also presenting no frame,
+and CUBES=64 not reaching the `0x01FF853C` fault at all — it wild-jumps to
+`PC=0x0500049C` at ~frame 490 instead. The patched bytes alone do not reproduce
+the scene2 fault.
+**HYPOTHESIS:** for scene2/scene3 the zero return address is a stack-content
+artefact of the patched-emulator boot, not a ROM-code defect; for
+CUBES=64/AF120 the branch site is in our own `twlhd_tex_capture_plan`
+(`common/twlhd_tex_capture.c:208`, LR `:215`), where a NULL/corrupted `read`
+callback (`common/twlhd_tex_capture.h:65`, called at `:119,127,136`) is the
+HYPOTHESIS, so that row could be a real ROM defect. **UNVERIFIED:** the mechanism
+that turns the emulator's `.dldi` write into that zero (scene2), the CUBES=64
+mechanism, and therefore whether real hardware would fault (expected: **no** for
+scene2/scene3/cube2, HYPOTHESIS; not excluded for CUBES=64).
+
+---
+
+## Requirement traceability (docs repair, 2026-11-17)
+
+Docs-only repair of this report and `docs/EQ_SCENES.md`; no code, test, ROM
+source, fixture or emulator file changed. Line numbers are in the repaired
+files. `TESTS: make test` for every item; the docs are not parsed by the tests,
+so the check is that nothing regressed.
+
+- **REQ-1 (hypothesis-as-fact, `docs/EQ_SCENES.md`).** Before, the scene2
+  paragraph ended "…and that the ROM's own bytes are not sufficient, so the
+  remaining gap is emulator-side."; after, `docs/EQ_SCENES.md:222` reads
+  "**HYPOTHESIS: emulator-side** (see the report); the cause is not
+  established." The measured facts stay in the same block (`0x01FF853C`, the
+  reset slot `__arm_excpt_rst` / `bkpt 0x8000`, the branch to address 0 from
+  `setvbuf`, frame 0 — `docs/EQ_SCENES.md:186-193`, `:212-215`), and the
+  "reproduces only with it" clause at `:190-193` is scoped to this scene2 ROM in
+  the tested configurations, with `run-pcB` named.
+- **REQ-2 (autopatch claim applied to every row, `docs/EQ_SCENES.md`).** Before,
+  the section 5 bullet said the emulator's in-place DLDI auto-patch "is required
+  for it" for the scene2/scene3/cubes rows. After, `docs/EQ_SCENES.md:308-325`
+  limits the measured requirement to scene2 in the tested configurations
+  (`:318`), names `run-pcB` as the unexplained counter-example (`:319-320`),
+  states that the CUBES=64 AF=120 branch site is in our code (`:315-317`), and
+  reports this repair's patch-free results (`:320-325`; the runs themselves in
+  section 3.2 of this report, `:364-386`).
+- **REQ-3 (the "not our ROM code" claim contradicts the measured CUBES=64
+  site).** Before, section 4 said "**Not our ROM code's write path (FACT for the
+  tested configurations)**" and section 5 item 4 said "nothing in `arm9v2/`,
+  `common/` or `tools/` is implicated". After, the section 4 heading is scoped to
+  the scene2/scene3/cube2 rows (`:458-467`), a separate paragraph states that the
+  CUBES=64/AF120 branch site `0x0200269A` is `common/twlhd_tex_capture.c:208`
+  with LR in `twlhd_tex_capture_plan` (`:215`) and that its cause is
+  **UNRESOLVED** (`:469-475`), the NULL/corrupted `read` callback mechanism is
+  HYPOTHESIS only with the `:119,127,136` / `:163` code lines and the
+  addr2line-vs-current-source caveat (`:477-489`), and §5 item 4 carries the
+  same scope (`:552-558`).
+- **REQ-4 (CAUSE overclaim and unnamed ROMs in the 3.2 table).** Before, the
+  CAUSE FACT said "the fault requires DeSmuME's in-place DLDI autopatch of the
+  ROM image (6/6 with it, 0/9 without)" for every failing ROM, and the 3.2 table
+  named no ROM for the 0/4 and 0/1 rows. After, the table has a ROM column with
+  the `ROM crc` of every row (`:308-316`) plus the evidence paragraph
+  (`:318-323`), FACT 1 is scoped to scene2 (`:333-335`), §4 FACT 4 is scoped with
+  `run-pcB` (`:445-453`), and the CAUSE FACT restricts the requirement to the
+  scene2 autodump ROM, names `run-pcB` and the other rows' status
+  (`:605-616`).
+- **REQ-5 (typo).** Before, `:182` wrote the CPU name with a `C` where the `M`
+  belongs (`ARC` + `7`); after it reads "ARM7 is never involved: `cpu=ARM9` in
+  every row."
+- **REQ-6 (optional live patch-free runs — performed, real output).** The
+  scene3, CUBES=2 and CUBES=64 autodump ROMs were rebuilt with the documented
+  variables (CUBES=2 SHA-256 `703dcad6…` matches
+  `tools/fixtures/eq_scenes/README.md:40`) and run with `TWLHD_NODLDI=1`, the
+  documented capture script and the same scratch CLI, `DESMUME_TIMEOUT=30`; the
+  per-ROM results and the script's exit-1-on-missing-`AUTO-PATCHING` caveat are
+  in section 3.2 (`:364-386`). No result was invented; nothing was run on
+  hardware.

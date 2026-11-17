@@ -187,8 +187,10 @@ The **faulting PC has since been measured** with an out-of-tree diagnostic
 DeSmuME CLI (no gdb stub needed): `0x01FF853C`, the reset slot
 `__arm_excpt_rst` whose instruction is `bkpt 0x8000`, entered because the ROM
 branches to address 0 from newlib `setvbuf` at frame 0 — a consequence, not the
-cause. The fault needs DeSmuME's in-place DLDI auto-patch of the ROM image and
-reproduces only with it. Details, per-PC evidence and labels:
+cause. For this scene2 ROM, in the tested configurations, the fault needs
+DeSmuME's in-place DLDI auto-patch of the ROM image and reproduces only with it
+(one scratch run, `run-pcB`, is an unexplained counter-example — see the
+report). Details, per-PC evidence and labels:
 `docs/reports/bkpt-diagnosis.md` (root cause still UNRESOLVED). What is ruled out
 with file:line evidence is a recorder or `demo_frame` limit: `arm9v2/` and
 `common/twlhd_gx_record.{c,h}` contain no runtime assert or BKPT (the only
@@ -214,10 +216,11 @@ AF=120 failure; scene2 does stop there (measured, frame 0 — see
 FOUND: none** — no recorder/`demo_frame` limit is reached and no ROM file is
 changed by this task. Whether the trap comes from our write path, from the
 DLDI/libfat/MPCF stack it calls, or from the emulator is **UNRESOLVED** and is
-not attributed to DeSmuME; the measurement does show it needs the emulator's
-in-place DLDI auto-patch of the ROM image and that the ROM's own bytes are not
-sufficient, so the remaining gap is emulator-side. The harness dump is
-committed so the reference counts stay verifiable.
+not attributed to DeSmuME; the measurement does show that for this scene2 ROM,
+in the tested configurations, it needs the emulator's in-place DLDI auto-patch
+of the ROM image and that the ROM's own bytes are not sufficient.
+**HYPOTHESIS: emulator-side** (see the report); the cause is not established.
+The harness dump is committed so the reference counts stay verifiable.
 
 **scene3 — NOT-COMPARABLE (no reference frame).** The harness itself exits 1:
 `ROM never presented a 3D frame within 1200 frames`, and the capture log ends
@@ -303,14 +306,22 @@ renderer, tolerance or harness/DeSmuME file was modified.
   capture** beyond the structural EQ-3 checks. Scene 4's blended pixels are not
   compared; scene 5's texture is not compared.
 - **The scene2/scene3/cubes rows.** Scene 2 and CUBES=2 have reference geometry
-  but no our-side capture; scene 3 has neither. In every failing case the
-  emulator log ends with `ARM OP_BKPT triggered`; no recorder or `demo_frame`
-  limit is reached (section 3), the faulting PC is `0x01FF853C` in every row and
-  is the reset slot reached by a branch to address 0
-  (`docs/reports/bkpt-diagnosis.md`), and the cause of that branch is UNRESOLVED
-  — the measurement does not attribute it to our ROM code, and the emulator's
-  in-place DLDI auto-patch is required for it. A future capture fix could
-  turn these into real comparisons; the
+  but no our-side capture; scene 3 has neither. In every failing case with the
+  patch the emulator log ends with `ARM OP_BKPT triggered`; no recorder or
+  `demo_frame` limit is reached (section 3), the faulting PC is `0x01FF853C` in
+  every such row and is the reset slot reached by a branch to address 0
+  (`docs/reports/bkpt-diagnosis.md`), and the cause of that branch is UNRESOLVED.
+  For scene2, scene3 and CUBES=2 the branch sites are newlib/calico startup, an
+  unmapped site and the calico exception handler — not our code; for CUBES=64
+  AF=120 the branch site **is** in our code (`common/twlhd_tex_capture.c:208`, LR
+  in `twlhd_tex_capture_plan` at `:215`), also UNRESOLVED. The emulator's
+  in-place DLDI auto-patch is required by **scene2 in the tested
+  configurations** (the only ROM the with/without-patch discriminator ran on;
+  the scratch run `run-pcB` is an unexplained counter-example). Without the
+  patch this task measured scene3 (no fault in 30 s, but no 3D frame either),
+  CUBES=2 (no fault, frames presented) and CUBES=64 (not the `0x01FF853C`
+  fault; instead `ARM9: Undefined instruction: 0x3C000000 PC=0x0500049C` at
+  ~frame 490). A future capture fix could turn these into real comparisons; the
   driver already retries the documented capture and reports the log reason.
 - **Clipping.** EQ-2 remains valid only for unclipped frames (all scenes are
   inside the host-test frustum at this angle; a surprise clipped polygon is a
