@@ -315,7 +315,9 @@ renderer, tolerance or harness/DeSmuME file was modified.
   code; scene3's and CUBES=2's sites are not attributed (UNVERIFIED, see the
   report's open items 3-4); for CUBES=64
   AF=120 the branch site **is** in our code (`common/twlhd_tex_capture.c:208`, LR
-  in `twlhd_tex_capture_plan` at `:215`), also UNRESOLVED. The emulator's
+  in `twlhd_tex_capture_plan` at `:215`), also UNRESOLVED; a fresh rebuild shows
+  the instruction is a `pop {pc}` return from a zeroed saved LR, not an
+  indirect call — see `docs/reports/cubes64-branch0-diagnosis.md`.
   in-place DLDI auto-patch is required by **scene2 in the tested
   configurations** (the only ROM the with/without-patch discriminator ran on;
   the scratch run `run-pcB` is an unexplained counter-example). Without the
