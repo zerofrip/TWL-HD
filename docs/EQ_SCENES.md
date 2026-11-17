@@ -319,12 +319,16 @@ DeSmuME or Azahar needed):
 - the verdict rule, one test per branch: a harness frame other than 242, our
   frame other than 241, or an unloadable/truncated dump -> NOT-COMPARABLE with
   exit 0 and the reason printed; a polygon-count mismatch (harness 8 vs manifest
-  9) -> FAIL with exit 1;
+  9) -> FAIL with exit 1; two dumps of the same frame with different polygon
+  counts (harness 8/24, our-side copy with one output triangle removed) -> FAIL
+  with exit 1 and the count reason printed;
 - the first `pos-x-16.16` of the scene1 fixture perturbed beyond
   `eq2_compare.TOL_XY_16_16` -> FAIL row and exit 1;
 - missing harness/DeSmuME/ROM prerequisites -> exit 2 before any run; missing
   manifest input or manifest path -> exit 2;
 - two in-process mutants: a broken verdict rule (`aggregate` forced to 0) and a
   broken per-scene loop (`select_rows` forced to the first row) each make the
-  CLI wrongly accept the committed FAIL row. Each mutant test first asserts the
-  unmodified driver's exit code, so the mutation is what flips it.
+  CLI wrongly accept the committed FAIL row; a file-level mutant of
+  `eq_scenes.py` that forces the two-dump count mismatch to NOT-COMPARABLE makes
+  the CLI exit 0 instead of 1. Each mutant test first asserts the unmodified
+  driver's exit code, so the mutation is what flips it.

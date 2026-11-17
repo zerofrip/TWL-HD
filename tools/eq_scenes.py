@@ -88,9 +88,13 @@ class Scene(object):
 
 
 # arm9v2/Makefile composition order: AUTODUMP (60-75) -> CUBES (116-129) ->
-# SCENE (139-152).  Names and expected counts from the real run below; the
-# counts are the harness polygon/vertex totals for harness frame 242 (ROM
-# frame 240), which tests/host/test_demo_frame.cpp also pins per scene.
+# SCENE (139-152).  Names and expected counts below are the harness
+# polygon/vertex totals for harness frame 242 (ROM frame 240) taken from the
+# committed dump of each scene: the real-run pair for cube/scene1/scene4/scene5
+# and the harness reference dumps for scene2 (harness_s2_f240.txt:8-9) and
+# cubes (harness_c2_f240.txt:8-9).  scene3 has no dump and no counts (None):
+# its ROM never presents a 3D frame, and tests/host/test_demo_frame.cpp:933-936
+# pins only the interpreter-side 12-in/30-out/5-split, not a harness total.
 SCENES = (
     Scene("cube", "AUTODUMP_FRAME=240", "twlhd-arm9v2-autodump.nds",
           6, 24, "valid"),
@@ -100,12 +104,14 @@ SCENES = (
           "cannot model 24 distinct red shades"),
     Scene("scene2", "SCENE=2 AUTODUMP_FRAME=240",
           "twlhd-arm9v2-autodump-s2.nds", 10, 30, "not-comparable",
-          "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes "
-          "cannot model 12 distinct red shades"),
+          "per-vertex 5-bit red ramp (i+1)<<3 over scene_strip_vertices[12] "
+          "(demo_frame.cpp:237, colour loop :266-269, drawn at :283); eq3's "
+          "six cube face classes cannot model 12 distinct red shades"),
     Scene("scene3", "SCENE=3 AUTODUMP_FRAME=240",
-          "twlhd-arm9v2-autodump-s3.nds", 10, 30, "not-comparable",
-          "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes "
-          "cannot model 12 distinct red shades"),
+          "twlhd-arm9v2-autodump-s3.nds", None, None, "not-comparable",
+          "per-vertex 5-bit red ramp (i+1)<<3 over scene_strip_vertices[12] "
+          "(demo_frame.cpp:237, colour loop :266-269, drawn at :289); eq3's "
+          "six cube face classes cannot model 12 distinct red shades"),
     Scene("scene4", "SCENE=4 AUTODUMP_FRAME=240",
           "twlhd-arm9v2-autodump-s4.nds", 4, 16, "not-comparable",
           "blended pixels need the design section 5.1 blended tolerance 16 "

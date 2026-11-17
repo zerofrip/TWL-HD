@@ -26,7 +26,7 @@ repository; the tooling remains Apache-2.0, the same posture as
 | `harness_s5_f240.txt` | `7d6b34d41134ed31bedb818bdc6de2d43bff0becb513ed6efe58cd30e918a6a0` |
 | `ours_s5_f240.txt` | `4002a9f5ab9ff3c03e2def0ad86a74e8e0c0e670a0f0aadb01d56ddfd88318c3` |
 | `harness_c2_f240.txt` | `5d0497d03c9729243286f36cb499185cb8dc74543d41574a2dc59845e1dba0d9` |
-| `manifest.json` | `aec5869a6876e61215c0075c5da82a6de295085d4b0e1bb948ef81535df0683f` |
+| `manifest.json` | `aca18a079521c9df42d0cab7532d94326b3b7ebc80181fc84bdbdd17d19ea917` |
 | `manifest_pass.json` | `1b89eb0c91b9a8eb60fcdc899d853bb5e1396738d2b4bc325233eae4637b7c57` |
 
 Build variables (arm9v2/Makefile) and ROM SHA-256 of the run:

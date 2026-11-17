@@ -87,6 +87,24 @@ def write_manifest(directory, rows):
     return path
 
 
+def write_ours_without_one_triangle(directory):
+    """Our-side copy of the scene1 dump with the last output triangle gone.
+
+    Removes v 21-23 (one 3-vertex triangle) and keeps the stats line honest;
+    v indices 0..20 stay sequential, so the loader accepts the dump.
+    """
+    lines = read_lines(OURS_S1)
+    stats = next(i for i, line in enumerate(lines)
+                 if line.startswith("stats "))
+    if not lines[stats - 3].startswith("v 21 "):
+        raise AssertionError("fixture does not end with v 23")
+    return write_lines(directory, "ours_s1_f240_21verts.txt",
+                       lines[:stats - 3] + [
+                           lines[stats].replace(
+                               "vertices_in=24 triangles_out=8",
+                               "vertices_in=21 triangles_out=7")])
+
+
 class EqScenesManifestTest(unittest.TestCase):
     """Table, verdict and exit codes over the committed fixtures."""
 
@@ -266,6 +284,34 @@ class EqScenesManifestTest(unittest.TestCase):
     @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
                      "run once via the test-eq-scenes make target; discover "
                      "skips it to avoid a double run")
+    def test_count_mismatch_between_two_dumps_is_a_fail_and_exit_one(self):
+        """docs/EQ_SCENES.md section 1: the same frame with different counts is
+        a real FAIL, not a NOT-COMPARABLE dump problem."""
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-twodump-")
+        try:
+            ours = write_ours_without_one_triangle(tmp)
+            manifest = write_manifest(tmp, [{
+                "scene": "scene1",
+                "build": "SCENE=1 AUTODUMP_FRAME=240",
+                "harness": HARNESS_S1,
+                "ours": ours,
+            }])
+            result = run_tool("--manifest", manifest)
+            self.assertEqual(result.returncode, 1,
+                             result.stdout + result.stderr)
+            self.assertIn("FAIL", result.stdout)
+            # eq2_compare.compare() turns the two-dump CountError into this
+            # MISMATCH line, so the row stays a real FAIL.
+            self.assertIn("MISMATCH", result.stdout)
+            self.assertIn("our side ran out of triangle vertices",
+                          result.stdout)
+            self.assertIn("1 FAIL", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
+                     "run once via the test-eq-scenes make target; discover "
+                     "skips it to avoid a double run")
     def test_missing_prerequisite_is_exit_two_before_any_run(self):
         tmp = tempfile.mkdtemp(prefix="eq-scenes-missing-")
         try:
@@ -340,6 +386,52 @@ class EqScenesMutantTest(unittest.TestCase):
                 "processing only the first row must wrongly hide the FAIL")
         finally:
             eq_scenes.select_rows = original
+
+    def test_count_mismatch_mutant_would_hide_the_fail(self):
+        """A CountError report forced to NOT-COMPARABLE must wrongly accept the
+        two-dump count mismatch that test_eq_scenes.py reports as FAIL."""
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-count-mutant-")
+        try:
+            ours = write_ours_without_one_triangle(tmp)
+            manifest = write_manifest(tmp, [{
+                "scene": "scene1",
+                "build": "SCENE=1 AUTODUMP_FRAME=240",
+                "harness": HARNESS_S1,
+                "ours": ours,
+            }])
+            self.assertEqual(run_tool("--manifest", manifest).returncode, 1)
+
+            # eq_scenes.py resolves its imports from its own directory, so the
+            # two modules it imports must sit beside the mutant copy.
+            mutant_dir = os.path.join(tmp, "tools")
+            os.makedirs(mutant_dir)
+            for name in ("eq_scenes.py", "eq2_compare.py", "eq3_compare.py"):
+                shutil.copy2(os.path.join(TOOLS_DIR, name),
+                             os.path.join(mutant_dir, name))
+            mutant = os.path.join(mutant_dir, "eq_scenes.py")
+            with open(mutant, "r", encoding="utf-8") as handle:
+                source = handle.read()
+            # eq2_compare.compare() reports the CountError as a MISMATCH line
+            # rather than re-raising it, so this is the branch that keeps the
+            # count mismatch a FAIL: force it to NOT-COMPARABLE instead.
+            needle = '    result.eq2 = "PASS" if code == 0 else "FAIL"\n'
+            self.assertEqual(source.count(needle), 1,
+                             "mutant needle moved; update the mutant")
+            with open(mutant, "w", encoding="utf-8") as handle:
+                handle.write(source.replace(
+                    needle,
+                    needle + "    if any('ran out of triangle vertices' in "
+                    "line for line in report):\n"
+                    "        result.eq2_not_comparable = True\n"))
+
+            result = subprocess.run(
+                [sys.executable, "-B", "-I", mutant, "--manifest", manifest],
+                capture_output=True, text=True, cwd=TOOLS_DIR)
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("NOT-COMPARABLE", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
 
 
 if __name__ == "__main__":
