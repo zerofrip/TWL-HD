@@ -90,8 +90,14 @@ so ROM counter `k` is harness frame `k + 2` (measured in the harness README and
 - the harness header `rom-sha256` matches the SHA-256 of that row's ROM (full
   mode).
 
-A mismatch is NOT-COMPARABLE, never a silent pass. The table below states for
-each scene whether the capture held the same frame as the harness frame.
+A row that fails any of these checks, or whose harness/our-side dump cannot be
+loaded at all, is **NOT-COMPARABLE** with exit code 0: the two sides are not the
+same frame/ROM, so there is nothing to compare. A polygon or vertex **count**
+mismatch between two dumps of the same frame is a real **FAIL** with exit code 1
+(the frame lines agree, so the geometry really differs). Neither case is ever a
+silent PASS, and a count mismatch is never turned into NOT-COMPARABLE. The
+table below states for each scene whether the capture held the same frame as
+the harness frame.
 
 | Scene | ROM frame (AUTODUMP) | Recorder frame (`--eq2`) | Harness requested/captured | Same frame? |
 |---|---|---|---|---|
@@ -122,23 +128,26 @@ python3 tools/eq_scenes.py \
 ```
 
 `--capture-retries` repeats the same documented `desmume_capture.sh` flow when
-DeSmuME aborts with `ARM OP_BKPT`; it does not change the capture method. The
-work directory holds the ROM captures and PPMs and is not committed.
+the capture aborts with `ARM OP_BKPT`; it does not change the capture method.
+The work directory holds the ROM captures and PPMs and is not committed.
 
 | Scene | Build variables | Polys/verts compared | Worst EQ-2 x | Worst EQ-2 y | Worst EQ-2 z (0.31) | Worst EQ-2 w | Worst colour (6-bit) | Worst tex s/t (12.4, not gated) | EQ-3 | Verdict |
 |---|---|---|---|---|---|---|---|---|---|---|
 | cube | `AUTODUMP_FRAME=240` | 6 / 24 | 0.0190 px (1244) | 0.0109 px (715) | 114325 (tol 1873103) | 0 (tol 16) | 0 (tol 2) | 0 | PASS, worst colour-r=4 (tol 8) | **PASS** |
 | scene1 | `SCENE=1 AUTODUMP_FRAME=240` | 8 / 24 | 0.0118 px (772) | 0.0148 px (967) | 74058 (tol 1288019) | 1 (tol 16) | 1 (tol 2) | 0 | NOT-COMPARABLE (red-ramp model) | **PASS (geometry)** |
-| scene2 | `SCENE=2 AUTODUMP_FRAME=240` | 10 / 30 | — | — | — | — | — | — | NOT-COMPARABLE (red-ramp model) | **NOT-COMPARABLE** |
+| scene2 | `SCENE=2 AUTODUMP_FRAME=240` | 0 compared (reference 10/30) | — | — | — | — | — | — | NOT-COMPARABLE (red-ramp model) | **NOT-COMPARABLE** |
 | scene3 | `SCENE=3 AUTODUMP_FRAME=240` | — | — | — | — | — | — | — | NOT-COMPARABLE (red-ramp model) | **NOT-COMPARABLE** |
 | scene4 | `SCENE=4 AUTODUMP_FRAME=240` | 4 / 16 | 0.0166 px (1090) | 0.0164 px (1074) | 91608 (tol 1500947) | 1 (tol 16) | 0 (tol 2) | 0 | NOT-COMPARABLE (blended T=16; wireframe) | **PASS (geometry only)** |
 | scene5 | `SCENE=5 AUTODUMP_FRAME=240` | 1 / 4 | 0.0087 px (571) | 0.0148 px (969) | 165343 (tol 2708990) | 0 (tol 16) | **63 (tol 2)** | 0 | NOT-COMPARABLE (texture model) | **FAIL (colour)** |
-| cubes | `CUBES=2 AUTODUMP_FRAME=240` | 12 / 48 | — | — | — | — | — | — | NOT-COMPARABLE (no picture) | **NOT-COMPARABLE** |
+| cubes | `CUBES=2 AUTODUMP_FRAME=240` | 0 compared (reference 12/48) | — | — | — | — | — | — | NOT-COMPARABLE (no picture) | **NOT-COMPARABLE** |
 
-`—` means no comparison ran; the rationale is in section 3. The z tolerance is
-per vertex (`floor(0.004 * 2^31 / (2*|w|))`, docs/EQ2_COMPARE.md section 4), so
-the table shows the tolerance at the reported worst vertex. No tolerance was
-changed, loosened or re-derived by the driver.
+`—` means no comparison ran; the rationale is in section 3. The
+`0 compared (reference N/M)` form is what `format_table` prints when the
+harness dump was parsed but EQ-2 did not run: N polygons / M vertices are the
+harness reference counts, not compared counts. The z tolerance is per vertex
+(`floor(0.004 * 2^31 / (2*|w|))`, docs/EQ2_COMPARE.md section 4), so the table
+shows the tolerance at the reported worst vertex. No tolerance was changed,
+loosened or re-derived by the driver.
 
 ### 3. Per-scene findings, with the exact reason
 
@@ -155,21 +164,63 @@ NOT-COMPARABLE: each vertex has a unique 5-bit red ramp
 classes (`eq3_compare.py:64-71`) cannot model 24 distinct red shades — the
 nearest-class collapse is a tool-model limitation, not a pipeline defect.
 
-**scene2 — NOT-COMPARABLE (capture).** The harness reference succeeded
-(10 polygons / 30 vertices, frame 242), but the documented DeSmuME v2 capture
-did not produce `twlhd_frame_v2.bin`: DeSmuME aborted with
-`ARM OP_BKPT triggered` before the AUTODUMP frame on every attempt, so there is
-no our-side v2 stream and EQ-2 cannot run. This is recorded as
-NOT-COMPARABLE, not as a pass. The harness dump is committed
-(`harness_s2_f240.txt`) so the reference counts are verifiable.
+**scene2 — NOT-COMPARABLE (capture aborts).** The harness reference succeeded
+(10 polygons / 30 vertices, frame 242; `harness_s2_f240.txt` is committed), but
+the documented DeSmuME v2 capture produced no `twlhd_frame_v2.bin`. Reproduced
+(EMULATOR, 2026-11-17) with the ROM from
+`make -C arm9v2 SCENE=2 AUTODUMP_FRAME=240` (sha256 `d84f210b…`,
+`tools/fixtures/eq_scenes/README.md`): the documented script
 
-**scene3 — NOT-COMPARABLE (ROM never presents a 3D frame).** The harness itself
-exits 1: `ROM never presented a 3D frame within 1200 frames`; the capture log
-shows `ARM OP_BKPT triggered`. The quad-strip path
-(`demo_frame.cpp:286-291`) is the only scene-specific difference from the
-working scenes; the ROM aborts before any SWAP_BUFFERS, so neither the
-reference geometry nor our stream exists. No fixture is committed for this row
-because there is no data to commit.
+    DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
+      tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-s2.nds <dir>
+
+exits 1, `<dir>/desmume.log` ends with `ARM OP_BKPT triggered` (the same run
+earlier logged `Slot 2: MPCF Flash Card Device` and `AUTO-PATCHING DLDI to
+MPCF`), and no v2 stream is written. The same ROM started without a Slot-2 card
+(`--cflash-path <dir>`, which DeSmuME reports as
+`Slot2 auto-selected device type: PassME (0x08)`, no DLDI auto-patch) runs the
+full 60 s watchdog with `--disable-limiter` and no BKPT — but it writes nothing
+either, so that run only shows that the ROM does not fault before it mounts the
+card; it does not isolate the cause.
+
+The **faulting PC was not measured for scene2 in this environment**: the
+installed `desmume-cli` has no gdb stub (`--help` and `strings` contain no such
+option), so the gdb mapping used for the CUBES investigation
+(`docs/EMULATOR_VALIDATION.md:286`) could not be repeated. What is ruled out
+with file:line evidence is a recorder or `demo_frame` limit: `arm9v2/` and
+`common/twlhd_gx_record.{c,h}` contain no runtime assert or BKPT (the only
+assertions are compile-time `_Static_assert`, `common/twlhd_gx_record.h:79-91`),
+and every capacity is far from full for a 10-polygon frame
+(`TWLHD_GX_REC_MAX_ENTRIES` 16384, `common/twlhd_gx_record.h:30`; a few dozen
+entries recorded; serialise buffer 135264 B, `:41-45`; texture-path maximum
+309395 B, `:68-71`). The aborted scenes also draw no more than the working ones:
+scene2 submits 12 ROM vertices (`scene_strip_vertices[12][2]`,
+`arm9v2/source/demo_frame.cpp:237-241`, drawn with count 12 at `:282-286`),
+fewer than scene1's 24, and scene1's capture succeeded (its `ours_s1_f240.txt`
+is committed); the scenes with committed our-side dumps (cube, scene1, scene4,
+scene5) have 4-24 ROM vertices, the three that abort are scene2, scene3 and
+cubes. What this repository does contain is
+the calico trap: `arm-none-eabi-addr2line -f -e arm9v2/twlhd-arm9v2-autodump-s2.elf
+0x01ff853c` returns `__arm_excpt_rst`
+(`calico-1.2.0/source/nds/arm9/excpt_handler.32.s:27`), whose instruction is
+`bkpt 0x8000` (`arm-none-eabi-objdump`), and `__excpt_vectors` at `0x01ff8038`
+starts with `.word 0x01ff853c`, the reset slot. `docs/EMULATOR_VALIDATION.md:286`
+measured control reaching that same reset vector in the analogous CUBES=64
+AF=120 failure; whether scene2 stops there was **not** measured. **DEFECT
+FOUND: none** — no recorder/`demo_frame` limit is reached and no ROM file is
+changed by this task. Whether the trap comes from our write path, from the
+DLDI/libfat/MPCF stack it calls, or from the emulator is **UNRESOLVED** and is
+not attributed to DeSmuME; settling it needs a DeSmuME build with a gdb stub (or
+a PC print) and is open work. The harness dump is committed so the reference
+counts stay verifiable.
+
+**scene3 — NOT-COMPARABLE (no reference frame).** The harness itself exits 1:
+`ROM never presented a 3D frame within 1200 frames`, and the capture log ends
+with the same `ARM OP_BKPT triggered`. No `SWAP_BUFFERS` reaches the GPU, so
+neither the reference geometry nor our stream exists. The PC was not measured
+for scene3 either (no gdb stub, as above); the same reset-vector entries exist
+in that ROM. No fixture is committed for this row because there is no data to
+commit.
 
 **scene4 (alpha quads) — PASS, geometry only.** 4 polygons / 16 vertices. Worst
 x 0.0166 px, y 0.0164 px, w 1 quantum, colour 0, z 91608 (tol 1500947). All four
@@ -207,13 +258,20 @@ NOT-COMPARABLE: `eq3_compare` has no texture model (design/EQ3 section 8:
 list carries no texture state; texture data lives in the v2 TXDT/PLDT chunks,
 which the picture comparison does not read.
 
-**cubes (`CUBES=2`) — NOT-COMPARABLE (capture).** The harness reference
+**cubes (`CUBES=2`) — NOT-COMPARABLE (capture aborts).** The harness reference
 succeeded (12 polygons / 48 vertices, frame 242), but the DeSmuME v2 capture
-aborted with `ARM OP_BKPT triggered` before the AUTODUMP frame on every
-attempt; without our-side geometry no EQ-2 row and no Azahar picture can be
-produced. `CUBES=2` was chosen to match the existing host test
-`test_demo_frame_c2`; the value is a driver/scene parameter, not a tolerance.
-The harness dump is committed (`harness_c2_f240.txt`).
+aborted with `ARM OP_BKPT triggered` (log line; the faulting PC was not measured
+for this row in this environment — no gdb stub in the installed `desmume-cli`).
+`docs/EMULATOR_VALIDATION.md:269-292` holds the prior CUBES investigation: in
+the CUBES=64 AF=120 run gdb showed control reaching the `0x01ff853c` reset
+vector, and that root cause stays UNEXPLAINED. `CUBES=2` draws 48 ROM vertices,
+twice the working cube frame's 24, yet no recorder capacity is near its limit
+(`common/twlhd_gx_record.h:30,41-45`), so there is no failing size limit to
+report and no "DEFECT FOUND" statement to make. Without our-side geometry no
+EQ-2 row and no Azahar picture can be produced. `CUBES=2` was chosen to match
+the existing host test `test_demo_frame_c2`; the value is a driver/scene
+parameter, not a tolerance. The harness dump is committed
+(`harness_c2_f240.txt`).
 
 ## 4. Tolerances and what was not changed
 
@@ -234,8 +292,11 @@ renderer, tolerance or harness/DeSmuME file was modified.
   capture** beyond the structural EQ-3 checks. Scene 4's blended pixels are not
   compared; scene 5's texture is not compared.
 - **The scene2/scene3/cubes rows.** Scene 2 and CUBES=2 have reference geometry
-  but no our-side capture; scene 3 has neither because its ROM aborts under
-  DeSmuME. A future capture fix could turn these into real comparisons; the
+  but no our-side capture; scene 3 has neither. In every failing case the
+  emulator log ends with `ARM OP_BKPT triggered`; no recorder or `demo_frame`
+  limit is reached (section 3), the faulting PC was not measured here, and the
+  cause is UNRESOLVED and not attributed to DeSmuME. A future capture fix could
+  turn these into real comparisons; the
   driver already retries the documented capture and reports the log reason.
 - **Clipping.** EQ-2 remains valid only for unclipped frames (all scenes are
   inside the host-test frustum at this angle; a surprise clipped polygon is a
@@ -252,8 +313,13 @@ only the committed text fixtures in `tools/fixtures/eq_scenes/` (no harness,
 DeSmuME or Azahar needed):
 
 - the seven-row manifest table: real scene-5 FAIL with `MISMATCH r: 63 > 2`,
-  counts 6/24 etc., and the NOT-COMPARABLE rows;
+  compared counts 6/24 etc., `0 compared (reference 10/30)` for the rows where
+  EQ-2 did not run, and the NOT-COMPARABLE rows;
 - a pass/NOT-COMPARABLE manifest -> exit 0 (NOT-COMPARABLE never causes exit 1);
+- the verdict rule, one test per branch: a harness frame other than 242, our
+  frame other than 241, or an unloadable/truncated dump -> NOT-COMPARABLE with
+  exit 0 and the reason printed; a polygon-count mismatch (harness 8 vs manifest
+  9) -> FAIL with exit 1;
 - the first `pos-x-16.16` of the scene1 fixture perturbed beyond
   `eq2_compare.TOL_XY_16_16` -> FAIL row and exit 1;
 - missing harness/DeSmuME/ROM prerequisites -> exit 2 before any run; missing

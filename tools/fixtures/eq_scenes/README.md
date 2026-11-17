@@ -26,8 +26,8 @@ repository; the tooling remains Apache-2.0, the same posture as
 | `harness_s5_f240.txt` | `7d6b34d41134ed31bedb818bdc6de2d43bff0becb513ed6efe58cd30e918a6a0` |
 | `ours_s5_f240.txt` | `4002a9f5ab9ff3c03e2def0ad86a74e8e0c0e670a0f0aadb01d56ddfd88318c3` |
 | `harness_c2_f240.txt` | `5d0497d03c9729243286f36cb499185cb8dc74543d41574a2dc59845e1dba0d9` |
-| `manifest.json` | `ed1d6d9e71e28543fad2e6de061c2a4cdd1e514ad3bb702db743a789e4457cc1` |
-| `manifest_pass.json` | `e3d9d90f39d24f1d75bb04c36ab6fa69c8cf8e8f9079dee4805ab2e0ade364d8` |
+| `manifest.json` | `aec5869a6876e61215c0075c5da82a6de295085d4b0e1bb948ef81535df0683f` |
+| `manifest_pass.json` | `1b89eb0c91b9a8eb60fcdc899d853bb5e1396738d2b4bc325233eae4637b7c57` |
 
 Build variables (arm9v2/Makefile) and ROM SHA-256 of the run:
 
@@ -46,7 +46,9 @@ The cube row in both manifests reuses the existing real pair in
 `scene3` has no fixture: its ROM never presents a 3D frame under DeSmuME
 (harness exit 1), so no reference dump exists. `scene2` and `cubes` have only
 the harness dump: the documented DeSmuME capture aborted with `ARM OP_BKPT`
-before the autodump frame on every attempt, so no our-side stream exists.
+before the autodump frame on every attempt (no recorder limit is reached and the
+cause is unresolved; `docs/EQ_SCENES.md` section 3), so no
+our-side stream exists.
 The driver reports both cases as NOT-COMPARABLE, never as a pass.
 
 Regenerate the harness dump with:

@@ -9,8 +9,11 @@ arm9v2 autodump ROM: the default cube, SCENE=1..5 and the CUBES=2 variant.
 
 Frame alignment is the one measured in docs/EQ2_COMPARE.md section 3 and the
 harness README: ROM frame 240 -> v2 recorder frame_index 241 -> DeSmuME/harness
-frame 242.  Every row requires both the harness frame and our recorded frame to
-be present; anything else is NOT-COMPARABLE, never a silent pass.
+frame 242.  A row whose harness/ours dump has a different frame or rom-sha256,
+or whose dump cannot be loaded, is NOT-COMPARABLE (exit 0): the two sides are
+not the same frame/ROM, so there is nothing to compare.  A polygon or vertex
+count mismatch between two dumps of the same frame is a FAIL (exit 1): the
+frame lines agree, so the geometry really differs.
 
 All results are EMULATOR: the reference is DeSmuME via the out-of-tree GPL
 harness, our side is the recorder's v2 stream interpreted on the host.  No
@@ -98,11 +101,11 @@ SCENES = (
     Scene("scene2", "SCENE=2 AUTODUMP_FRAME=240",
           "twlhd-arm9v2-autodump-s2.nds", 10, 30, "not-comparable",
           "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes "
-          "cannot model 24 distinct red shades"),
+          "cannot model 12 distinct red shades"),
     Scene("scene3", "SCENE=3 AUTODUMP_FRAME=240",
           "twlhd-arm9v2-autodump-s3.nds", 10, 30, "not-comparable",
           "per-vertex 5-bit red ramp (i+1)<<3; eq3's six cube face classes "
-          "cannot model 24 distinct red shades"),
+          "cannot model 12 distinct red shades"),
     Scene("scene4", "SCENE=4 AUTODUMP_FRAME=240",
           "twlhd-arm9v2-autodump-s4.nds", 4, 16, "not-comparable",
           "blended pixels need the design section 5.1 blended tolerance 16 "
@@ -125,20 +128,28 @@ class RowResult(object):
     def __init__(self, scene, build):
         self.scene = scene
         self.build = build
+        # Compared counts: set only when EQ-2 actually ran (PASS or FAIL).
         self.polys = None
         self.verts = None
+        # Harness reference counts: set whenever a harness dump was parsed.
+        self.ref_polys = None
+        self.ref_verts = None
         self.worst = {}
         self.eq2 = "not run"
         self.eq2_detail = []
+        self.eq2_not_comparable = False
         self.eq3 = "not run"
         self.eq3_detail = []
         self.verdict = "NOT-COMPARABLE"
         self.reason = ""
 
     def counts(self):
-        if self.polys is None or self.verts is None:
-            return EMPTY
-        return "%d/%d" % (self.polys, self.verts)
+        if self.polys is not None and self.verts is not None:
+            return "%d/%d" % (self.polys, self.verts)
+        if self.ref_polys is not None and self.ref_verts is not None:
+            return "0 compared (reference %d/%d)" % (self.ref_polys,
+                                                     self.ref_verts)
+        return EMPTY
 
 
 # --------------------------------------------------------------------------
@@ -300,10 +311,17 @@ def _prepare_harness(args, scene, outdir):
 def _prepare_capture(args, scene, outdir):
     """Run the documented DeSmuME capture. Returns (v2 path, problem).
 
-    The DeSmuME CLI + CFlash path can abort with a BKPT before the autodump
-    frame for some ROM variants (observed on scene 2/3/CUBES=2; see
-    docs/EQ_SCENES.md).  Retrying the same documented script is the only
-    workaround; a failure after every attempt stays a NOT-COMPARABLE row.
+    For scene2, scene3 and CUBES=2 the capture aborts with a guest
+    ``ARM OP_BKPT triggered`` before the autodump frame, so no v2 stream is
+    written.  It is not a recorder/demo_frame assert or size limit: arm9v2/ and
+    common/ contain no runtime assert or BKPT (only compile-time
+    ``_Static_assert``) and the recorder capacities
+    (common/twlhd_gx_record.h:30,41-45) are far from full.  The faulting PC is
+    not measurable here (the installed desmume-cli has no gdb stub), so the
+    cause stays UNRESOLVED and is not attributed to DeSmuME; docs/EQ_SCENES.md
+    section 3 lists what was measured.  Retrying the same documented script is
+    the only workaround; a failure after every attempt stays a NOT-COMPARABLE
+    row.
     """
     last_problem = "DeSmuME capture failed"
     attempts = max(1, args.capture_retries)
@@ -461,22 +479,31 @@ def _format_worst(worst, fields):
 
 
 def compare_eq2(row, result):
-    """Run EQ-2 for one row into result. Returns an error string or None."""
+    """Run EQ-2 for one row into result. Returns an error string or None.
+
+    Sets result.eq2_not_comparable for the cases where there is nothing to
+    compare (missing dump, unloadable dump, different frame, different
+    rom-sha256): those are NOT-COMPARABLE, exit 0.  A polygon/vertex count
+    mismatch between two dumps of the same frame is left as a real FAIL.
+    """
     harness_path = row.get("harness")
     ours_path = row.get("ours")
     if not harness_path:
+        result.eq2_not_comparable = True
         result.reason = row.get("not_comparable") or "no harness dump"
         return result.reason
     try:
         harness = eq2_compare.load_harness(harness_path)
     except (eq2_compare.FormatError, eq2_compare.CountError) as exc:
+        result.eq2_not_comparable = True
         result.reason = "harness dump is unusable: %s" % exc
         return result.reason
 
-    result.polys = len(harness["polys"])
-    result.verts = sum(poly["verts"] for poly in harness["polys"])
+    result.ref_polys = len(harness["polys"])
+    result.ref_verts = sum(poly["verts"] for poly in harness["polys"])
 
     if not ours_path:
+        result.eq2_not_comparable = True
         result.reason = row.get("not_comparable") or "no our-side dump"
         return result.reason
 
@@ -484,6 +511,7 @@ def compare_eq2(row, result):
     # section 3).  A different captured frame is NOT-COMPARABLE, never a pass.
     if (harness["requested_frame"] != HARNESS_FRAME
             or harness["captured_frame"] != HARNESS_FRAME):
+        result.eq2_not_comparable = True
         result.reason = ("frame alignment: harness has requested %d captured "
                          "%d, expected %d (ROM frame 240 + 2)"
                          % (harness["requested_frame"],
@@ -492,9 +520,11 @@ def compare_eq2(row, result):
     try:
         ours = eq2_compare.load_ours(ours_path)
     except (eq2_compare.FormatError, eq2_compare.CountError) as exc:
+        result.eq2_not_comparable = True
         result.reason = "our-side dump is unusable: %s" % exc
         return result.reason
     if ours["frame"] != OURS_FRAME:
+        result.eq2_not_comparable = True
         result.reason = ("frame alignment: our recorder frame is %d, expected "
                          "%d (ROM frame 240 + 1)" % (ours["frame"],
                                                     OURS_FRAME))
@@ -506,25 +536,33 @@ def compare_eq2(row, result):
     harness_sha = harness.get("rom-sha256")
     if expected_sha and harness_sha and expected_sha.lower() != \
             harness_sha.lower():
+        result.eq2_not_comparable = True
         result.reason = ("harness rom-sha256 %s does not match scene ROM %s"
                          % (harness_sha, expected_sha))
         return result.reason
 
     expected_polys = row.get("expected_polys")
     expected_verts = row.get("expected_verts")
-    if expected_polys is not None and expected_polys != result.polys:
+    if expected_polys is not None and expected_polys != result.ref_polys:
         result.reason = ("harness dumped %d polygons, expected %d for this "
-                         "scene" % (result.polys, expected_polys))
+                         "scene" % (result.ref_polys, expected_polys))
         return result.reason
-    if expected_verts is not None and expected_verts != result.verts:
+    if expected_verts is not None and expected_verts != result.ref_verts:
         result.reason = ("harness dumped %d vertices, expected %d for this "
-                         "scene" % (result.verts, expected_verts))
+                         "scene" % (result.ref_verts, expected_verts))
         return result.reason
 
+    # Same frame and ROM, counts agree: EQ-2 compares geometry from here on.
+    result.polys = result.ref_polys
+    result.verts = result.ref_verts
     try:
         code, report = eq2_compare.compare(harness, ours)
-    except (eq2_compare.FormatError, eq2_compare.CountError) as exc:
+    except eq2_compare.FormatError as exc:
+        result.eq2_not_comparable = True
         result.reason = "EQ-2 comparison error: %s" % exc
+        return result.reason
+    except eq2_compare.CountError as exc:
+        result.reason = "EQ-2 count mismatch: %s" % exc
         return result.reason
     result.worst = _parse_worst(report)
     result.eq2_detail = report
@@ -572,14 +610,16 @@ def process_row(row):
     """Compare one row and return its RowResult."""
     result = RowResult(row.get("scene", "row"), row.get("build", "manifest"))
 
-    # A row that is known not to be comparable still reports the harness counts
-    # when a dump exists, so the table never hides how much was available.
+    # A row that is known not to be comparable still reports the harness
+    # reference counts when a dump exists, so the table never hides how much
+    # was available.
     if row.get("not_comparable") and not row.get("ours"):
         if row.get("harness") and row.get("harness") != "":
             try:
                 harness = eq2_compare.load_harness(row["harness"])
-                result.polys = len(harness["polys"])
-                result.verts = sum(poly["verts"] for poly in harness["polys"])
+                result.ref_polys = len(harness["polys"])
+                result.ref_verts = sum(poly["verts"]
+                                       for poly in harness["polys"])
             except (eq2_compare.FormatError, eq2_compare.CountError):
                 pass
         result.reason = row["not_comparable"]
@@ -589,7 +629,7 @@ def process_row(row):
 
     error = compare_eq2(row, result)
     if error is not None:
-        if row.get("not_comparable"):
+        if result.eq2_not_comparable:
             result.eq2 = "NOT-COMPARABLE"
             result.verdict = "NOT-COMPARABLE"
         else:

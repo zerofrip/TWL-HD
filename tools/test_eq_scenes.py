@@ -154,6 +154,118 @@ class EqScenesManifestTest(unittest.TestCase):
     @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
                      "run once via the test-eq-scenes make target; discover "
                      "skips it to avoid a double run")
+    def test_harness_frame_mismatch_is_not_comparable_not_a_fail(self):
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-hframe-")
+        try:
+            harness = write_lines(
+                tmp, "harness_s1_f243.txt",
+                [line.replace("requested-frame 242", "requested-frame 243")
+                      .replace("captured-frame 242", "captured-frame 243")
+                 for line in read_lines(HARNESS_S1)])
+            manifest = write_manifest(tmp, [{
+                "scene": "scene1",
+                "build": "SCENE=1 AUTODUMP_FRAME=240",
+                "harness": harness,
+                "ours": OURS_S1,
+                "expected_polys": 8,
+                "expected_verts": 24,
+            }])
+            result = run_tool("--manifest", manifest)
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("NOT-COMPARABLE", result.stdout)
+            self.assertIn("frame alignment: harness has requested 243 "
+                          "captured 243, expected 242", result.stdout)
+            self.assertIn("0 compared (reference 8/24)", result.stdout)
+            self.assertIn("1 NOT-COMPARABLE", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
+                     "run once via the test-eq-scenes make target; discover "
+                     "skips it to avoid a double run")
+    def test_ours_frame_mismatch_is_not_comparable_not_a_fail(self):
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-oframe-")
+        try:
+            lines = []
+            changed = False
+            for line in read_lines(OURS_S1):
+                if not changed and line.startswith("frame 241"):
+                    line = line.replace("frame 241", "frame 240")
+                    changed = True
+                lines.append(line)
+            self.assertTrue(changed, "fixture has no 'frame 241' line")
+            ours = write_lines(tmp, "ours_s1_f240line.txt", lines)
+            manifest = write_manifest(tmp, [{
+                "scene": "scene1",
+                "build": "SCENE=1 AUTODUMP_FRAME=240",
+                "harness": HARNESS_S1,
+                "ours": ours,
+                "expected_polys": 8,
+                "expected_verts": 24,
+            }])
+            result = run_tool("--manifest", manifest)
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("NOT-COMPARABLE", result.stdout)
+            self.assertIn("frame alignment: our recorder frame is 240, "
+                          "expected 241", result.stdout)
+            self.assertIn("1 NOT-COMPARABLE", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
+                     "run once via the test-eq-scenes make target; discover "
+                     "skips it to avoid a double run")
+    def test_unloadable_harness_dump_is_not_comparable(self):
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-trunc-")
+        try:
+            harness = write_lines(tmp, "harness_truncated.txt",
+                                  read_lines(HARNESS_S1)[:4])
+            manifest = write_manifest(tmp, [{
+                "scene": "scene1",
+                "build": "SCENE=1 AUTODUMP_FRAME=240",
+                "harness": harness,
+                "ours": OURS_S1,
+                "expected_polys": 8,
+                "expected_verts": 24,
+            }])
+            result = run_tool("--manifest", manifest)
+            self.assertEqual(result.returncode, 0,
+                             result.stdout + result.stderr)
+            self.assertIn("NOT-COMPARABLE", result.stdout)
+            self.assertIn("harness dump is unusable", result.stdout)
+            self.assertIn("1 NOT-COMPARABLE", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
+                     "run once via the test-eq-scenes make target; discover "
+                     "skips it to avoid a double run")
+    def test_polygon_count_mismatch_is_a_fail_and_exit_one(self):
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-count-")
+        try:
+            manifest = write_manifest(tmp, [{
+                "scene": "scene1",
+                "build": "SCENE=1 AUTODUMP_FRAME=240",
+                "harness": HARNESS_S1,
+                "ours": OURS_S1,
+                "expected_polys": 9,
+                "expected_verts": 24,
+            }])
+            result = run_tool("--manifest", manifest)
+            self.assertEqual(result.returncode, 1,
+                             result.stdout + result.stderr)
+            self.assertIn("FAIL", result.stdout)
+            self.assertIn("harness dumped 8 polygons, expected 9",
+                          result.stdout)
+            self.assertIn("1 FAIL", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
+
+    @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
+                     "run once via the test-eq-scenes make target; discover "
+                     "skips it to avoid a double run")
     def test_missing_prerequisite_is_exit_two_before_any_run(self):
         tmp = tempfile.mkdtemp(prefix="eq-scenes-missing-")
         try:
