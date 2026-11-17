@@ -183,10 +183,13 @@ full 60 s watchdog with `--disable-limiter` and no BKPT — but it writes nothin
 either, so that run only shows that the ROM does not fault before it mounts the
 card; it does not isolate the cause.
 
-The **faulting PC was not measured for scene2 in this environment**: the
-installed `desmume-cli` has no gdb stub (`--help` and `strings` contain no such
-option), so the gdb mapping used for the CUBES investigation
-(`docs/EMULATOR_VALIDATION.md:286`) could not be repeated. What is ruled out
+The **faulting PC has since been measured** with an out-of-tree diagnostic
+DeSmuME CLI (no gdb stub needed): `0x01FF853C`, the reset slot
+`__arm_excpt_rst` whose instruction is `bkpt 0x8000`, entered because the ROM
+branches to address 0 from newlib `setvbuf` at frame 0 — a consequence, not the
+cause. The fault needs DeSmuME's in-place DLDI auto-patch of the ROM image and
+reproduces only with it. Details, per-PC evidence and labels:
+`docs/reports/bkpt-diagnosis.md` (root cause still UNRESOLVED). What is ruled out
 with file:line evidence is a recorder or `demo_frame` limit: `arm9v2/` and
 `common/twlhd_gx_record.{c,h}` contain no runtime assert or BKPT (the only
 assertions are compile-time `_Static_assert`, `common/twlhd_gx_record.h:79-91`),
@@ -206,21 +209,24 @@ the calico trap: `arm-none-eabi-addr2line -f -e arm9v2/twlhd-arm9v2-autodump-s2.
 `bkpt 0x8000` (`arm-none-eabi-objdump`), and `__excpt_vectors` at `0x01ff8038`
 starts with `.word 0x01ff853c`, the reset slot. `docs/EMULATOR_VALIDATION.md:286`
 measured control reaching that same reset vector in the analogous CUBES=64
-AF=120 failure; whether scene2 stops there was **not** measured. **DEFECT
+AF=120 failure; scene2 does stop there (measured, frame 0 — see
+`docs/reports/bkpt-diagnosis.md`). **DEFECT
 FOUND: none** — no recorder/`demo_frame` limit is reached and no ROM file is
 changed by this task. Whether the trap comes from our write path, from the
 DLDI/libfat/MPCF stack it calls, or from the emulator is **UNRESOLVED** and is
-not attributed to DeSmuME; settling it needs a DeSmuME build with a gdb stub (or
-a PC print) and is open work. The harness dump is committed so the reference
-counts stay verifiable.
+not attributed to DeSmuME; the measurement does show it needs the emulator's
+in-place DLDI auto-patch of the ROM image and that the ROM's own bytes are not
+sufficient, so the remaining gap is emulator-side. The harness dump is
+committed so the reference counts stay verifiable.
 
 **scene3 — NOT-COMPARABLE (no reference frame).** The harness itself exits 1:
 `ROM never presented a 3D frame within 1200 frames`, and the capture log ends
 with the same `ARM OP_BKPT triggered`. No `SWAP_BUFFERS` reaches the GPU, so
-neither the reference geometry nor our stream exists. The PC was not measured
-for scene3 either (no gdb stub, as above); the same reset-vector entries exist
-in that ROM. No fixture is committed for this row because there is no data to
-commit.
+neither the reference geometry nor our stream exists. The PC was measured for
+scene3 too: `0x01FF853C` (reset slot) reached by a branch to address 0 at frame
+0, with LR `__libc_lock_release_recursive` — a different branch site from
+scene2's (`docs/reports/bkpt-diagnosis.md`). No fixture is committed for this
+row because there is no data to commit.
 
 **scene4 (alpha quads) — PASS, geometry only.** 4 polygons / 16 vertices. Worst
 x 0.0166 px, y 0.0164 px, w 1 quantum, colour 0, z 91608 (tol 1500947). All four
@@ -260,12 +266,17 @@ which the picture comparison does not read.
 
 **cubes (`CUBES=2`) — NOT-COMPARABLE (capture aborts).** The harness reference
 succeeded (12 polygons / 48 vertices, frame 242), but the DeSmuME v2 capture
-aborted with `ARM OP_BKPT triggered` (log line; the faulting PC was not measured
-for this row in this environment — no gdb stub in the installed `desmume-cli`).
+aborted with `ARM OP_BKPT triggered` (log line; the faulting PC has since been
+measured for this row: `0x01FF853C`, the reset slot, reached by a branch to
+address 0 at frame 6 with SP inside the DLDI region —
+`docs/reports/bkpt-diagnosis.md`).
 `docs/EMULATOR_VALIDATION.md:269-292` holds the prior CUBES investigation: in
 the CUBES=64 AF=120 run gdb showed control reaching the `0x01ff853c` reset
-vector, and that root cause stays UNEXPLAINED. `CUBES=2` draws 48 ROM vertices,
-twice the working cube frame's 24, yet no recorder capacity is near its limit
+vector, and that root cause stays UNEXPLAINED (the same diagnostic CLI measures
+it at frame 129, after 120+ frames presented, branching to 0 from
+`common/twlhd_tex_capture.c:208` — a different site from `CUBES=2`'s).
+`CUBES=2` draws 48 ROM
+vertices, twice the working cube frame's 24, yet no recorder capacity is near its limit
 (`common/twlhd_gx_record.h:30,41-45`), so there is no failing size limit to
 report and no "DEFECT FOUND" statement to make. Without our-side geometry no
 EQ-2 row and no Azahar picture can be produced. `CUBES=2` was chosen to match
@@ -294,8 +305,11 @@ renderer, tolerance or harness/DeSmuME file was modified.
 - **The scene2/scene3/cubes rows.** Scene 2 and CUBES=2 have reference geometry
   but no our-side capture; scene 3 has neither. In every failing case the
   emulator log ends with `ARM OP_BKPT triggered`; no recorder or `demo_frame`
-  limit is reached (section 3), the faulting PC was not measured here, and the
-  cause is UNRESOLVED and not attributed to DeSmuME. A future capture fix could
+  limit is reached (section 3), the faulting PC is `0x01FF853C` in every row and
+  is the reset slot reached by a branch to address 0
+  (`docs/reports/bkpt-diagnosis.md`), and the cause of that branch is UNRESOLVED
+  — the measurement does not attribute it to our ROM code, and the emulator's
+  in-place DLDI auto-patch is required for it. A future capture fix could
   turn these into real comparisons; the
   driver already retries the documented capture and reports the log reason.
 - **Clipping.** EQ-2 remains valid only for unclipped frames (all scenes are
