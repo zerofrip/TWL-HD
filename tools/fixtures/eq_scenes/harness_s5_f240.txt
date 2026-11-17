@@ -1,0 +1,66 @@
+twlhd-desmume-harness 1.0.0
+format geometry-dump 1
+emulator desmume fc504ee0
+label EMULATOR
+rom-sha256 35a50aadc30dbf26d7fa389192a908024cffaa515614c378e389e3efd45d82bd
+requested-frame 242
+captured-frame 242
+polygon-count 1
+vertex-count 4
+raw-polygon-count 1
+raw-vertex-count 4
+viewport-mode per-polygon
+begin
+poly 0 verts 4 prim quad vtxformat quads rawpoly 0
+attr 0x001F00C0
+texparam 0x0C000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 4 0 1 2 3
+vtx 0
+pos-x-16.16 11279295
+pos-y-16.16 1371929
+pos-z-0.31 2100987693
+pos-w-20.12 18082
+tex-s-12.4 128
+tex-t-12.4 128
+col-r-6bit 63
+col-g-6bit 63
+col-b-6bit 63
+col-a-u8 0
+vtx 1
+pos-x-16.16 6416132
+pos-y-16.16 5710777
+pos-z-0.31 2116138592
+pos-w-20.12 26274
+tex-s-12.4 0
+tex-t-12.4 128
+col-r-6bit 63
+col-g-6bit 63
+col-b-6bit 63
+col-a-u8 0
+vtx 2
+pos-x-16.16 4851752
+pos-y-16.16 12349007
+pos-z-0.31 2089724146
+pos-w-20.12 14686
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 63
+col-g-6bit 63
+col-b-6bit 63
+col-a-u8 0
+vtx 3
+pos-x-16.16 16419401
+pos-y-16.16 8641791
+pos-z-0.31 2014216646
+pos-w-20.12 6494
+tex-s-12.4 128
+tex-t-12.4 0
+col-r-6bit 63
+col-g-6bit 63
+col-b-6bit 63
+col-a-u8 0
+end-poly
+end

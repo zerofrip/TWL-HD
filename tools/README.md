@@ -84,6 +84,25 @@ Exit codes: 0 within tolerance, 1 structural mismatch (worst deviation, face
 and field named), 2 usage or format error (bad PPM, wrong size, an input with
 no expected face class).
 
+## EQ-2/EQ-3 scene coverage
+
+`eq_scenes.py` runs the EQ-2b geometry comparison and, where the colour model is
+valid, the EQ-3b picture comparison for every arm9v2 demo scene: the default
+cube, `SCENE=1..5` and `CUBES=2`. It imports `eq2_compare`/`eq3_compare` and
+restates no tolerance. Full mode needs the harness binary, `desmume-cli`, the
+ROM directory and `gx_interp_cli`; `--manifest` replays committed text dumps
+without an emulator. See `docs/EQ_SCENES.md` for the per-scene table and what is
+not proven. All results are EMULATOR.
+
+```sh
+TWLHD_HARNESS_BIN=/path/harness DESMUME_CLI=/path/desmume-cli \
+  python3 tools/eq_scenes.py --rom-dir arm9v2
+python3 tools/eq_scenes.py --manifest tools/fixtures/eq_scenes/manifest.json
+```
+
+Exit codes: 0 every row PASS or NOT-COMPARABLE, 1 at least one FAIL row, 2 a
+missing prerequisite or an unusable manifest.
+
 ## Errors
 
 Malformed input exits non-zero with a one-line message instead of a traceback:
