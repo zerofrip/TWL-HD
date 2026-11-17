@@ -1148,7 +1148,11 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
     matrix_identity(&g.clip);
     g.clip_dirty = 1;
     g.mode = 0u;
-    g.rgba[0] = g.rgba[1] = g.rgba[2] = 0.0f;
+    /* DS geometry engine reset current colour is white (DeSmuME model,
+     * gfx3d.cpp:553-563); real-DS default UNVERIFIED
+     * (docs/reports/scene5-colour-diagnosis.md section 3); the v2 format cannot
+     * carry pre-arm state (INITIAL_STATE_UNKNOWN). */
+    g.rgba[0] = g.rgba[1] = g.rgba[2] = 1.0f;
     g.pending_alpha = 31u; /* no-attr default: opaque. */
     g.applied_alpha = 31u;
     g.rgba[3] = gx_alpha_float(g.applied_alpha);

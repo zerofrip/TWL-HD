@@ -42,6 +42,8 @@ CLI = os.path.join(TOOLS_DIR, "eq_scenes.py")
 
 HARNESS_S1 = os.path.join(FIXTURES, "harness_s1_f240.txt")
 OURS_S1 = os.path.join(FIXTURES, "ours_s1_f240.txt")
+HARNESS_S5 = os.path.join(FIXTURES, "harness_s5_f240.txt")
+OURS_S5 = os.path.join(FIXTURES, "ours_s5_f240.txt")
 
 
 def run_tool(*args):
@@ -75,6 +77,20 @@ def perturb_first_x(lines, delta):
             parts[1] = str(int(parts[1]) + delta)
             out.append(" ".join(parts) + "\n")
             changed = True
+        else:
+            out.append(line)
+    return out
+
+
+def perturb_ours_s5_colour_to_black(lines):
+    """Rewrite the RGB fields of every vertex in the scene5 our-side dump to
+    black (0.0f).  Keeps alpha, texture and geometry intact."""
+    out = []
+    for line in lines:
+        if line.startswith("v "):
+            parts = line.split()
+            parts[6] = parts[7] = parts[8] = "00000000"
+            out.append(" ".join(parts) + "\n")
         else:
             out.append(line)
     return out
@@ -119,18 +135,52 @@ class EqScenesManifestTest(unittest.TestCase):
     @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
                      "run once via the test-eq-scenes make target; discover "
                      "skips it to avoid a double run")
-    def test_table_has_one_row_per_scene_and_reports_the_real_fail(self):
+    def test_table_has_one_row_per_scene_and_scene5_passes(self):
         result = run_tool("--manifest", MANIFEST)
-        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for scene in ("cube", "scene1", "scene2", "scene3", "scene4",
                       "scene5", "cubes"):
             self.assertIn("%-8s" % scene, result.stdout)
         self.assertIn("polys/verts", result.stdout)
-        # The real scene-5 colour finding must not be hidden.
-        self.assertIn("MISMATCH r: 63 > 2", result.stdout)
-        self.assertIn("63", result.stdout)
-        self.assertIn("summary: 7 rows", result.stdout)
-        self.assertIn("1 FAIL", result.stdout)
+        # Scene5 now matches the DeSmuME white-initial-colour model.
+        self.assertIn("scene5: PASS", result.stdout)
+        self.assertIn("summary: 7 rows, 4 PASS, 0 FAIL, 3 NOT-COMPARABLE",
+                      result.stdout)
+        # The old colour failure is gone; the negative test below guards the
+        # INITIAL_STATE_UNKNOWN gap.
+        self.assertNotIn("MISMATCH r: 63 > 2", result.stdout)
+        self.assertNotIn("1 FAIL", result.stdout)
+
+    @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
+                     "run once via the test-eq-scenes make target; discover "
+                     "skips it to avoid a double run")
+    def test_scene5_colour_black_versus_white_is_a_fail(self):
+        """Guard: if the scene5 our-side dump is perturbed back to black, the
+        colour deviation returns to 63 and the row FAILs.  This preserves an
+        automated check on the INITIAL_STATE_UNKNOWN gap while the committed
+        expectation moves to the DeSmuME white-initial-colour model."""
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-s5colour-")
+        try:
+            ours = write_lines(
+                tmp, "ours_s5_f240_black.txt",
+                perturb_ours_s5_colour_to_black(read_lines(OURS_S5)))
+            manifest = write_manifest(tmp, [{
+                "scene": "scene5",
+                "build": "SCENE=5 AUTODUMP_FRAME=240",
+                "harness": HARNESS_S5,
+                "ours": ours,
+                "expected_polys": 1,
+                "expected_verts": 4,
+            }])
+            result = run_tool("--manifest", manifest)
+            self.assertEqual(result.returncode, 1,
+                             result.stdout + result.stderr)
+            self.assertIn("scene5", result.stdout)
+            self.assertIn("FAIL", result.stdout)
+            self.assertIn("MISMATCH r: 63 > 2", result.stdout)
+            self.assertIn("1 FAIL", result.stdout)
+        finally:
+            shutil.rmtree(tmp)
 
     @unittest.skipIf(EQ_SCENES_DISCOVER_SKIP,
                      "run once via the test-eq-scenes make target; discover "
@@ -365,24 +415,53 @@ class EqScenesMutantTest(unittest.TestCase):
         with redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()):
             return eq_scenes.main(["--manifest", manifest])
 
+    def _manifest_with_scene5_black(self):
+        """Return a manifest where our-side scene5 is perturbed back to black,
+        producing a real FAIL row (see test_scene5_colour_black_versus_white_is_a_fail)."""
+        tmp = tempfile.mkdtemp(prefix="eq-scenes-mutant-")
+        self.addCleanup(shutil.rmtree, tmp)
+        ours = write_lines(
+            tmp, "ours_s5_f240_black.txt",
+            perturb_ours_s5_colour_to_black(read_lines(OURS_S5)))
+        return write_manifest(tmp, [{
+            "scene": "cube",
+            "build": "AUTODUMP_FRAME=240",
+            "harness": os.path.join(FIXTURES, "../eq2/harness_cube_f240.txt"),
+            "ours": os.path.join(FIXTURES, "../eq2/ours_cube_f240.txt"),
+            "expected_polys": 6,
+            "expected_verts": 24,
+            "eq3": "valid",
+            "eq3_harness": os.path.join(FIXTURES, "../eq3/harness_cube_f240.ppm"),
+            "eq3_ours": os.path.join(FIXTURES, "../eq3/ours_cube_f240_top.ppm"),
+        }, {
+            "scene": "scene5",
+            "build": "SCENE=5 AUTODUMP_FRAME=240",
+            "harness": HARNESS_S5,
+            "ours": ours,
+            "expected_polys": 1,
+            "expected_verts": 4,
+        }])
+
     def test_verdict_aggregation_mutant_would_accept_a_fail(self):
-        self.assertEqual(self._main(MANIFEST), 1)
+        manifest = self._manifest_with_scene5_black()
+        self.assertEqual(self._main(manifest), 1)
         original = eq_scenes.aggregate
         eq_scenes.aggregate = lambda results: 0
         try:
             self.assertEqual(
-                self._main(MANIFEST), 0,
+                self._main(manifest), 0,
                 "a broken verdict rule must wrongly accept the FAIL row")
         finally:
             eq_scenes.aggregate = original
 
     def test_per_scene_loop_mutant_would_hide_the_fail_row(self):
-        self.assertEqual(self._main(MANIFEST), 1)
+        manifest = self._manifest_with_scene5_black()
+        self.assertEqual(self._main(manifest), 1)
         original = eq_scenes.select_rows
         eq_scenes.select_rows = lambda rows: rows[:1]
         try:
             self.assertEqual(
-                self._main(MANIFEST), 0,
+                self._main(manifest), 0,
                 "processing only the first row must wrongly hide the FAIL")
         finally:
             eq_scenes.select_rows = original
