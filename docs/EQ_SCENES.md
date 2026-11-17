@@ -311,8 +311,9 @@ renderer, tolerance or harness/DeSmuME file was modified.
   `demo_frame` limit is reached (section 3), the faulting PC is `0x01FF853C` in
   every such row and is the reset slot reached by a branch to address 0
   (`docs/reports/bkpt-diagnosis.md`), and the cause of that branch is UNRESOLVED.
-  For scene2, scene3 and CUBES=2 the branch sites are newlib/calico startup, an
-  unmapped site and the calico exception handler — not our code; for CUBES=64
+  Only scene2's branch site (newlib `setvbuf`) is measured to be outside our
+  code; scene3's and CUBES=2's sites are not attributed (UNVERIFIED, see the
+  report's open items 3-4); for CUBES=64
   AF=120 the branch site **is** in our code (`common/twlhd_tex_capture.c:208`, LR
   in `twlhd_tex_capture_plan` at `:215`), also UNRESOLVED. The emulator's
   in-place DLDI auto-patch is required by **scene2 in the tested
