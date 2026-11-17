@@ -487,8 +487,10 @@ its own pointers on entry at `:163` (`if (!limits || !gxcm || !read || !out)
 return TWLHD_TEX_CAP_ERR_NULL;`), so this hypothesis needs a pointer or return
 address corrupted *after* that check. Caveat: in the current source `:208` is
 `if (last_write_seq[key] != write_seq) {`, not a call site; `:208`/`:215` are
-the `addr2line` result for the CUBES=64 ELF recorded in section 2.2, and the
-instruction at `0x0200269A` was never disassembled. The mechanism is therefore
+the `addr2line` result for the CUBES=64 ELF recorded in section 2.2. A fresh
+rebuild disassembles the instruction at `0x0200269A` as `pop {pc}` — a function
+return from a zeroed saved LR, not an indirect call — see
+`docs/reports/cubes64-branch0-diagnosis.md`. The mechanism is therefore
 HYPOTHESIS/UNVERIFIED, not a measured cause.
 
 **HYPOTHESIS (not proven).**
