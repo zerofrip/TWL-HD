@@ -10,7 +10,8 @@ DeSmuME-based, out-of-tree GPL harness
 
 - **Harness numbers: EMULATOR** (DeSmuME `fc504ee0`). Nothing here is
   hardware-verified.
-- **Our-side numbers and the comparison: UNIT** (host arithmetic).
+- **Our-side numbers and the comparison: EMULATOR** (host arithmetic against
+  the EMULATOR reference).
 - **Licence posture:** this repository is Apache-2.0. No harness or DeSmuME
   source, code or repository content was copied here. The harness's documented
   text format was read and re-implemented in our own words; the committed test
@@ -138,7 +139,9 @@ frame is the one in the dump.
 
 Selection: each file is single-frame. `--harness-frame N` (default **242**)
 requires both `requested-frame` and `captured-frame` to equal `N`; otherwise the
-tool exits 2. Our side is the single v2 capture passed to `gx_interp_cli`.
+tool exits 2. `--ours-frame N` (default **241**, the recorder frame index mapped
+to harness frame 242 above) requires the our-side `frame` line to equal `N`,
+exit 2 otherwise. Our side is the single v2 capture passed to `gx_interp_cli`.
 
 ## 4. Tolerances (cited, not invented)
 
@@ -168,7 +171,7 @@ line is an explicit mismatch (exit 1).
 |---|---|
 | 0 | every compared field within tolerance and the counts consumed exactly |
 | 1 | any mismatch: worst deviation per field with polygon and vertex index, or a count/mapping reason |
-| 2 | usage or format error (bad arguments, unreadable file, malformed dump, missing selected frame) |
+| 2 | usage or format error (bad arguments, unreadable file, malformed dump, missing selected frame on either side) |
 
 Missing polygons/vertices, an unconsumed tail, a non-contiguous `rawpoly` set, a
 viewport disagreement and truncated interpreter stats are exit 1, never a
@@ -177,8 +180,9 @@ silent pass. Reported indices name the harness `poly i` (clipped-list index), it
 
 ## 6. Tests and mutant proof
 
-`tools/test_eq2_compare.py` is picked up by `make test`
-(`python3 -B -I -m unittest discover -s tools`). It covers:
+`tools/test_eq2_compare.py` runs via the dedicated `make test-eq2` target; the
+discover pass in `make test` sets `EQ2_DISCOVER_SKIP` so the suite executes
+exactly once under `make test` (the skip is reported, not silent). It covers:
 
 - committed positive pair -> exit 0;
 - first `pos-x-16.16` +75536 (beyond 1 px) -> exit 1 with polygon/vertex indices;
@@ -187,6 +191,8 @@ silent pass. Reported indices name the harness `poly i` (clipped-list index), it
 - last polygon block dropped -> exit 1 (polygon count);
 - bad magic line and a bad field count -> exit 2;
 - `--harness-frame 999` -> exit 2;
+- our-side copy with `frame 240` against the default `--ours-frame 241` ->
+  exit 2, "not present";
 - two in-process mutants: relaxing `TOL_XY_16_16` makes the beyond-tolerance
   case wrongly pass; setting `ENFORCE_COUNTS = False` makes the dropped-polygon
   case wrongly pass. Each mutant test first asserts the unmodified tool returns
@@ -211,7 +217,7 @@ silent pass. Reported indices name the harness `poly i` (clipped-list index), it
 - Command:
   `python3 tools/eq2_compare.py tools/fixtures/eq2/harness_cube_f240.txt tools/fixtures/eq2/ours_cube_f240.txt`
 - Result: **exit 0 — all six quads / 24 dumped vertices match within section
-  5.2 tolerance.** Worst deviations (EMULATOR reference, UNIT arithmetic):
+  5.2 tolerance.** Worst deviations (EMULATOR):
 
 | Field | Worst | Tolerance | Location |
 |---|---|---|---|

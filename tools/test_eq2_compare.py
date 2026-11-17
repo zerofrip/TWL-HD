@@ -7,7 +7,9 @@ our interpreter's --eq2 output) through the CLI for exit codes, then imports the
 module to prove the tolerance and count checks are what make the negative tests
 fail (the same in-process mutant pattern as tools/test_emulator_compare.py).
 
-Runs under `make test` without devkitPro or an emulator.
+Runs under `make test` without devkitPro or an emulator. The dedicated
+`make test-eq2` target runs this suite; the discover pass in `make test` sets
+EQ2_DISCOVER_SKIP so the suite is not executed twice.
 
     PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 """
@@ -18,6 +20,10 @@ import subprocess
 import sys
 import tempfile
 import unittest
+
+# Set only by the aggregate `test` recipe, which runs this module first via the
+# test-eq2 target. Skips are visible in discover output, not a silent drop.
+EQ2_DISCOVER_SKIP = os.environ.get("EQ2_DISCOVER_SKIP") is not None
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, TOOLS_DIR)
@@ -99,6 +105,9 @@ def drop_last_polygon(lines):
     return lines[:start] + lines[end + 1:]
 
 
+@unittest.skipIf(EQ2_DISCOVER_SKIP,
+                 "run once via the test-eq2 make target; discover skips it to "
+                 "avoid a double run")
 class Eq2CompareCliTest(unittest.TestCase):
 
     def setUp(self):
@@ -175,7 +184,22 @@ class Eq2CompareCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("not present", result.stderr)
 
+    def test_missing_selected_ours_frame_is_a_usage_error(self):
+        lines = []
+        for line in read_lines(OURS):
+            if line.startswith("frame "):
+                lines.append("frame 240\n")
+            else:
+                lines.append(line)
+        path = write_lines(self.tmp, "ours-f240.txt", lines)
+        result = run_tool(HARNESS, path)
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("not present", result.stderr)
 
+
+@unittest.skipIf(EQ2_DISCOVER_SKIP,
+                 "run once via the test-eq2 make target; discover skips it to "
+                 "avoid a double run")
 class Eq2CompareMutantTest(unittest.TestCase):
     """Show the negative tests depend on the real tolerance and count checks."""
 

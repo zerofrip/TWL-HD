@@ -19,8 +19,8 @@ vertex under the tolerances of docs/EQUALITY_CHECK_DESIGN.md section 5.2.
 docs/EQ2_COMPARE.md documents both formats, the unit conversions, the frame
 alignment, and the exact tolerances with line citations.
 
-Everything is UNIT (host arithmetic) except the reference dump, which is
-EMULATOR (DeSmuME) data.
+All results are EMULATOR: the reference dump is DeSmuME data and the our-side
+numbers are produced by host arithmetic against it (no console involved).
 
 Exit codes: 0 every compared field within tolerance and counts consumed
 exactly; 1 any mismatch (worst deviations with polygon/vertex indices are
@@ -597,6 +597,10 @@ def main(argv=None):
     parser.add_argument(
         "--harness-frame", type=int, default=242,
         help="expected harness frame (default 242: ROM frame 240 + boot offset)")
+    parser.add_argument(
+        "--ours-frame", type=int, default=241,
+        help="expected our-side frame (default 241: the v2 recorder frame index "
+             "that maps to harness frame 242; docs/EQ2_COMPARE.md section 3)")
     args = parser.parse_args(argv)
 
     try:
@@ -609,6 +613,10 @@ def main(argv=None):
                 "captured %d)"
                 % (args.harness_frame, harness["requested_frame"],
                    harness["captured_frame"]))
+        if args.ours_frame != ours["frame"]:
+            raise FormatError(
+                "ours frame %d is not present (dump has frame %d)"
+                % (args.ours_frame, ours["frame"]))
         code, report = compare(harness, ours)
     except FormatError as exc:
         print("eq2: format error: %s" % exc, file=sys.stderr)
