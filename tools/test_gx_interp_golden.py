@@ -373,6 +373,24 @@ class GxInterpGoldenTest(unittest.TestCase):
         self.assertIn("stack_errors=0", stats_line)
         self.assertIn("geometry_incomplete=0", stats_line)
 
+    def test_default_colour_without_color_or_normal_is_white(self):
+        """A stream with no COLOR or NORMAL command keeps the latched default.
+
+        Corrected expectation: interpreter default colour is now white per
+        docs/reports/scene5-colour-diagnosis.md option (a); found by the
+        requirement-2 dependency grep.  This directly covers
+        gx_interp_oracle.py:368: the independent oracle's initial colour must
+        match the DeSmuME reset model (white). If the oracle is reverted to
+        black, LightingOracle.process returns black and this test fails.
+        """
+        entries = [(CMD_BEGIN_VTXS, 0)]
+        entries.extend(_vtx16(0, 0))
+        entries.extend(_vtx16(0x1000, 0))
+        entries.extend(_vtx16(0, 0x1000))
+        entries.append((CMD_END_VTXS, 0))
+        colour = gx_interp_oracle.LightingOracle().process(entries)
+        self.assertEqual(colour, (1.0, 1.0, 1.0))
+
     def _run_cli_tex(self, data):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "tex_stream_v2.bin")

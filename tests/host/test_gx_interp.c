@@ -1540,7 +1540,10 @@ static void test_colour_latch(void) {
 }
 
 static void test_default_colour(void) {
-    /* No COLOR command: latched colour defaults to opaque black. */
+    /* No COLOR command: latched colour defaults to opaque white.  Expectation
+     * corrected to the DeSmuME reset model; real-DS default UNVERIFIED.  The
+     * test's purpose is unchanged: a stream without COLOR yields the documented
+     * default colour. */
     uint32_t n = 0u;
     size_t size;
     TwlhdV2View view;
@@ -1559,9 +1562,9 @@ static void test_default_colour(void) {
     r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
     CHECK_EQ_INT(r, TWLHD_GX_OK);
     CHECK_EQ_INT(g_out_count, 3u);
-    CHECK_NEAR(g_out[0].rgba[0], 0.0f, 0.0001f);
-    CHECK_NEAR(g_out[0].rgba[1], 0.0f, 0.0001f);
-    CHECK_NEAR(g_out[0].rgba[2], 0.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[0], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[1], 1.0f, 0.0001f);
+    CHECK_NEAR(g_out[0].rgba[2], 1.0f, 0.0001f);
     CHECK_NEAR(g_out[0].rgba[3], 1.0f, 0.0001f);
 }
 

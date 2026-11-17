@@ -138,7 +138,7 @@ The work directory holds the ROM captures and PPMs and is not committed.
 | scene2 | `SCENE=2 AUTODUMP_FRAME=240` | 0 compared (reference 10/30) | — | — | — | — | — | — | NOT-COMPARABLE (red-ramp model) | **NOT-COMPARABLE** |
 | scene3 | `SCENE=3 AUTODUMP_FRAME=240` | — | — | — | — | — | — | — | NOT-COMPARABLE (red-ramp model) | **NOT-COMPARABLE** |
 | scene4 | `SCENE=4 AUTODUMP_FRAME=240` | 4 / 16 | 0.0166 px (1090) | 0.0164 px (1074) | 91608 (tol 1500947) | 1 (tol 16) | 0 (tol 2) | 0 | NOT-COMPARABLE (blended T=16; wireframe) | **PASS (geometry only)** |
-| scene5 | `SCENE=5 AUTODUMP_FRAME=240` | 1 / 4 | 0.0087 px (571) | 0.0148 px (969) | 165343 (tol 2708990) | 0 (tol 16) | **63 (tol 2)** | 0 | NOT-COMPARABLE (texture model) | **FAIL (colour)** |
+| scene5 | `SCENE=5 AUTODUMP_FRAME=240` | 1 / 4 | 0.0087 px (571) | 0.0148 px (969) | 165343 (tol 2708990) | 0 (tol 16) | **0 (tol 2)** | 0 | NOT-COMPARABLE (texture model) | **PASS (geometry+colour)** |
 | cubes | `CUBES=2 AUTODUMP_FRAME=240` | 0 compared (reference 12/48) | — | — | — | — | — | — | NOT-COMPARABLE (no picture) | **NOT-COMPARABLE** |
 
 `—` means no comparison ran; the rationale is in section 3. The
@@ -236,23 +236,23 @@ wireframe/outline path (design 2.3; `common/twlhd_gx_interp.c:1075-1077`). The
 16-level blended tolerance is therefore **stated but not exercised**; what is
 proven is vertex/geometry equality for the alpha scene, nothing about blending.
 
-**scene5 (textured) — FAIL (colour), geometry passes.** 1 polygon / 4 vertices.
-The first four EQ-2 fields are inside tolerance (worst x 0.0087 px, y
-0.0148 px, w 0, z 165343 with tol 2708990; tex s/t 0, reported but never gated).
-The colour field fails by **63 of 64 6-bit levels**: DeSmuME's vertices carry
-`col-r/g/b-6bit = 63` (white), ours carry 0 (black).
+**scene5 (textured) — PASS (geometry+colour).** 1 polygon / 4 vertices.  All
+EQ-2 fields are inside tolerance: worst x 0.0087 px, y 0.0148 px, w 0, z 165343
+with tol 2708990, colour 0 (tol 2), and tex s/t 0 (reported but never gated).
+The geometry was already passing; the colour deviation dropped from 63 to 0
+once the interpreter's latched RGB was initialised to white to match DeSmuME's
+reset model (`common/twlhd_gx_interp.c:1151`).
 
-Suspected cause, from the code and the documented coverage flag: scene 5 never
-issues `glColor3b` for the textured quad (`demo_frame.cpp:190-216`), so the
-colour is whatever state `glInit()` left. The recorder only captures writes
-made through the shim after it is armed; `glInit()`'s library-internal writes
-are not recorded, which is exactly the `INITIAL_STATE_UNKNOWN` coverage flag
+Root cause and remaining caveat: scene 5 never issues `glColor3b` for the
+textured quad (`demo_frame.cpp:190-216`), so the colour is whatever state the
+geometry engine reset left. The recorder only captures writes made through the
+shim after it is armed; `glInit()`'s library-internal writes are not recorded,
+which is exactly the `INITIAL_STATE_UNKNOWN` coverage flag
 (`docs/TWLHD_V2_FORMAT.md:211`: "state set before arming is not reproduced";
-`docs/EQ2_COMPARE.md` section 1's `INITIAL_STATE_UNKNOWN`). Our interpreter
-starts its latched colour at 0 (`common/twlhd_gx_interp.c:1151`), while DeSmuME's
-current colour at that point is white. This is a genuine unrecorded-initial-state
-difference, reported as a FAIL, not tolerated away and not fixed here (the task
-forbids changing the interpreter). The textured-picture EQ-3 is
+`docs/EQ2_COMPARE.md` section 1's `INITIAL_STATE_UNKNOWN`). The fix makes the
+interpreter agree with DeSmuME's model, but the real-DS default colour stays
+UNVERIFIED (`docs/reports/scene5-colour-diagnosis.md` section 3); the coverage
+bit remains set in every capture. The textured-picture EQ-3 is still
 NOT-COMPARABLE: `eq3_compare` has no texture model (design/EQ3 section 8:
 "textured sampling would need its own structural checker"), and the geometry
 list carries no texture state; texture data lives in the v2 TXDT/PLDT chunks,
@@ -312,9 +312,10 @@ renderer, tolerance or harness/DeSmuME file was modified.
 only the committed text fixtures in `tools/fixtures/eq_scenes/` (no harness,
 DeSmuME or Azahar needed):
 
-- the seven-row manifest table: real scene-5 FAIL with `MISMATCH r: 63 > 2`,
-  compared counts 6/24 etc., `0 compared (reference 10/30)` for the rows where
-  EQ-2 did not run, and the NOT-COMPARABLE rows;
+- the seven-row manifest table: real scene-5 PASS, compared counts 6/24 etc.,
+  `0 compared (reference 10/30)` for the rows where EQ-2 did not run, and the
+  NOT-COMPARABLE rows; plus a negative test that a perturbed black-vs-white
+  `ours_s5_f240.txt` still FAILs with `MISMATCH r: 63 > 2`;
 - a pass/NOT-COMPARABLE manifest -> exit 0 (NOT-COMPARABLE never causes exit 1);
 - the verdict rule, one test per branch: a harness frame other than 242, our
   frame other than 241, or an unloadable/truncated dump -> NOT-COMPARABLE with

@@ -365,7 +365,7 @@ class LightingOracle:
         self.shininess_index = 0
         self.pending_mask = 0
         self.applied_mask = 0
-        self.colour = (0.0, 0.0, 0.0)
+        self.colour = (1.0, 1.0, 1.0)
         for index in range(LIGHT_COUNT):
             self._update_half_vector(index)
 
