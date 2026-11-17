@@ -24,7 +24,7 @@ repository; the tooling remains Apache-2.0, the same posture as
 | `harness_s4_f240.txt` | `428ae5e0ac8e654985f3bc3209cc739d049db204b1f617e98ad419c8c83d3d5f` |
 | `ours_s4_f240.txt` | `19ded23d37ce3c8394a4e9683c71d4054903e7598c1b0d08836abe3742e99777` |
 | `harness_s5_f240.txt` | `7d6b34d41134ed31bedb818bdc6de2d43bff0becb513ed6efe58cd30e918a6a0` |
-| `ours_s5_f240.txt` | `4002a9f5ab9ff3c03e2def0ad86a74e8e0c0e670a0f0aadb01d56ddfd88318c3` |
+| `ours_s5_f240.txt` | `f41557ef6149c5786d6660b6f2ddd6a03e1fdfafab83f0fd0261a4dfdfd11c0b` |
 | `harness_c2_f240.txt` | `5d0497d03c9729243286f36cb499185cb8dc74543d41574a2dc59845e1dba0d9` |
 | `manifest.json` | `aca18a079521c9df42d0cab7532d94326b3b7ebc80181fc84bdbdd17d19ea917` |
 | `manifest_pass.json` | `1b89eb0c91b9a8eb60fcdc899d853bb5e1396738d2b4bc325233eae4637b7c57` |

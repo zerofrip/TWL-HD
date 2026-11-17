@@ -320,6 +320,59 @@ interpreter colour output, `:94-135`). Do it only together with the section 3
 experiment or an explicit note that the value is DeSmuME's model; otherwise the
 report's UNVERIFIED label would silently become an assumption in code.
 
+## Resolution
+
+Option (a) was implemented on 2026-11-17 (owner approval recorded in the task
+contract).  The GX interpreter's latched vertex RGB is now initialised to white
+(`1.0f`, i.e. `31/31`, read back as 63 in 6-bit) in
+`common/twlhd_gx_interp.c:1151`; alpha stays at the `POLYGON_ATTR`-derived
+`3F800000` value and was not changed.  The matching updates moved the complete
+blast radius listed in section 5:
+`tests/host/test_gx_interp.c` (`test_default_colour` expectation corrected to
+white), `tools/gx_interp_oracle.py` (independent oracle initial colour set to
+white), `tools/fixtures/eq_scenes/ours_s5_f240.txt` regenerated (only the RGB
+floats changed, geometry byte-identical) with its sha256 in
+`tools/fixtures/eq_scenes/README.md:27`, `tools/test_eq_scenes.py` updated to
+expect scene5 PASS and a new negative test that perturbs the fixture back to
+black still FAILs with `MISMATCH r: 63 > 2`, and `docs/EQ_SCENES.md` updated
+(table row now PASS (geometry+colour), narrative kept the UNVERIFIED caveat).
+The requirement-2 dependency grep also found `tools/test_gx_interp_golden.py`
+as an extra dependent outside the blast-radius table, so a new oracle-suite test
+`test_default_colour_without_color_or_normal_is_white` was added there with the
+corrected white expectation.
+
+Evidence: re-running the real EQ-2 scene5 comparison against the same
+`SCENE=5 AUTODUMP_FRAME=240` v2 capture showed colour deviation drop from 63
+(tolerance 2) to 0, with geometry unchanged (x 571, y 969, z 165343 tol 2708990,
+w 0, tex 0).  `make test` is green.  Mutant (i): reverting the interpreter init
+to `0.0f` makes `test_default_colour` fail.  Because
+`tools/eq_scenes.py --manifest` replays the pre-existing committed fixture, the
+committed-fixture scene5 run still passes; to show the scene5 effect of the
+mutant, the fixture was regenerated with the black interpreter and that black
+fixture FAILs scene5 with `MISMATCH r: 63 > 2`.  Mutant (ii): setting the oracle
+initial colour back to black now fails the new oracle-suite test
+`test_default_colour_without_color_or_normal_is_white` in
+`tools/test_gx_interp_golden.py` (a colourless BEGIN/VTX16/END stream asserting
+the latched RGB is white); all other oracle tests still pass because lighting
+replaces the colour and texture tests compare tex fields only.  The negative
+perturbation test remains the guard on the INITIAL_STATE_UNKNOWN gap at the
+fixture level.
+
+The picture-level check on the existing Azahar host path succeeded in this
+session: the SCENE=5 v2 capture was staged as `sdmc:/twlhd_frame.bin`, the
+arm11 .3dsx was built once with the old black-initial-colour interpreter
+(into `/tmp/opencode/arm11-before.3dsx`) and once with the new white
+interpreter (`arm11/twlhd-arm11.3dsx`), and `tools/azahar_host/build/azahar_host`
+rendered both under the Azahar libretro software renderer.  Counting distinct
+RGB values in the DS viewport region of the top-screen 400x240 shot
+(cols 40..359, rows 0..239) gave 2 colours before (dominant black) and 7
+colours after (textured palette colours visible).  This is EMULATOR-only
+verification; it says nothing about real hardware.
+
+The real-DS default colour remains **UNVERIFIED** and the v2 format's
+`INITIAL_STATE_UNKNOWN` coverage gap remains open; the change makes the DeSmuME
+and interpreter models agree, but it records no hardware state.
+
 ---
 
 CAUSE: DeSmuME's dump carries its geometry engine's reset current colour (white,
