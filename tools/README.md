@@ -64,6 +64,26 @@ python3 tools/eq2_compare.py harness_dump.txt ours.txt
 Exit codes: 0 within tolerance, 1 mismatch (worst deviation per field with
 polygon/vertex indices), 2 usage or format error.
 
+## EQ-3b picture comparison
+
+`eq3_compare.py` compares the default-cube picture our pipeline draws (Azahar
+libretro host, 400x240 top screen) with the one DeSmuME's software rasteriser
+draws for the same frame (out-of-tree GPL harness, 256x192 P6 PPM). It maps
+our picture back onto the DS grid by the 0.8 clipfix scale and compares
+structure only: per face-colour bounding boxes, centroids and interior colours
+after a 3 px erosion, under the tolerances of
+`docs/EQUALITY_CHECK_DESIGN.md` section 5.1. See `docs/EQ3_COMPARE.md` for the
+mapping arithmetic, tolerance derivations and real numbers. All results are
+EMULATOR; no harness or DeSmuME source lives here.
+
+```sh
+python3 tools/eq3_compare.py harness_cube_f240.ppm ours_cube_f240_top.ppm
+```
+
+Exit codes: 0 within tolerance, 1 structural mismatch (worst deviation, face
+and field named), 2 usage or format error (bad PPM, wrong size, an input with
+no expected face class).
+
 ## Errors
 
 Malformed input exits non-zero with a one-line message instead of a traceback:
