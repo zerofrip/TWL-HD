@@ -403,3 +403,25 @@ section 3).
 5. **`coverage bit 2` stays set after any of the fixes** — the initial state
    remains uncaptured; option (a) only makes the two models agree, it does not
    record anything.
+
+---
+
+## Update 2026-11-17: hardware observation and melonDS (added after the fix merge)
+
+- **Hardware OBSERVED (HARDWARE label, owner photo 2026-11-17, New 3DS in DS
+  mode via TWiLight Menu++):** the SCENE=5 ROM (`twlhd-s5cull-plain`, sha256
+  prefix `1bde37007ab36c05`, no `GFX_COLOR` write) draws the rotating quad with
+  full texture colours (white, red, green, blue, yellow cells), **not black**.
+  Bottom screen: frame 1980, GXCM 78, RSTA 5, drop 0. Consequence: the real
+  DS default current vertex colour is **not 0**. Section 3's "UNVERIFIED" is
+  narrowed to "not black; exactly white is HYPOTHESIS" (saturated colours
+  suggest white or near-white). Logged in `CONSOLE_ACTION_LOG.txt`
+  (staging, outside the repository).
+- **melonDS (EMULATOR):** see `docs/reports/melonds-scene5-check.md`. melonDS
+  resets the current colour to black (`GPU3D.cpp:257-258`) and renders the quad
+  `(0,0,0)`; its own source marks the value unverified (`GPU3D.cpp:242`). It
+  disagrees with the hardware observation, so it is not evidence for the
+  hardware default.
+- **Fix status:** option (a) is merged (interpreter initial colour white). The
+  hardware observation supports its direction; the exact hardware value and the
+  `INITIAL_STATE_UNKNOWN` capture gap remain open.
