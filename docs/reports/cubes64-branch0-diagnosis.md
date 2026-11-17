@@ -305,14 +305,15 @@ serializer:
 `twlhd_gx_rec_serialize_tex` is not called from C source.
 
 **FACT:** a full scan of the rebuilt ELF (`arm9v2/twlhd-arm9v2-autodump-c64.elf`,
-ROM CRC `1B79DB9D`) found no literal-pool or function-pointer reference to
-`twlhd_tex_capture_plan` (`0x020025d0`, Thumb entry `0x020025d1`) or
-`twlhd_gx_rec_serialize_tex` (`0x02002350`, Thumb entry `0x02002351`) in the
-loaded sections, and no direct `bl` to either function except the single call to
-the plan inside `twlhd_gx_rec_serialize_tex`. The scan covers the whole ELF
-(including `.main.rw`, `.init_array`, `.fini_array`, `.eh_frame`, `.tinfo` and
-`.loadlist`; the ELF has no conventional `.data` or `.rodata` section) plus all
-ARM- and Thumb-mode indirect branches in the `objdump -d` output.
+ROM CRC `1B79DB9D`) found no direct `bl` to `twlhd_tex_capture_plan`
+(`0x020025d0`, Thumb entry `0x020025d1`) or `twlhd_gx_rec_serialize_tex`
+(`0x02002350`, Thumb entry `0x02002351`) except the single call to the plan
+inside `twlhd_gx_rec_serialize_tex`. The scan also searched the loaded sections
+for literal-pool or function-pointer references to those addresses and found
+none. The scan covers the whole ELF (including `.main`, `.main.rw`, `.init_array`,
+`.fini_array`, `.eh_frame`, `.tinfo` and `.loadlist`; the ELF has no conventional
+`.data` or `.rodata` section) plus all ARM- and Thumb-mode indirect branches in
+the `objdump -d` output.
 
 Direct calls:
 
@@ -322,6 +323,19 @@ $ arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E 'bl\s+
 
 $ arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E 'bl\s+20023(50|51)'
 (no output)
+```
+
+`twlhd_gx_rec_serialize_tex` has no caller: the `bl` search for its Thumb entry
+address returns no output, so the only path to the planner is the single `bl`
+inside that function.
+
+The single direct `bl` to the planner is at `0x020023a0`, which
+`arm-none-eabi-addr2line` places inside `twlhd_gx_rec_serialize_tex`:
+
+```
+$ arm-none-eabi-addr2line -f -e arm9v2/twlhd-arm9v2-autodump-c64.elf 0x020023a0
+twlhd_gx_rec_serialize_tex
+/tmp/codex-20261118-010214-555357/worktree/arm9v2/../common/twlhd_gx_record.c:198
 ```
 
 Byte search of the whole ELF for the little-endian Thumb and ARM entry addresses:
@@ -347,13 +361,119 @@ for addr in (0x020025d1, 0x02002351, 0x020025d0, 0x02002350):
 0x02002350: 0x0002dc1e 0x00078138 0x000a0e20
 ```
 
-The matching file offsets (`0x000a67c0`, `0x000a67f0`, `0x000a0e20`) are outside
-any loaded section; the remaining matches are inside `.main.bss` (uninitialized)
-and `.debug_frame` (debug info). A dump of the loaded data sections shows no
-match for the target words:
+`arm-none-eabi-readelf -S --wide` maps those file offsets to sections:
 
 ```
-$ arm-none-eabi-objdump -s -j .main.rw -j .init_array -j .fini_array -j .eh_frame -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -iE 'd1250002|51230002|d0250002|50230002|020025d1|02002351'
+$ arm-none-eabi-readelf -S --wide arm9v2/twlhd-arm9v2-autodump-c64.elf
+There are 38 section headers, starting at offset 0xa90e8:
+
+Section Headers:
+  [Nr] Name              Type            Addr     Off    Size   ES Flg Lk Inf Al
+  [ 0]                   NULL            00000000 000000 000000 00      0   0  0
+  [ 1] .secure           PROGBITS        0e000000 0001b4 000800 00  WA  0   0  1
+  [ 2] .bootstub         PROGBITS        0e000800 0009b4 000198 00  AX  0   0  4
+  [ 3] .crt0             PROGBITS        02001000 000b4c 0003c0 00  AX  0   0  4
+  [ 4] .dldi             PROGBITS        0380b000 000f0c 004000 00  AX  0   0  4
+  [ 5] .vectors          PROGBITS        00000000 004f0c 000020 00  AX  0   0  4
+  [ 6] .itcm             PROGBITS        01ff8020 004f2c 0006c8 00  AX  0   0  4
+  [ 7] .dtcm             PROGBITS        02ff0000 022070 000000 00   W  0   0  1
+  [ 8] .dtcm.bss         NOBITS          02ff0000 0055f4 000098 00  WA  0   0  4
+  [ 9] .main             PROGBITS        020013c0 0055f8 01ab6c 00  AX  0   0  8
+  [10] .main.rw          PROGBITS        0201bf30 020168 001eb4 00  WA  0   0  8
+  [11] .eh_frame         PROGBITS        0201dde4 02201c 000004 00   A  0   0  4
+  [12] .tinfo            PROGBITS        0201dde8 022020 00000c 00   A  0   0  1
+  [13] .init_array       INIT_ARRAY      0201ddf4 02202c 000004 04  WA  0   0  4
+  [14] .fini_array       FINI_ARRAY      0201ddf8 022030 000004 04  WA  0   0  4
+  [15] .tdata            PROGBITS        00000000 022070 000000 00 WAT  0   0  1
+  [16] .tbss             NOBITS          00000000 000000 000000 00 WAT  0   0  1
+  [17] .main.tls         PROGBITS        0201de00 022070 000000 00   W  0   0  8
+  [18] .main.bss         NOBITS          0201de00 022038 042df8 00  WA  0   0  8
+  [19] .twl              PROGBITS        02060c00 022070 000000 00   W  0   0  1
+  [20] .twl.rw           PROGBITS        02060c00 022070 000000 00   W  0   0  1
+  [21] .twl.bss          PROGBITS        02060c00 022070 000000 00   W  0   0  1
+  [22] .loadlist         PROGBITS        0e000998 022034 000030 00   A  0   0  1
+  [23] .twl.loadlist     PROGBITS        0e0009c8 022064 00000c 00   A  0   0  1
+  [24] .comment          PROGBITS        00000000 022070 000030 01  MS  0   0  1
+  [25] .debug_aranges    PROGBITS        00000000 0220a0 000ee0 00      0   0  8
+  [26] .debug_info       PROGBITS        00000000 022f80 030705 00      0   0  1
+  [27] .debug_abbrev     PROGBITS        00000000 053685 007bdc 00      0   0  1
+  [28] .debug_line       PROGBITS        00000000 05b261 01cd73 00      0   0  1
+  [29] .debug_frame      PROGBITS        00000000 077fd4 002908 00      0   0  4
+  [30] .debug_str        PROGBITS        00000000 07a8dc 009a91 01  MS  0   0  1
+  [31] .ARM.attributes   ARM_ATTRIBUTES  00000000 08436d 000027 00      0   0  1
+  [32] .debug_loclists   PROGBITS        00000000 084394 018535 00      0   0  1
+  [33] .debug_rnglists   PROGBITS        00000000 09c8c9 003781 00      0   0  1
+  [34] .debug_line_str   PROGBITS        00000000 0a004a 00035f 01  MS  0   0  1
+  [35] .symtab           SYMTAB          00000000 0a03ac 0064f0 10     36 1250  4
+  [36] .strtab           STRTAB          00000000 0a689c 0026e1 00      0   0  1
+  [37] .shstrtab         STRTAB          00000000 0a8f7d 00016b 00      0   0  1
+Key to Flags:
+  W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
+  L (link order), O (extra OS processing required), G (group), T (TLS),
+  C (compressed), x (unknown), o (OS specific), E (exclude),
+  D (mbind), y (purecode), p (processor specific)
+```
+
+Using the `sh_offset`/`sh_size`/`sh_type` values from that table, the matches are:
+
+- `0x000a67f0` → `.symtab`
+- `0x000a67c0` → `.symtab`
+- `0x000a0e20` → `.symtab`
+- `0x0002eb23` → `.debug_info`
+- `0x0002dc1e` → `.debug_info`
+- `0x00078250` → `.debug_frame`
+- `0x00078138` → `.debug_frame`
+
+None of these offsets are in loaded sections; `.main.bss` is `NOBITS` and therefore
+owns no file bytes. A per-section byte search of every loaded PROGBITS range
+(including `.main`) found no occurrence of the target words:
+
+```
+$ python3 -c "
+import re, subprocess
+elf = 'arm9v2/twlhd-arm9v2-autodump-c64.elf'
+out = subprocess.check_output(['arm-none-eabi-readelf','-S','--wide',elf], text=True)
+secs = []
+for line in out.splitlines():
+    m = re.match(r'\s*\[\s*(\d+)\]\s+(\S+)\s+(\S+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)\s+(\S+)', line)
+    if m:
+        name, typ, addr, off, size, es, flg = m.groups()[1:]
+        secs.append((name, typ, int(addr,16), int(off,16), int(size,16), flg))
+data = open(elf,'rb').read()
+addrs = (0x020025d1, 0x02002351, 0x020025d0, 0x02002350)
+loaded = [(n, o, s) for n, t, a, o, s, f in secs if t != 'NOBITS' and 'A' in f and s > 0]
+print('Loaded sections scanned:', ', '.join(n for n, o, s in loaded))
+for val in addrs:
+    b = val.to_bytes(4,'little')
+    print(f'0x{val:08x}:', end='')
+    found = False
+    for name, off, size in loaded:
+        hits = []
+        i = off
+        while True:
+            i = data.find(b, i, off+size)
+            if i == -1: break
+            hits.append(i); i += 1
+        if hits:
+            print(f'  {name}: '+' '.join(hex(h) for h in hits))
+            found = True
+    if not found:
+        print(' (no hit in loaded sections)')
+"
+Loaded sections scanned: .secure, .bootstub, .crt0, .dldi, .vectors, .itcm, .main, .main.rw, .eh_frame, .tinfo, .init_array, .fini_array, .loadlist, .twl.loadlist
+0x020025d1: (no hit in loaded sections)
+0x02002351: (no hit in loaded sections)
+0x020025d0: (no hit in loaded sections)
+0x02002350: (no hit in loaded sections)
+```
+
+The `objdump -s` dump below searches the same loaded sections (now including
+`.main`) for aligned 4-byte words; because it only prints aligned groups it can
+miss an unaligned literal, so the per-section byte search above is the decisive
+check:
+
+```
+$ arm-none-eabi-objdump -s -j .main -j .main.rw -j .init_array -j .fini_array -j .eh_frame -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -iE 'd1250002|51230002|d0250002|50230002|020025d1|02002351'
 (no output)
 ```
 
@@ -753,12 +873,13 @@ the DS capture ROM.
 
 ### 5.1 Assessment of the two hypotheses
 
-- **H-real** (a real ROM defect in `twlhd_tex_capture_plan`): the planner is
-  **dead code** in the CUBES=64 build. There is no direct `bl` to it from
-  `dump_frame` or from any other ROM code, and the full scan in section 2.3 found
-  no statically resolvable indirect reference. The captured stream is byte-valid
-  and untextured, and the same stream passes cleanly on the host under
-  ASAN/UBSAN. These facts make H-real unlikely.
+- **H-real** (a real ROM defect in `twlhd_tex_capture_plan`): **HYPOTHESIS:** the
+  planner is dead code in the CUBES=64 build. There is no direct `bl` to it from
+  `dump_frame`; the only direct `bl` is inside `twlhd_gx_rec_serialize_tex`, for
+  which no caller was found, and the full scan in section 2.3 found no statically
+  resolvable indirect reference. The captured stream is byte-valid and untextured,
+  and the same stream passes cleanly on the host under ASAN/UBSAN. These findings
+  make H-real **unlikely but not excluded**.
 
 - **H-dead** (a wild jump into dead-but-linked texture code): consistent with
   the measurements, but the mechanism is **UNVERIFIED**. The function is present
@@ -837,8 +958,10 @@ shared epilogue, and the `pop {pc}` at `0x0200269A` loading a saved LR that was
 already `0`. The ring window cannot show whether the planner ran its full body.
 **HYPOTHESIS:** a wild jump entered `twlhd_tex_capture_plan` with the saved-LR
 slot set to `0` (because the entry branch did not set LR). **HYPOTHESIS:** the
-planner is dead-but-linked code in the CUBES=64 build (no direct `bl` and no
-statically resolvable indirect reference found by the scan in section 2.3).
+planner is dead-but-linked code in the CUBES=64 build (no direct `bl` from
+`dump_frame`; the only direct `bl` is inside `twlhd_gx_rec_serialize_tex`, for
+which no caller was found, and no statically resolvable indirect reference found
+by the scan in section 2.3).
 **UNVERIFIED:** the exact instruction that entered `twlhd_tex_capture_plan`,
 whether the planner ran its full body, whether LR was already `0` at entry or
 was overwritten later, the reason the entry SP was above `__sp_usr`/DTCM top,
@@ -862,8 +985,9 @@ and whether real hardware could take the same path.
    through the user stack top.
 
 4. **UNVERIFIED:** whether real hardware would ever take the same wild jump. No
-   CUBES=64 hardware run exists, and the function is dead code in the source,
-   so a hardware occurrence cannot be excluded purely by source inspection.
+   CUBES=64 hardware run exists, and **HYPOTHESIS:** no caller was found by the
+   scan in §2.3, so a hardware occurrence cannot be excluded purely by source
+   inspection.
 
 5. **UNVERIFIED:** the underlying emulator instability that produces the wild
    jump. The CUBES=64 AF=120 case is one of several DeSmuME-specific failures
@@ -893,9 +1017,9 @@ regressed.
 
 - **REQ-3 (CAUSE + §5.1 de-overclaim).** Before, `## CAUSE` stated the wild jump
   as fact and §5.1 called H-dead "strongly supported". After, `## CAUSE`
-  (`:825-846`) labels only the measured `pop {pc}` → PC=0 and the observed
+  (`:946-968`) labels only the measured `pop {pc}` → PC=0 and the observed
   `bl`→return→epilogue sequence as **FACT**, the wild jump and dead-code entry as
-  **HYPOTHESIS**, and the unknowns as **UNVERIFIED**. §5.1 (`:754-770`) now says
+  **HYPOTHESIS**, and the unknowns as **UNVERIFIED**. §5.1 (`:876-882`) now says
   H-dead is "consistent with the measurements, but the mechanism is UNVERIFIED".
 
 - **REQ-2 (cross-reference fix).** Before, `docs/EQ_SCENES.md` and
@@ -916,23 +1040,28 @@ regressed.
 - **REQ-5 (§2.3/2.4 indirect-call scan + ring re-examination).** Before, the
   "never calls legitimately" claim contradicted the quoted direct `bl` at
   `0x020023a0` and the scan covered only `objdump -d` / Thumb `47xx`. After,
-  §2.3 quotes the full scan (`:307-593`): direct `bl` hits, whole-ELF byte search
-  for the Thumb/ARM entry addresses, loaded-section dump, Thumb `bx`/`blx`, and
-  ARM-mode `bx`/`blx`/`ldr pc`/`mov pc`. The "no reference" claim is relabeled
-  **HYPOTHESIS** scoped to statically resolvable targets. §2.4 notes no caller
-  of `twlhd_gx_rec_serialize_tex` was found (`:619-621`). The ring evidence is
-  reconciled in section 1 (`:125-175`) and §2.3 (`:601-608`): the observed window
-  shows only the `bl`→return→epilogue tail; it is not evidence against
-  "entered mid-loop" or "saved LR overwritten later".
+  §2.3 (`:307-732`) quotes the direct `bl` hits (including `addr2line` placing
+  the planner call inside `twlhd_gx_rec_serialize_tex`), the whole-ELF byte
+  search for the Thumb/ARM entry addresses, the
+  `arm-none-eabi-readelf -S --wide` section table, the corrected
+  offset→section mapping, the per-section byte search of every loaded PROGBITS
+  range including `.main`, and the loaded-section `objdump -s` dump now including
+  `-j .main` (with its aligned-only limitation noted); it also covers Thumb
+  `bx`/`blx` and ARM-mode `bx`/`blx`/`ldr pc`/`mov pc`. The "no reference" claim
+  is relabeled **HYPOTHESIS** scoped to statically resolvable targets. §2.4 notes
+  no caller of `twlhd_gx_rec_serialize_tex` was found (`:739-742`). The ring
+  evidence is reconciled in section 1 (`:125-175`) and §2.3 (`:721-728`): the
+  observed window shows only the `bl`→return→epilogue tail; it is not evidence
+  against "entered mid-loop" or "saved LR overwritten later".
 
 - **REQ-6 (§3.3 real outputs).** Before, the NULL-`read` and ASAN/UBSAN claims
-  had no quoted commands. After, §3.3 (`:679-728`) quotes the scratch host driver
+  had no quoted commands. After, §3.3 (`:799-850`) quotes the scratch host driver
   command/output for `twlhd_tex_capture_plan(read=NULL) -> 1 (ERR_NULL)` and the
   CUBES=64 replay through `tests/host/build/tex_capture_cli` under the `make
   test` ASAN/UBSAN build, with full output.
 
 - **REQ-7 (§5.2 mitigation + root-cause path).** Before, §5.2 presented
-  `--gc-sections`/excluding texture files as a fix. After, §5.2 (`:772-823`)
+  `--gc-sections`/excluding texture files as a fix. After, §5.2 (`:893-932`)
   labels it a symptom-hiding mitigation and adds a root-cause path: a scratch
   DeSmuME watchpoint/trace experiment (diagnosis stage) → fix stage determined by
   the finding (build stage, product code stage, or capture-flow/DeSmuME stage).
@@ -948,17 +1077,51 @@ regressed.
   ring **FACT** to the observed tail (`bl`→return→epilogue) and relabels
   full-body execution as **HYPOTHESIS**/**UNVERIFIED**; §2.2 (`:277-288`) keeps
   the arithmetic as **FACT** and labels the `r3`=frame-size interpretation as
-  **HYPOTHESIS**; §2.3 (`:307-593`) quotes the full scan commands and raw output
-  (direct `bl`, whole-ELF byte search, loaded-section dump, Thumb `bx`/`blx`,
-  ARM-mode `bx`/`blx`/`ldr pc`/`mov pc`) and scopes the "no reference" claim to
-  statically resolvable targets; §2.4 (`:619-621`) reads "no caller of
-  `twlhd_gx_rec_serialize_tex` found"; §5.1 (`:754-770`) and `## CAUSE`
-  (`:825-846`) use only the observed sequence; open item 2 (`:855-858`) states
-  the ring cannot discriminate the two LR hypotheses; REQ-8 in
+  **HYPOTHESIS**; §2.3 (`:307-732`) quotes the full scan commands and raw output
+  (direct `bl` plus `addr2line` for `0x020023a0`, whole-ELF byte search,
+  `arm-none-eabi-readelf -S --wide` section table with corrected
+  offset→section mapping, per-section byte search of all loaded PROGBITS ranges
+  including `.main`, the `objdump -s` dump now including `-j .main` with the
+  aligned-only limitation noted, Thumb `bx`/`blx`, ARM-mode
+  `bx`/`blx`/`ldr pc`/`mov pc`) and scopes the "no reference" claim to
+  statically resolvable targets; §2.4 (`:739-742`) reads "no caller of
+  `twlhd_gx_rec_serialize_tex` found"; §5.1 (`:876-882`) and `## CAUSE`
+  (`:946-968`) use only the observed sequence and label the dead-code claim
+  **HYPOTHESIS**; open item 2 (`:978-980`) states the ring cannot discriminate
+  the two LR hypotheses; REQ-8 in
   `docs/reports/bkpt-diagnosis.md:733-739` is corrected. Evidence:
   `make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64` (ROM CRC `1B79DB9D`);
-  `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf`;
-  whole-ELF byte search for `0x020025d1`/`0x02002351`;
-  `arm-none-eabi-objdump -s -j .main.rw -j .init_array -j .fini_array -j .eh_frame
-  -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf`. `TESTS: make test`
-  — no regression.
+  `arm-none-eabi-readelf -S --wide arm9v2/twlhd-arm9v2-autodump-c64.elf`;
+  `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf` with
+  `grep -E 'bl\s+20025(d0|d1)'` and `grep -E 'bl\s+20023(50|51)'`;
+  `arm-none-eabi-addr2line -f -e arm9v2/twlhd-arm9v2-autodump-c64.elf 0x020023a0`;
+  whole-ELF byte search for `0x020025d1`/`0x02002351`/`0x020025d0`/`0x02002350`;
+  per-section byte search over loaded PROGBITS ranges including `.main`;
+  `arm-none-eabi-objdump -s -j .main -j .main.rw -j .init_array -j .fini_array
+  -j .eh_frame -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf`.
+  `TESTS: make test` — no regression.
+
+- **REQ-10 (fourth docs-only repair, 2026-11-18).** The §2.3 "full scan"
+  paragraph overclaimed that the byte search found zero matches and falsely
+  attributed matches to `.main.bss` (a `NOBITS` section that owns no file bytes);
+  §5.1 H-real and Open item 4 asserted "dead code" without a label. After this
+  repair: §2.3 (`:307-732`) quotes `arm-none-eabi-readelf -S --wide`, maps every
+  byte-search offset to its actual section (`.symtab` or `.debug_info`/`.debug_frame`),
+  adds `.main` to the `objdump -s` scan, runs a per-section byte search over all
+  loaded PROGBITS ranges, and notes the aligned-only limitation of the
+  `objdump -s` grep; it also states that `twlhd_gx_rec_serialize_tex` has no
+  caller. §5.1 (`:876-882`) labels the dead-code claim **HYPOTHESIS** and says
+  the only direct `bl` is inside `twlhd_gx_rec_serialize_tex`, for which no
+  caller was found; Open item 4 (`:987-990`) says **HYPOTHESIS:** no caller was
+  found by the scan in §2.3. A whole-report consistency pass updated the
+  `## CAUSE` hypothesis (`:946-968`) to match the quoted evidence. Evidence:
+  `make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64` (ROM CRC `1B79DB9D`);
+  `arm-none-eabi-readelf -S --wide arm9v2/twlhd-arm9v2-autodump-c64.elf`;
+  `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf` with
+  `grep -E 'bl\s+20025(d0|d1)'` and `grep -E 'bl\s+20023(50|51)'`;
+  `arm-none-eabi-addr2line -f -e arm9v2/twlhd-arm9v2-autodump-c64.elf 0x020023a0`;
+  whole-ELF byte search for `0x020025d1`/`0x02002351`/`0x020025d0`/`0x02002350`;
+  per-section byte search over loaded PROGBITS ranges including `.main`;
+  `arm-none-eabi-objdump -s -j .main -j .main.rw -j .init_array -j .fini_array
+  -j .eh_frame -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf`.
+  `TESTS: make test` — no regression.
