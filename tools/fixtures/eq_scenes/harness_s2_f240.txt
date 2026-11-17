@@ -1,0 +1,424 @@
+twlhd-desmume-harness 1.0.0
+format geometry-dump 1
+emulator desmume fc504ee0
+label EMULATOR
+rom-sha256 d84f210b6f92c6a5c7a35c76dcfcaa0a142524ae578f974812cb6ae04a4097ed
+requested-frame 242
+captured-frame 242
+polygon-count 10
+vertex-count 30
+raw-polygon-count 10
+raw-vertex-count 12
+viewport-mode per-polygon
+begin
+poly 0 verts 3 prim triangle vtxformat triangle-strip rawpoly 9
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 10 9 11
+vtx 0
+pos-x-16.16 11028687
+pos-y-16.16 5483165
+pos-z-0.31 2078596203
+pos-w-20.12 12376
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 23
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 9597201
+pos-y-16.16 4644567
+pos-z-0.31 2095631477
+pos-w-20.12 16297
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 21
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 10530111
+pos-y-16.16 3930667
+pos-z-0.31 2092014368
+pos-w-20.12 15273
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 25
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 1 verts 3 prim triangle vtxformat triangle-strip rawpoly 7
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 8 7 9
+vtx 0
+pos-x-16.16 9855988
+pos-y-16.16 6232768
+pos-z-0.31 2084020698
+pos-w-20.12 13400
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 19
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 8774597
+pos-y-16.16 5273694
+pos-z-0.31 2098820907
+pos-w-20.12 17321
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 17
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 9597201
+pos-y-16.16 4644567
+pos-z-0.31 2095631477
+pos-w-20.12 16297
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 21
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 2 verts 3 prim triangle vtxformat triangle-strip rawpoly 8
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 8 9 10
+vtx 0
+pos-x-16.16 9855988
+pos-y-16.16 6232768
+pos-z-0.31 2084020698
+pos-w-20.12 13400
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 19
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 9597201
+pos-y-16.16 4644567
+pos-z-0.31 2095631477
+pos-w-20.12 16297
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 21
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 11028687
+pos-y-16.16 5483165
+pos-z-0.31 2078596203
+pos-w-20.12 12376
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 23
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 3 verts 3 prim triangle vtxformat triangle-strip rawpoly 5
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 6 5 7
+vtx 0
+pos-x-16.16 8849795
+pos-y-16.16 6875501
+pos-z-0.31 2088674992
+pos-w-20.12 14424
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 15
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 8043826
+pos-y-16.16 5832587
+pos-z-0.31 2101654274
+pos-w-20.12 18345
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 13
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 8774597
+pos-y-16.16 5273694
+pos-z-0.31 2098820907
+pos-w-20.12 17321
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 17
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 4 verts 3 prim triangle vtxformat triangle-strip rawpoly 6
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 6 7 8
+vtx 0
+pos-x-16.16 8849795
+pos-y-16.16 6875501
+pos-z-0.31 2088674992
+pos-w-20.12 14424
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 15
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 8774597
+pos-y-16.16 5273694
+pos-z-0.31 2098820907
+pos-w-20.12 17321
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 17
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 9855988
+pos-y-16.16 6232768
+pos-z-0.31 2084020698
+pos-w-20.12 13400
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 19
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 5 verts 3 prim triangle vtxformat triangle-strip rawpoly 3
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 4 3 5
+vtx 0
+pos-x-16.16 7976997
+pos-y-16.16 7433025
+pos-z-0.31 2092712249
+pos-w-20.12 15448
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 11
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 7390325
+pos-y-16.16 6332384
+pos-z-0.31 2104188053
+pos-w-20.12 19369
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 9
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 8043826
+pos-y-16.16 5832587
+pos-z-0.31 2101654274
+pos-w-20.12 18345
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 13
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 6 verts 3 prim triangle vtxformat triangle-strip rawpoly 4
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 4 5 6
+vtx 0
+pos-x-16.16 7976997
+pos-y-16.16 7433025
+pos-z-0.31 2092712249
+pos-w-20.12 15448
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 11
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 8043826
+pos-y-16.16 5832587
+pos-z-0.31 2101654274
+pos-w-20.12 18345
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 13
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 8849795
+pos-y-16.16 6875501
+pos-z-0.31 2088674992
+pos-w-20.12 14424
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 15
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 7 verts 3 prim triangle vtxformat triangle-strip rawpoly 1
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 2 1 3
+vtx 0
+pos-x-16.16 7212715
+pos-y-16.16 7921231
+pos-z-0.31 2096247545
+pos-w-20.12 16472
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 7
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 6802452
+pos-y-16.16 6782297
+pos-z-0.31 2106467373
+pos-w-20.12 20393
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 5
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 7390325
+pos-y-16.16 6332384
+pos-z-0.31 2104188053
+pos-w-20.12 19369
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 9
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 8 verts 3 prim triangle vtxformat triangle-strip rawpoly 2
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 2 3 4
+vtx 0
+pos-x-16.16 7212715
+pos-y-16.16 7921231
+pos-z-0.31 2096247545
+pos-w-20.12 16472
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 7
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 7390325
+pos-y-16.16 6332384
+pos-z-0.31 2104188053
+pos-w-20.12 19369
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 9
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 7976997
+pos-y-16.16 7433025
+pos-z-0.31 2092712249
+pos-w-20.12 15448
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 11
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+poly 9 verts 3 prim triangle vtxformat triangle-strip rawpoly 0
+attr 0x001F00C0
+texparam 0x00000000
+texpalette 0x00000000
+viewport 0 0 256 192
+viewport-word 0xBFFF0000
+rawverts 3 0 1 2
+vtx 0
+pos-x-16.16 6537897
+pos-y-16.16 8352649
+pos-z-0.31 2099369016
+pos-w-20.12 17496
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 3
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 1
+pos-x-16.16 6802452
+pos-y-16.16 6782297
+pos-z-0.31 2106467373
+pos-w-20.12 20393
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 5
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+vtx 2
+pos-x-16.16 7212715
+pos-y-16.16 7921231
+pos-z-0.31 2096247545
+pos-w-20.12 16472
+tex-s-12.4 0
+tex-t-12.4 0
+col-r-6bit 7
+col-g-6bit 0
+col-b-6bit 0
+col-a-u8 0
+end-poly
+end
