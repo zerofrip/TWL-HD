@@ -296,9 +296,9 @@ serializer:
 02001fb4:	f000 f99a \tbl\t20022ec <twlhd_gx_rec_serialize>
 ```
 
-**FACT:** the only direct `bl` to `twlhd_tex_capture_plan` is the one inside
-`twlhd_gx_rec_serialize_tex` at `0x020023a0`; there is **no** `bl` to
-`twlhd_gx_rec_serialize_tex` from any other function in `.main`.
+**FACT:** the only direct `bl` to `twlhd_tex_capture_plan` found by the greps is the one inside
+`twlhd_gx_rec_serialize_tex` at `0x020023a0`; no direct `bl` to
+`twlhd_gx_rec_serialize_tex` from any other function in `.main` was found by the greps.
 
 **FACT:** `arm9v2/source/main.cpp:109-129` gates the texture path with
 `#if TWLHD_DEMO_SCENE == 5`; for the CUBES=64 build `SCENE` is unset/0, so
@@ -325,9 +325,8 @@ $ arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E 'bl\s+
 (no output)
 ```
 
-`twlhd_gx_rec_serialize_tex` has no caller: the `bl` search for its Thumb entry
-address returns no output, so the only path to the planner is the single `bl`
-inside that function.
+No direct `bl` to `twlhd_gx_rec_serialize_tex` was found by this grep
+(**HYPOTHESIS:** it has no caller).
 
 The single direct `bl` to the planner is at `0x020023a0`, which
 `arm-none-eabi-addr2line` places inside `twlhd_gx_rec_serialize_tex`:
@@ -736,10 +735,11 @@ into `twlhd_tex_capture_plan`) was not captured.
 RSTA entries) via `twlhd_gx_rec_serialize`, `fatInitDefault`, `fopen` and
 `fwrite` (`arm9v2/source/main.cpp:127-155`).
 
-**FACT:** at frame 129 the fault occurs in `twlhd_tex_capture_plan`. No caller
-of `twlhd_gx_rec_serialize_tex` was found (the only path to the plan is the
-single `bl` at `0x020023a0` inside that function, and the scan in section 2.3
-found no statically resolvable indirect reference).
+**FACT:** at frame 129 the fault occurs in `twlhd_tex_capture_plan`. No direct
+`bl` to `twlhd_gx_rec_serialize_tex` from any other function in `.main` was found
+by the greps (**HYPOTHESIS:** it has no caller). The only direct `bl` to the plan
+found by the scans is the single `bl` at `0x020023a0` inside that function, and
+the scan in section 2.3 found no statically resolvable indirect reference.
 
 **FACT:** the CUBES=64 stream contains no texture commands (`TEXIMAGE_PARAM`
 count = 0, `PLTT_BASE` count = 0 in the captured file). Even if the texture path
@@ -1049,7 +1049,8 @@ regressed.
   `-j .main` (with its aligned-only limitation noted); it also covers Thumb
   `bx`/`blx` and ARM-mode `bx`/`blx`/`ldr pc`/`mov pc`. The "no reference" claim
   is relabeled **HYPOTHESIS** scoped to statically resolvable targets. §2.4 notes
-  no caller of `twlhd_gx_rec_serialize_tex` was found (`:739-742`). The ring
+  no direct `bl` to `twlhd_gx_rec_serialize_tex` from any other function in
+  `.main` was found by the greps (`:739-742`). The ring
   evidence is reconciled in section 1 (`:125-175`) and §2.3 (`:721-728`): the
   observed window shows only the `bl`→return→epilogue tail; it is not evidence
   against "entered mid-loop" or "saved LR overwritten later".
@@ -1084,8 +1085,9 @@ regressed.
   including `.main`, the `objdump -s` dump now including `-j .main` with the
   aligned-only limitation noted, Thumb `bx`/`blx`, ARM-mode
   `bx`/`blx`/`ldr pc`/`mov pc`) and scopes the "no reference" claim to
-  statically resolvable targets; §2.4 (`:739-742`) reads "no caller of
-  `twlhd_gx_rec_serialize_tex` found"; §5.1 (`:876-882`) and `## CAUSE`
+  statically resolvable targets; §2.4 (`:739-742`) reads "no direct `bl` to
+  `twlhd_gx_rec_serialize_tex` from any other function in `.main` was found by
+  the greps"; §5.1 (`:876-882`) and `## CAUSE`
   (`:946-968`) use only the observed sequence and label the dead-code claim
   **HYPOTHESIS**; open item 2 (`:978-980`) states the ring cannot discriminate
   the two LR hypotheses; REQ-8 in
@@ -1109,8 +1111,9 @@ regressed.
   byte-search offset to its actual section (`.symtab` or `.debug_info`/`.debug_frame`),
   adds `.main` to the `objdump -s` scan, runs a per-section byte search over all
   loaded PROGBITS ranges, and notes the aligned-only limitation of the
-  `objdump -s` grep; it also states that `twlhd_gx_rec_serialize_tex` has no
-  caller. §5.1 (`:876-882`) labels the dead-code claim **HYPOTHESIS** and says
+  `objdump -s` grep; it also states that no direct `bl` to
+  `twlhd_gx_rec_serialize_tex` was found by the greps (**HYPOTHESIS:** it has no
+  caller). §5.1 (`:876-882`) labels the dead-code claim **HYPOTHESIS** and says
   the only direct `bl` is inside `twlhd_gx_rec_serialize_tex`, for which no
   caller was found; Open item 4 (`:987-990`) says **HYPOTHESIS:** no caller was
   found by the scan in §2.3. A whole-report consistency pass updated the
