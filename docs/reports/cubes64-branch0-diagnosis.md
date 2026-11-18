@@ -1157,12 +1157,18 @@ Consequences for the open items:
 1. **Open item 1 (entry origin):** settled as FACT about the model. The planner
    entry address `0x020025d0`/`0x020025d1` was never reached. The function body
    was first entered mid-function at `0x02002640`
-   (`common/twlhd_tex_capture.c:174`). The 64-entry PC ring shows the previous
-   PC was `0x02001D50` (`arm9v2/source/demo_frame.cpp:464`, inside the
-   `glRotateYi` / shim `Port` assignment sequence), immediately after an ITCM
-   IRQ handler return. The instruction at `0x02001D50` is `bl
-   twlhd_gx_rec_hook`. The mechanism that made the return land in the planner
-   is **HYPOTHESIS** (corrupted LR/return address).
+   (`common/twlhd_tex_capture.c:174`). The 64-entry PC ring shows the CPU
+   returned from the ITCM IRQ handler (`0x01FF86A0`) to `0x02001D50`, the BL
+   suffix halfword of the 32-bit Thumb `bl twlhd_gx_rec_hook` at `0x02001D4E`
+   (`arm9v2/source/demo_frame.cpp:464`, inside the `glRotateYi` / shim `Port`
+   assignment sequence). The next PC was `0x02002640` and `LR=0x02001D53`. The
+   mechanism is **HYPOTHESIS:** an IRQ was taken between the two BL halfwords
+   and the calico SYS-mode handler left a different `LR_sys`, so the suffix
+   computed target = LR + offset. The BL encoding `f000 fab1` is offset +0x562;
+   normal target `0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching
+   `0x02002640` would need `LR = 0x020020DE` (Thumb `0x020020DF`). **Tension:**
+   the observed `LR=0x02001D53` equals `(0x02001D4E + 4) | 1`, the prefix's own
+   LR, so the handler's actual LR value is **UNVERIFIED**.
 2. **Open item 2 (abnormal SP):** settled as FACT about the model. The entry SP
    was normal (`0x02FF3E28`). Because the prologue was skipped, the epilogue's
    `add sp, r3` at `0x0200268E` unpairedly added 1372 bytes, moving SP to
