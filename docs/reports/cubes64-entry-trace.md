@@ -30,8 +30,34 @@ make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64
 
 (`docs/EMULATOR_VALIDATION.md:107`; `arm9v2/Makefile:60-75,116-129`).
 
-**FACT:** the rebuilt ROM's `ROM crc:` line is `1B79DB9D` in every run quoted
-below, matching the original recorded runs.
+**FACT:** every run quoted below logs `ROM crc: 1B79DB9D`:
+
+```
+$ grep -H 'ROM crc' /tmp/opencode/c64-run1/desmume.log /tmp/opencode/c64-run2/desmume.log /tmp/opencode/c64-ref1/desmume.log /tmp/opencode/c64-nov18-rerun-1/desmume.log /tmp/opencode/c64-nov18-rerun-2/desmume.log /tmp/opencode/c64-nov18-rerun-3/desmume.log /tmp/opencode/c64-nov18-rerun-4/desmume.log /tmp/opencode/c64-nov18-rerun-5/desmume.log /tmp/opencode/c64-noepoch-rerun-1/desmume.log /tmp/opencode/c64-final1/desmume.log /tmp/opencode/c64-final2/desmume.log /tmp/opencode/c64-epoch-1794921881-1/desmume.log /tmp/opencode/c64-epoch-1794921881-2/desmume.log /tmp/opencode/c64-epoch-1794925481-1/desmume.log /tmp/opencode/c64-epoch-1794925481-2/desmume.log /tmp/opencode/c64-epoch-1794925511-1/desmume.log /tmp/opencode/c64-epoch-1794925511-2/desmume.log /tmp/opencode/c64-epoch-1794927600-1/desmume.log /tmp/opencode/c64-epoch-1794927600-2/desmume.log /tmp/opencode/c64-epoch-1794929081-1/desmume.log /tmp/opencode/c64-epoch-1794929081-2/desmume.log /tmp/opencode/c64-epoch-1794961800-1/desmume.log /tmp/opencode/c64-epoch-1794961800-2/desmume.log
+/tmp/opencode/c64-run1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-run2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-ref1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-nov18-rerun-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-nov18-rerun-2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-nov18-rerun-3/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-nov18-rerun-4/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-nov18-rerun-5/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-noepoch-rerun-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-final1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-final2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794921881-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794921881-2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794925481-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794925481-2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794925511-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794925511-2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794927600-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794927600-2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794929081-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794929081-2/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794961800-1/desmume.log:ROM crc: 1B79DB9D
+/tmp/opencode/c64-epoch-1794961800-2/desmume.log:ROM crc: 1B79DB9D
+```
 
 **FACT:** `arm-none-eabi-nm -n` on the rebuilt ELF shows the relevant symbols:
 
@@ -125,13 +151,13 @@ TWLHD_BKPT cpu=ARM9 frame=129 max_frame=129 resets=1 pc=01FF853C cpsr=6000001F s
 TWLHD_BKPT cpu=ARM9 frame=129 max_frame=129 resets=1 pc=01FF853C cpsr=6000001F sp=02FF43A8 lr=02002767 intvec=00000000
 ```
 
-Both logged `ROM crc: 1B79DB9D`.
+Both logged `ROM crc: 1B79DB9D` (§1).
 
 ### 2.2 Fresh runs the next morning did not reproduce with the same binary
 
 **FACT:** five fresh runs on 2026-11-18 with the unchanged existing scratch CLI
 (`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) produced no
-`ARM OP_BKPT` and no `TWLHD_BKPT`; they ran until the 30 s watchdog.
+`TWLHD_BKPT` line.
 
 Run command (capture output omitted):
 
@@ -150,9 +176,10 @@ $ for i in 1 2 3 4 5; do echo -n "$i: "; grep -c TWLHD_BKPT /tmp/opencode/c64-no
 5: 0
 ```
 
-**FACT:** the old and new logs are identical in the filtered diff up to
-`TWLHD_SWAP n=120 frame=122` and then diverge. A side-by-side diff with
-`TWLHD_FRAME` lines filtered out was produced by:
+**FACT:** with `TWLHD_FRAME` lines filtered out (`grep -v '^TWLHD_FRAME'`), the
+old and new logs differ only in the cflash image paths at lines 2, 7 and 25 until
+line 55, where the old log has the `ARM OP_BKPT`/BKPT dump block and the new log
+continues with `TWLHD_SWAP n=180 frame=188`. A side-by-side diff was produced by:
 
 ```
 $ diff <(grep -v '^TWLHD_FRAME' /tmp/opencode/c64-run1/desmume.log) <(grep -v '^TWLHD_FRAME' /tmp/opencode/c64-nov18-rerun-1/desmume.log)
@@ -186,9 +213,9 @@ $ diff <(grep -v '^TWLHD_FRAME' /tmp/opencode/c64-run1/desmume.log) <(grep -v '^
 > TWLHD_SWAP n=480 frame=493
 ```
 
-### 2.3 Inputs that were held constant
+### 2.3 Inputs that were held constant (as far as compared)
 
-**FACT:** the autodump file content is identical across old and new runs:
+**FACT:** the autodump file content is identical between `/tmp/opencode/c64-run1` and `/tmp/opencode/c64-ref1`:
 
 ```
 $ sha256sum /tmp/opencode/c64-run1/twlhd_frame_v2.bin /tmp/opencode/c64-ref1/twlhd_frame_v2.bin
@@ -196,16 +223,12 @@ $ sha256sum /tmp/opencode/c64-run1/twlhd_frame_v2.bin /tmp/opencode/c64-ref1/twl
 2783599fdd09e746909ab1b8717ba41e97002053f30ac2b376f337693fc0203c  /tmp/opencode/c64-ref1/twlhd_frame_v2.bin
 ```
 
-**FACT:** the ROM CRC is identical:
+**FACT:** the ROM CRC is identical between the two compared runs
+(`/tmp/opencode/c64-run1` and `/tmp/opencode/c64-ref1`); both logs show
+`ROM crc: 1B79DB9D` (§1).
 
-```
-ROM crc: 1B79DB9D
-```
-
-(quoted from every run.)
-
-**FACT:** the cflash volume serial numbers differ between the old image and a
-fresh morning image:
+**FACT:** the cflash volume serial numbers differ between the old image
+(`c64-run1`) and the `c64-ref1` image:
 
 ```
 $ file /tmp/opencode/c64-run1/cflash.img /tmp/opencode/c64-ref1/cflash.img
@@ -759,8 +782,7 @@ hardware could ever take the same path.
   (§3.4, §4 Open item 1/3, CAUSE, and `cubes64-branch0-diagnosis.md` Update
   item 1). Replaced the contradicted "corrupted return from
   `twlhd_gx_rec_hook`" hypothesis with the IRQ-between-BL-halves / different
-  `LR_sys` hypothesis, including the `f000 fab1` → +0x562 offset arithmetic and
-  the tension that the observed `lr=02001D53` matches the prefix's own LR value.
+  `LR_sys` hypothesis, including the `f000 fab1` → +0x562 offset arithmetic.
   Deleted the false "64-entry ring was overwritten by 858 planner instructions"
   sentence. Corrected the pop-address from `0x02FF43B8` to
   `0x02FF43A4 = 0x02FF4394 + 0x10` throughout. Relabelled the RTC claim as
@@ -793,6 +815,8 @@ hardware could ever take the same path.
   disassembly block. `make test` passes.
 
 - **REQ-13 (round 3 repair of entry-trace report, 2026-11-18).** Corrected the BL/LR arithmetic in §4 Open item 1, CAUSE, and `cubes64-branch0-diagnosis.md` Update item 1: the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52` (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 = 0x02001D53`; the observed `lr=02001D53` is the suffix's own LR result, not evidence against the clobbered-LR hypothesis. Removed the "Tension" sentence in all three places. Evidence: `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E '^ 2001d4e:|^ 2001d52:'` (`f000 fab1`). Relabelled the §3.4 hook-invocation inference as **HYPOTHESIS**, stated plainly that the ring does not show the BL prefix at `0x02001D4E` right before the IRQ, noted that `0x020020DE` (the LR value the hypothesis needs) also appears in the ring, and added Open item 4 naming the conflict with a hook-body PC (`0x020022CC`) immediately before the IRQ vector. Evidence: `grep TWLHD_PLAN_RANGE_ENTRY_RING /tmp/opencode/c64-final1/desmume.log`. Labelled `0x02FF43A4` in §4 Open item 2 and CAUSE as derived from the §3.6 trace (`SP = 0x02FF4394` before the final `pop {pc}`, PCLOG2 entry 1282299), +16. Evidence: `python3 /tmp/opencode/decode_pclog2.py /tmp/opencode/c64-final1/pclog2.bin 1282287 1282302`. Replaced the hand-added PCLOG2 index marker with the full scratch-decoder command and its raw, unannotated output. Quoted the full commands and raw outputs for the §1 `arm-none-eabi-nm`/`readelf` evidence, the §3.3 `TWLHD_BKPT` grep, the §3.4 `TWLHD_PLAN_RANGE_ENTRY`/`RING`/`SUMMARY` greps, the §3.6 `TWLHD_SP_ALERT` grep, and the §3.7 `TWLHD_DTCM_WRITE`/`TWLHD_DTCM_REGION` greps. Rewrote §2.4 to quote a no-override run and limit the non-old-epoch claim to "no `TWLHD_BKPT` line". Evidence: `mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1` (output `capture: /tmp/opencode/c64-noepoch-rerun-1/twlhd_frame_v2.bin`) and `grep -c TWLHD_BKPT /tmp/opencode/c64-noepoch-rerun-1/desmume.log` (`0`). Rewrote `cubes64-branch0-diagnosis.md` Update section diff sentence to state the diff was filtered with `grep -v '^TWLHD_FRAME'` and diverges at line 55 after path differences at lines 2, 7 and 25. Replaced the abbreviated objdump command reference in REQ-12 with the two full commands quoted in §1. `make test` passes.
+- **REQ-14 (round 4 repair of entry-trace report, 2026-11-18).** Fixed six evidence-discipline defects in `docs/reports/cubes64-entry-trace.md` and the Update section of `docs/reports/cubes64-branch0-diagnosis.md`: (1) deleted the stale "tension" clause in REQ-11 (consistent with REQ-13); (2) reworded §2.2 to state that, with `TWLHD_FRAME` lines filtered out, the old and new logs differ only in cflash image paths at lines 2, 7 and 25 until line 55, where the old log has the `ARM OP_BKPT`/BKPT dump block and the new log continues with `TWLHD_SWAP n=180 frame=188`; (3) limited the §2.2 non-reproduction claim to "produced no `TWLHD_BKPT` line" (matching the §2.4/REQ-13 precedent); (4) reworded the Update section epoch claim as **HYPOTHESIS** restricted to the six sampled epochs with exact `TWLHD_RTC_EPOCH` values (reproduced at `1794921881`, `1794925481`, `1794925511`; not at `1794927600`, `1794929081`, `1794961800`) and limited the Nov-18 epochs to "produced no `TWLHD_BKPT` line"; (5) scoped §2.3 autodump sha256sum and cflash `file` comparisons to the two directories actually compared (`c64-run1` and `c64-ref1`) and removed the unevidenced "fresh morning image" wording; (6) replaced the command-less §1/§2.3 `ROM crc: 1B79DB9D` FACTs with a quoted `grep -H 'ROM crc' ...` command and its raw output covering every run quoted below. Evidence: the `grep -H 'ROM crc' ...` command quoted in §1 and its raw output. No new scratch DeSmuME runs were required; existing `/tmp/opencode/c64-*` logs were used. `make test` passes.
+
 
 - **Build equivalence:** `make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64` produced
   ROM CRC `1B79DB9D`.
