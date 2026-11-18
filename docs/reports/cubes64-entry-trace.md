@@ -1,6 +1,8 @@
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 # CUBES=64 AUTODUMP_FRAME=120 planner entry trace
 
+Path note: literal home-directory paths in quoted commands and outputs were replaced by $HOME for publication; this is the only edit to the quoted evidence; no other text was changed.
+
 **Scope:** DIAGNOSIS + EMULATOR only. No product code, ROM source, test,
 interpreter, renderer, harness or pristine DeSmuME tree was modified. The only
 files this task adds to the repository are this report and an append-only
@@ -835,3 +837,162 @@ hardware could ever take the same path.
   raw logs quoted above.
 - **No repo files modified** other than the two documentation files.
 - **`make test`** passes.
+
+---
+
+## Update (2026-11-18): IRQ/LR trace follow-up
+
+Follow-up investigation documented in `docs/reports/cubes64-irq-lr-trace.md`.
+A new round-2 scratch patch
+(`$HOME/3ds/hwtest-staging/desmume-dbg-patch/cubes64-irq-lr-trace-r2.patch`)
+and a new build (`$HOME/3ds/hwtest-staging/desmume-dbg-build4/cli/desmume-cli`)
+were used. The rebuilt ROM still logs `ROM crc: 1B79DB9D` and the ELF
+addresses match the values above.
+
+**FACT:** with the `cflash.img` from the original `/tmp/opencode/c64-irqtrace-r2v2-e1794921881-1` run,
+the round-2 instrumented build reproduced the reference dump at
+`TWLHD_RTC_EPOCH=1794921881`. The creation provenance of that image is
+**UNVERIFIED**: no saved script output contains the `set -x` `+ mkfs.fat`
+creation line. The post-run image currently on disk is:
+
+```
+$ sha256sum /tmp/opencode/c64-irqtrace-r2v2-e1794921881-1/cflash.img
+c7aaa6a68b13765821b305150a82eae252b070ce54ed730216388ade6db4b6a7  /tmp/opencode/c64-irqtrace-r2v2-e1794921881-1/cflash.img
+```
+
+**FACT:** that same `-1` run reproduced the reference fault signature:
+
+```
+$ grep -m1 '^TWLHD_BKPT cpu=ARM9' /tmp/opencode/c64-irqtrace-r2v2-e1794921881-1/desmume.log
+TWLHD_BKPT cpu=ARM9 frame=129 max_frame=129 resets=1 pc=01FF853C cpsr=6000001F sp=02FF43A8 lr=02002767 intvec=00000000
+```
+
+**FACT:** the original fault-reproduction runs used the same capture script with
+`DESMUME_TIMEOUT=30` and a scratch CLI (`docs/reports/cubes64-branch0-diagnosis.md:183-187`).
+The instrumented entry-trace runs added `TWLHD_RTC_EPOCH=1794925481` and a
+windowed PC trace (`TWLHD_PCLOG2`) (`docs/reports/cubes64-entry-trace.md:396-400`);
+`TWLHD_PCLOG` is the opt-in 4 M-record PC trace
+(`docs/reports/bkpt-diagnosis.md:93-94`). The only env var set for the new run
+was `TWLHD_RTC_EPOCH=1794921881` (no `TWLHD_PCLOG2` override).
+
+**HYPOTHESIS:** dropping `TWLHD_PCLOG`/`TWLHD_PCLOG2` does not change the
+emulated run: both are opt-in outputs produced by the *scratch emulator*, not
+inputs to the emulated ROM. `TWLHD_RTC_EPOCH=1794921881` is the epoch that
+reproduced the fault in §2.4. The raw logs are quoted in
+`docs/reports/cubes64-irq-lr-trace.md` §3.
+
+**Open item 1 (calico handler preserves `LR_sys`):** resolved as FACT about the
+model. The ITCM handler `__arm_excpt_irq` runs in IRQ mode, saves `LR_irq` on
+the IRQ stack (`push {r0, r1, r2, r3, ip, lr}` at `0x01FF8608`) and restores it
+on the no-reschedule return path (`ldmeq sp!, {r0, r1, r2, r3, ip, pc}^` at
+`0x01FF86A0`). It does not save or restore `LR_sys` on that path. The runtime
+log shows `LR_sys=0x020020DF` both at IRQ entry and after IRQ exit, so the
+handler itself did not change `LR_sys`.
+
+**Open item 2 (hardware reproduction):** unchanged — **UNVERIFIED**; no
+hardware run exists.
+
+**Open item 3 (RTC/cflash sensitivity):** unchanged — **UNVERIFIED**; the new
+run confirms the same epoch pattern for `1794921881` but does not isolate the
+DeSmuME/libfat mechanism.
+
+**Open item 4 (ring shows hook-body PC `0x020022CC` before IRQ):** UNRESOLVED.
+The relevant lines show: the last guest PC in the 64-entry ring before the IRQ
+vector is `0x020022CC`; `TWLHD_IRQ_EXCEPTION` records `ia=0x02001D52`; and the
+handler returned to `0x02001D50` (the BL suffix) with `LR_sys=0x020020DF`, after
+which the suffix branched to `0x02002640`. The *location* where the CPU was when
+the IRQ was taken (inside `twlhd_gx_rec_hook` versus at `0x02001D52`) is
+**UNVERIFIED**; it is one of the conflicting observations itself, not a
+confirmed fact. The three observations quoted in
+`docs/reports/cubes64-irq-lr-trace.md` §5 are inconsistent (the
+`TWLHD_IRQ_EXCEPTION` line and the handler `sub lr, lr, #4` both imply a return
+to `0x02001D52`, while the runtime log shows `0x02001D50`), so Open item 4 is
+kept open and the return-address discrepancy remains **UNVERIFIED**.
+
+**Consequence for the CAUSE hypothesis:** the statement "an IRQ taken between
+the two halfwords of the Thumb BL pair ... leaves a different `LR_sys`" is not
+confirmed by the log. The following chain is **HYPOTHESIS/UNVERIFIED**: the BL
+completed normally, the hook body ran, an IRQ was taken, the handler returned to
+the BL suffix address, and the suffix re-executed with a stale `LR_sys` value
+already present before the IRQ. It is relabelled as a **HYPOTHESIS** about a
+DeSmuME model artefact; the earlier CAUSE paragraph in this report should be
+read with this Update in mind. The FACT part is the `LR_sys` change timing,
+which is backed by the per-instruction `TWLHD_R14_TRACE` quoted in
+`docs/reports/cubes64-irq-lr-trace.md` §3.
+
+**REQ-16 (round 1 repair of irq-lr-trace report and branch0 Update,
+2026-11-18).** Repaired ten evidence-discipline defects in
+`docs/reports/cubes64-irq-lr-trace.md` and the Update section of
+`docs/reports/cubes64-entry-trace.md`: relabelled the `LR_sys` change timing
+with per-instruction R14 evidence; restated Open item 4 as **UNRESOLVED** with
+three conflicting observations side by side; rewrote §6 as numbered
+**HYPOTHESES** plus one next minimal experiment; removed the unsupported
+"approximately 71 instructions" claim and stated the 69-instruction guest
+window; corrected the §7 ARMv5TE Thumb BL premise; added a dedicated IRQ
+entry/exit ring showing 16 pairs; replaced
+elided FACT blocks with complete raw output or narrower commands; quoted
+cflash provenance and env vars; quoted the `demo_frame.cpp:464` call site; and
+quoted the real `make test` tail. Extended the scratch DeSmuME copy with
+`cubes64-irq-lr-trace-r2.patch` and build4 only. Aligned
+`docs/reports/cubes64-branch0-diagnosis.md` Update item 1 with the restated
+Open item 4. Round 4 amendment: the `-1` cflash creation provenance is now
+**UNVERIFIED** (scoped post-run `sha256sum` only); the r3-1 run was removed
+from the Update.
+
+**REQ-17 (round 2 repair of irq-lr-trace report and entry-trace Update,
+2026-11-18).** Aligned the Update section with the round-2 evidence-discipline
+repairs in `docs/reports/cubes64-irq-lr-trace.md`: removed the "confirmed
+*location* observation" wording from Open item 4 and labelled the location
+**UNVERIFIED** (only per-line facts are stated: last guest PC `0x020022CC`;
+`TWLHD_IRQ_EXCEPTION ia=0x02001D52`; handler return to `0x02001D50`).
+Reworded the CAUSE-consequence sentence so the return-to-suffix chain is
+self-labelled **HYPOTHESIS/UNVERIFIED**. Added setup-parity text quoting the
+original `DESMUME_TIMEOUT=30` capture-script protocol next to the new build4
+command, explaining that `TWLHD_PCLOG`/`TWLHD_PCLOG2` are described as
+emulator-side logging outputs rather than ROM inputs, and correcting the cflash
+provenance to quote the script's `set -x` creation line and a post-run
+(flushed) `sha256sum`. Updated REQ-16 to reflect the corrected 69-instruction
+guest window and 16-pair IRQ ring. Round 4 correction: the r3-1 run was removed
+because its full launch command and `set -x` printing command were not
+recorded; the `-1` image creation provenance is now **UNVERIFIED** (scoped
+post-run `sha256sum` only); the `TWLHD_PCLOG` scope claim was backed by a
+tree-wide `grep -rn`; the build4 source-tree link was backed by
+`meson introspect --buildsystem-files`.
+
+**REQ-18 (round 3 repair of irq-lr-trace report and entry-trace Update,
+2026-11-18).** Corrected three evidence-discipline defects propagated from
+`docs/reports/cubes64-irq-lr-trace.md`: (1) replaced the contradictory cflash
+provenance with a fresh run into
+`/tmp/opencode/c64-irqtrace-r2v2-e1794921881-r3-1`, quoting the script's
+`set -x` `+ mkfs.fat -C ...` creation line and the post-run (flushed)
+`sha256sum`; removed "taken before the emulator run" and the manual `mkfs.fat`
+quote; (2) relabelled "Dropping `TWLHD_PCLOG`/`TWLHD_PCLOG2` does not change
+the emulated run" as **HYPOTHESIS** in the Update, REQ-8 and REQ-17; (3)
+referenced the r2 patch/build4 link evidence (`wc -l`, reverse
+`patch --dry-run`, `grep -c TWLHD_IRQTRACE` in the source tree) documented in
+`docs/reports/cubes64-irq-lr-trace.md` §1. No product code, tests, harness or
+pristine trees were modified. Round 4 correction: the r3-1 run was removed and
+the `-1` cflash creation provenance relabelled **UNVERIFIED**; the build4
+source-tree link was backed by `meson introspect --buildsystem-files`; the
+`TWLHD_PCLOG` scope claim was backed by a tree-wide `grep -rn`.
+
+**REQ-19 (round 4 docs-only repair of irq-lr-trace report and
+entry-trace Update, 2026-11-18).** Repaired three evidence-discipline defects:
+(1) removed the `/tmp/opencode/c64-irqtrace-r2v2-e1794921881-r3-1` run from
+`docs/reports/cubes64-irq-lr-trace.md` §1 and this Update because its full
+launch command and the command printing its `set -x` line were not recorded,
+relabelled the creation provenance of the `-1` `cflash.img` as **UNVERIFIED**,
+and quoted only a scoped post-run `sha256sum` of the current `-1` image; (2)
+corrected the `TWLHD_PCLOG` `grep -n -A9` quote to end at source line 773 and
+backed the scope claim with the full output of `grep -rn 'TWLHD_PCLOG'
+$HOME/3ds/hwtest-staging/desmume-dbg/desmume/src`; (3) added a
+`meson introspect --buildsystem-files` FACT linking `desmume-dbg-build4` to the
+scratch source tree and corrected the REQ-18 wording to say the
+`grep -c TWLHD_IRQTRACE` command covers the source tree, not build4. Updated
+REQ-7/REQ-8/REQ-16/REQ-17/REQ-18 summaries with round-4 amendment clauses. Did
+not modify product code, tests, harness, or pristine trees. Evidence:
+`docs/reports/cubes64-irq-lr-trace.md` §1 (build4 source-dir, cflash
+UNVERIFIED, PCLOG scope), Verification (`make test`).
+
+`make test` passes; the real tail is quoted in
+`docs/reports/cubes64-irq-lr-trace.md` Verification.

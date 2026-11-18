@@ -1176,20 +1176,24 @@ Consequences for the open items:
    suffix halfword of the 32-bit Thumb `bl twlhd_gx_rec_hook` at `0x02001D4E`
    (`arm9v2/source/demo_frame.cpp:464`, inside the `glRotateYi` / shim `Port`
    assignment sequence). The next PC was `0x02002640` and `LR=0x02001D53`. The
-   mechanism is **HYPOTHESIS:** an IRQ was taken between the two BL halfwords
-   and the calico SYS-mode handler left a different `LR_sys`, so the suffix
-   computed target = LR + offset. The BL encoding `f000 fab1` is offset +0x562:
-   the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52`
-   (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to
-   `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 =
-   0x02001D53`. The observed `LR=0x02001D53` is therefore the value the suffix
-   itself writes, not the prefix's own LR, and does not contradict the
-   clobbered-LR story. The normal target from the prefix's LR is
-   `0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching
+   round-2 per-instruction R14 trace shows the BL prefix/suffix pair completed
+   (`LR=0x02001D53` at seq 62551563), the hook body ran, and `LR_sys` changed
+   from `0x02001D52` to `0x020020DF` during guest execution before the IRQ at
+   seq 62551633. The mechanism is **HYPOTHESIS:** an IRQ was taken while the CPU
+   was executing inside `twlhd_gx_rec_hook`, and the handler returned to the BL
+   suffix address `0x02001D50` with a stale `LR_sys=0x020020DF`, so the suffix
+   re-executed and branched to `LR + 0x562 = 0x02002640`. The BL encoding `f000
+   fab1` is offset +0x562: the prefix `f000` at `0x02001D4E` sets `LR =
+   0x02001D4E + 4 = 0x02001D52` (no Thumb bit); the suffix `fab1` at
+   `0x02001D50` branches to `LR_before_suffix + 0x562` and sets `LR = (address
+   of next instruction) | 1 = 0x02001D53`. The observed `LR=0x02001D53` is
+   therefore the value the suffix itself writes, not the prefix's own LR, and
+   does not contradict the clobbered-LR story. The normal target from the
+   prefix's LR is `0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching
    `0x02002640` would need `LR_before_suffix = 0x020020DE` (Thumb
-   `0x020020DF`). The handler's actual LR value is **UNVERIFIED**. The ring
-   evidence also contains an unresolved conflict documented in
-   `cubes64-entry-trace.md` Open item 4.
+   `0x020020DF`). Why the handler returned to `0x02001D50` rather than to
+   `0x02001D52` is **UNVERIFIED**. `cubes64-entry-trace.md` Open item 4 is
+   therefore kept **UNRESOLVED**.
 2. **Open item 2 (abnormal SP):** settled as FACT about the model. The entry SP
    was normal (`0x02FF3E28`). Because the prologue was skipped, the epilogue's
    `add sp, r3` at `0x0200268E` unpairedly added 1372 bytes, moving SP to
