@@ -276,8 +276,9 @@ address 0 at frame 6 with SP inside the DLDI region —
 `docs/EMULATOR_VALIDATION.md:269-292` holds the prior CUBES investigation: in
 the CUBES=64 AF=120 run gdb showed control reaching the `0x01ff853c` reset
 vector, and that root cause stays UNEXPLAINED (the same diagnostic CLI measures
-it at frame 129, after 120+ frames presented, branching to 0 from
-`common/twlhd_tex_capture.c:208` — a different site from `CUBES=2`'s).
+it at frame 129, after 120+ frames presented, branching to 0 from the
+`pop {pc}` epilogue of `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:263-264`)
+— a different site from `CUBES=2`'s).
 `CUBES=2` draws 48 ROM
 vertices, twice the working cube frame's 24, yet no recorder capacity is near its limit
 (`common/twlhd_gx_record.h:30,41-45`), so there is no failing size limit to
@@ -314,9 +315,11 @@ renderer, tolerance or harness/DeSmuME file was modified.
   Only scene2's branch site (newlib `setvbuf`) is measured to be outside our
   code; scene3's and CUBES=2's sites are not attributed (UNVERIFIED, see the
   report's open items 3-4); for CUBES=64
-  AF=120 the branch site **is** in our code (`common/twlhd_tex_capture.c:208`, LR
-  in `twlhd_tex_capture_plan` at `:215`), also UNRESOLVED. The emulator's
-  in-place DLDI auto-patch is required by **scene2 in the tested
+  AF=120 the branch site **is** in our code (`common/twlhd_tex_capture.c:263-264`, LR
+  in `twlhd_tex_capture_plan` at `:263`), also UNRESOLVED; a fresh rebuild shows
+  the instruction is a `pop {pc}` return from a zeroed saved LR, not an
+  indirect call — see `docs/reports/cubes64-branch0-diagnosis.md`.
+  The emulator's in-place DLDI auto-patch is required by **scene2 in the tested
   configurations** (the only ROM the with/without-patch discriminator ran on;
   the scratch run `run-pcB` is an unexplained counter-example). Without the
   patch this task measured scene3 (no fault in 30 s, but no 3D frame either),
