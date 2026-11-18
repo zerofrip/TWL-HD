@@ -1134,15 +1134,17 @@ regressed.
 ## Update (2026-11-18): entry-trace follow-up — reproduction achieved
 
 Follow-up investigation documented in `docs/reports/cubes64-entry-trace.md`.
-The rebuilt ROM still logs `ROM crc: 1B79DB9D` and the ELF addresses match the
+The rebuilt ROM still logs `ROM crc: 1B79DB9D` (see the run table at lines 191–193) and the ELF addresses match the
 values above (`twlhd_tex_capture_plan` at `0x020025d0`, epilogue `pop {r4, r5,
 r6, r7, pc}` at `0x0200269A`).
 
 The original Nov-17 23:25 runs with the existing scratch CLI
 (`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) reproduced
 the frame-129 register dump (`pc=01FF853C sp=02FF43A8 lr=02002767`). Fresh
-Nov-18 runs with the same binary and ROM did **not** reproduce, even though the
-autodump file content and ROM CRC were identical. A side-by-side log diff with
+Nov-18 runs with the same binary and ROM did **not** reproduce. The autodump
+file content was identical between the two directly-compared runs (`c64-run1`
+and `c64-ref1`) and the ROM CRC was identical across every run quoted in
+`docs/reports/cubes64-entry-trace.md` §1. A side-by-side log diff with
 `TWLHD_FRAME` lines filtered out (`grep -v '^TWLHD_FRAME'`) shows the logs match
 apart from path differences at lines 2, 7 and 25 (cflash image paths) until line
 55, where the old log has the `ARM OP_BKPT`/BKPT dump block and the new log
@@ -1152,7 +1154,14 @@ A new instrumented scratch CLI
 (`/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`) with an
 RTC-epoch override reproduces the reference dump when the epoch is pinned to
 the original run time (2026-11-17 ~23:24 +0900) and a fresh cflash image is
-used; epochs on Nov-18 (00:00, 00:24, 09:30) run to the watchdog with no fault.
+used. **HYPOTHESIS:** the epoch dependence is restricted to the six sampled
+epochs: reproduced at `TWLHD_RTC_EPOCH=1794921881` (2026-11-17 22:24:41 +0900),
+`TWLHD_RTC_EPOCH=1794925481` (2026-11-17 23:24:41 +0900), and
+`TWLHD_RTC_EPOCH=1794925511` (2026-11-17 23:25:11 +0900) with a fresh cflash
+image, and not at `TWLHD_RTC_EPOCH=1794927600` (2026-11-18 00:00:00 +0900),
+`TWLHD_RTC_EPOCH=1794929081` (2026-11-18 00:24:41 +0900), or
+`TWLHD_RTC_EPOCH=1794961800` (2026-11-18 09:30:00 +0900); the Nov-18 epochs
+produced no `TWLHD_BKPT` line.
 
 Consequences for the open items:
 
