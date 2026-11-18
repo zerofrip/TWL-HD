@@ -36,6 +36,7 @@ below, matching the original recorded runs.
 **FACT:** `arm-none-eabi-nm -n` on the rebuilt ELF shows the relevant symbols:
 
 ```
+$ arm-none-eabi-nm -n arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E 'twlhd_demo_draw_frame|twlhd_gx_rec_hook|twlhd_gx_rec_serialize_tex|twlhd_tex_capture_layout|twlhd_tex_capture_plan|__sp_usr|__sp_irq|__sp_svc'
 020014c4 T twlhd_demo_draw_frame
 020022b4 T twlhd_gx_rec_hook
 02002350 T twlhd_gx_rec_serialize_tex
@@ -71,6 +72,7 @@ $ arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E '^ 200
 (Addr `0x020013c0`, Size `0x01ab6c`) and shows the DTCM/ITCM sections:
 
 ```
+$ arm-none-eabi-readelf -S --wide arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E '\.itcm|\.dtcm|\.main '
   [ 6] .itcm             PROGBITS        01ff8020 004f2c 0006c8 00  AX  0   0  4
   [ 7] .dtcm             PROGBITS        02ff0000 022070 000000 00   W  0   0  1
   [ 8] .dtcm.bss         NOBITS          02ff0000 0055f4 000098 00  WA  0   0  4
@@ -215,8 +217,29 @@ $ file /tmp/opencode/c64-run1/cflash.img /tmp/opencode/c64-ref1/cflash.img
 
 A new scratch CLI was built in `/home/one/3ds/hwtest-staging/desmume-dbg-build2`
 with an RTC-epoch override (`TWLHD_RTC_EPOCH`) added to `src/rtc.cpp`.
-With no override it prints the same lines up to `TWLHD_SWAP n=120 frame=122`
-and does not fault, matching the reference CLI's behaviour.
+**FACT:** with no override the build2 CLI runs past `TWLHD_SWAP n=120 frame=122`
+and produces no `TWLHD_BKPT` line:
+
+```
+$ mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1
+capture: /tmp/opencode/c64-noepoch-rerun-1/twlhd_frame_v2.bin
+```
+
+```
+$ grep -c TWLHD_BKPT /tmp/opencode/c64-noepoch-rerun-1/desmume.log
+0
+```
+
+```
+$ grep TWLHD_SWAP /tmp/opencode/c64-noepoch-rerun-1/desmume.log | head -7
+TWLHD_SWAP n=0 frame=1
+TWLHD_SWAP n=1 frame=2
+TWLHD_SWAP n=2 frame=3
+TWLHD_SWAP n=60 frame=61
+TWLHD_SWAP n=120 frame=122
+TWLHD_SWAP n=180 frame=188
+TWLHD_SWAP n=240 frame=249
+```
 
 A sweep was run with `tools/emulator/desmume_capture.sh` creating a fresh
 cflash image each time, the rebuilt ROM, and the instrumented build2. Each
@@ -290,7 +313,7 @@ TWLHD_BKPT_PCZERO count=1 last_frame=129 last_lr=02002767 last_cpsr=6000001F
 | 2026-11-18 09:30:00 +0900 | 1794961800 | (none) | no |
 
 Two runs were made at each old-epoch value; both reproduced the same reference
-dump. Two runs at each non-old epoch value ran to the watchdog with no fault.
+dump. Two runs at each non-old epoch value produced no `TWLHD_BKPT` line.
 
 **HYPOTHESIS:** the fault is RTC-dependent. A fresh cflash image plus an RTC
 epoch around 2026-11-17 22:24–23:25 +0900 reproduces the reference dump; the
@@ -360,11 +383,11 @@ tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/open
 **FACT:** both final runs logged the reference register dump:
 
 ```
+$ grep -m1 '^TWLHD_BKPT cpu=ARM9' /tmp/opencode/c64-final1/desmume.log
 TWLHD_BKPT cpu=ARM9 frame=129 max_frame=129 resets=1 pc=01FF853C cpsr=6000001F sp=02FF43A8 lr=02002767 intvec=00000000
+$ grep -m1 '^TWLHD_BKPT cpu=ARM9' /tmp/opencode/c64-final2/desmume.log
 TWLHD_BKPT cpu=ARM9 frame=129 max_frame=129 resets=1 pc=01FF853C cpsr=6000001F sp=02FF43A8 lr=02002767 intvec=00000000
 ```
-
-(run1 and run2 respectively.)
 
 ### 3.4 Planner entry: mid-function, not the prologue
 
@@ -380,6 +403,7 @@ $ grep -c TWLHD_PLAN_ENTRY /tmp/opencode/c64-final1/desmume.log
 first observed PC inside the range was `0x02002640`:
 
 ```
+$ grep '^TWLHD_PLAN_RANGE_ENTRY ' /tmp/opencode/c64-final1/desmume.log
 TWLHD_PLAN_RANGE_ENTRY frame=129 pc=02002640 sp=02FF3E28 lr=02001D53 cpsr=0000003F mode=1F r0=00000001 r1=00021000 r2=02048EE8 r3=00000004 lrslot=02FF3E18..02FF3E40
 ```
 
@@ -388,17 +412,26 @@ handler immediately before returning to `0x02001D50`, then jumping to
 `0x02002640`:
 
 ```
+$ grep TWLHD_PLAN_RANGE_ENTRY_RING /tmp/opencode/c64-final1/desmume.log
 TWLHD_PLAN_RANGE_ENTRY_RING 02002E2C 02002E2E 02002E30 02002E32 02002E34 02002E5A 02002E5C 02002E3C 02002E3E 02002E42 02002E44 02002E38 020020DE 020020E0 020020E2 020020E4 02002162 02002164 02002166 02002168 0200216A 0200216C 0200216E 02002170 02002172 02002174 02002176 02002178 020020AE 020022CC 00000018 01FF8034 01FF8604 01FF8608 01FF860C 01FF8610 01FF8614 01FF8618 01FF861C 01FF8620 01FF8624 01FF8628 01FF862C 01FF8630 01FF8634 01FF8638 01FF863C 01FF8640 01FF8644 01FF8648 01FF864C 01FF8650 01FF8654 01FF8658 01FF865C 01FF8660 01FF8664 01FF8668 01FF866C 01FF8698 01FF869C 01FF86A0 02001D50 02002640
 ```
 
-**FACT:** the ring shows no PC in the hook body (`0x020022b4..0x02002350`)
-between the return to `0x02001D50` and the jump to `0x02002640`. (`0x020022CC`
-appears earlier in the same ring, before the IRQ handler sequence, and is
-therefore an earlier hook invocation.)
+**FACT:** the quoted ring shows `0x020022CC` (inside the hook body
+`0x020022b4..0x02002350`) as the last non-handler PC before the IRQ vector
+`00000018`, and shows no `0x02001D4E` (the BL prefix) executing right before
+that IRQ. **FACT:** the ring also contains `0x020020DE`, the LR value the
+IRQ-between-BL-halves hypothesis needs for the BL suffix to reach
+`0x02002640`. **HYPOTHESIS:** `0x020022CC` is therefore an earlier hook
+invocation, not the hook call that was interrupted. This leaves a genuine
+conflict with the IRQ-between-BL-halves story: that story predicts the BL
+prefix at `0x02001D4E` would be the last PC before the IRQ and the hook body
+would not execute, yet the ring shows a hook-body PC (`0x020022CC`) immediately
+before the IRQ. This conflict is recorded as an open item.
 
 **FACT:** the planner summary at the fault confirms the entry range:
 
 ```
+$ grep TWLHD_PLAN_SUMMARY /tmp/opencode/c64-final1/desmume.log
 TWLHD_PLAN_SUMMARY entries=858 min=02002640 max=020029AA
 ```
 
@@ -445,19 +478,23 @@ the location the epilogue later popped.
 
 ### 3.6 SP change log
 
-**FACT:** the SP-change log from the final run shows the first illegal SP
-change happens at `0x02002690` after the `add sp, r3` at `0x0200268E`, in
-SYS mode (`mode=1F`):
+**FACT:** the SP-change log from the final run shows an earlier IRQ-mode
+alert at frame 120 and the first illegal SP change inside the planner/SYS-mode
+context at `0x02002690` after the `add sp, r3` at `0x0200268E`:
 
 ```
+$ grep TWLHD_SP_ALERT /tmp/opencode/c64-final1/desmume.log
+TWLHD_SP_ALERT sp=02FF3FC0 above __sp_usr=02FF3E80 at pc=01FF8500 mode=13 frame=120
 TWLHD_SP_ALERT sp=02FF4384 above __sp_svc=02FF3FC0 at pc=02002690 mode=1F frame=129
 TWLHD_SP_ALERT sp=02FF4384 at/above DTCM top=02FF4000 at pc=02002690 mode=1F frame=129
 ```
 
 **FACT:** decoding the windowed PC trace (`TWLHD_PCLOG2`) around the first
-planner execution confirms the SP transition:
+planner execution confirms the SP transition. The scratch decoder was
+reconstructed from the patch's 12-byte little-endian `{pc,sp,cpsr}` record:
 
 ```
+$ python3 /tmp/opencode/decode_pclog2.py /tmp/opencode/c64-final1/pclog2.bin 1282287 1282302
 1282287 pc=020025BC sp=02FF3E14 cpsr=6000003F
 1282288 pc=020025BE sp=02FF3E14 cpsr=6000003F
 1282289 pc=020025C0 sp=02FF3E14 cpsr=6000003F
@@ -465,7 +502,7 @@ planner execution confirms the SP transition:
 1282291 pc=02002766 sp=02FF3E28 cpsr=6000003F
 1282292 pc=0200268C sp=02FF3E28 cpsr=6000003F
 1282293 pc=0200268E sp=02FF3E28 cpsr=6000003F
-*1282294 pc=02002690 sp=02FF4384 cpsr=6000003F
+1282294 pc=02002690 sp=02FF4384 cpsr=6000003F
 1282295 pc=02002692 sp=02FF4394 cpsr=6000003F
 1282296 pc=02002694 sp=02FF4394 cpsr=6000003F
 1282297 pc=02002696 sp=02FF4394 cpsr=6000003F
@@ -476,8 +513,9 @@ planner execution confirms the SP transition:
 1282302 pc=01FF853C sp=02FF43A8 cpsr=6000001F
 ```
 
-The first instruction after which SP leaves the legal user-stack range is the
-`add sp, r3` at `0x0200268E`. Because the planner was entered at `0x02002640`,
+The first instruction after which SP leaves the legal user-stack range inside
+the planner/SYS-mode context is the `add sp, r3` at `0x0200268E`. Because the
+planner was entered at `0x02002640`,
 the matching prologue `add sp, r4` (which subtracts 1372) was skipped; the
 epilogue alone adds 1372 (`0x55C`), moving SP from `0x02FF3E28` to
 `0x02FF4384`.
@@ -487,6 +525,7 @@ epilogue alone adds 1372 (`0x55C`), moving SP from `0x02FF3E28` to
 **FACT:** the CP15 DTCM write log shows one guest write:
 
 ```
+$ grep TWLHD_DTCM_WRITE /tmp/opencode/c64-final1/desmume.log
 TWLHD_DTCM_WRITE pc=02004850 value=02FF0000
 ```
 
@@ -514,6 +553,7 @@ $ grep -n -A 8 "MMU.DTCMRegion = armcp15->DTCMRegion = val & 0x0FFFF000" /home/o
 **FACT:** the BKPT dump reports:
 
 ```
+$ grep TWLHD_DTCM_REGION /tmp/opencode/c64-final1/desmume.log
 TWLHD_DTCM_REGION=02FF0000
 ```
 
@@ -544,12 +584,16 @@ the two.
 **HYPOTHESIS:** an IRQ was taken between the two halfwords of the Thumb BL
 pair, and the calico SYS-mode IRQ handler (`__arm_excpt_irq`,
 `irq_handler.32.s`) left a different `LR_sys`, so the BL suffix computed
-target = LR + offset. The BL encoding `f000 fab1` has offset +0x562; the
-normal target from the prefix's LR is `0x02001D52 + 0x562 = 0x020022B4` (the
-hook), while reaching `0x02002640` would require `LR = 0x02002640 − 0x562 =
-0x020020DE` (Thumb `0x020020DF`). **Tension:** the observed `lr=02001D53`
-equals `(0x02001D4E + 4) | 1`, the prefix's own LR value, which does not match
-the clobbered-LR story. The handler's actual LR value is therefore
+target = LR + offset. The BL encoding `f000 fab1` has offset +0x562:
+- The prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52`,
+  without the Thumb bit.
+- The suffix `fab1` at `0x02001D50` branches to `LR_before_suffix + 0x562` and
+  sets `LR = (address of next instruction) | 1 = 0x02001D52 | 1 = 0x02001D53`.
+The observed `lr=02001D53` is therefore the value the suffix itself writes, not
+"the prefix's own LR", and does not contradict the hypothesis. The normal
+target from the prefix's LR is `0x02001D52 + 0x562 = 0x020022B4` (the hook),
+while reaching `0x02002640` would require `LR_before_suffix = 0x02002640 −
+0x562 = 0x020020DE` (Thumb `0x020020DF`). The handler's actual LR value is
 **UNVERIFIED**, and the IRQ-between-BL-halves mechanism remains a hypothesis.
 **UNVERIFIED:** the exact state of `LR_sys` across the IRQ entry and exit.
 
@@ -561,8 +605,9 @@ value below `__sp_usr` (`0x02FF3E80`).
 `add sp, r3` at `0x0200268E` (the planner epilogue's `add sp, r3`), in SYS mode
 (`cpsr` mode `0x1F`). It added 1372 (`0x55C`) to SP, raising it to
 `0x02FF4384`, then `pop {r4..r7}` raised it to `0x02FF4394`, and the final
-`pop {r4, r5, r6, r7, pc}` loaded PC from `SP + 16 = 0x02FF4394 + 0x10 =
-0x02FF43A4`.
+`pop {r4, r5, r6, r7, pc}` loaded PC from `SP + 16` (derived from the §3.6
+trace: SP before pop = `0x02FF4394`, PCLOG2 entry 1282299) = `0x02FF4394 +
+0x10 = 0x02FF43A4`.
 **HYPOTHESIS:** the abnormal SP is a direct consequence of mid-function entry:
 the prologue that allocates the 1372-byte frame was skipped, so the epilogue's
 `add sp, r3` is unpaired and walks SP up through the IRQ/SVC stack region and
@@ -645,7 +690,8 @@ flashcart firmware is modified.
 **FACT:** under DeSmuME the CUBES=64 AUTODUMP_FRAME=120 ROM branches to address
 `0` at frame 129 because `pop {r4, r5, r6, r7, pc}` at `0x0200269A` inside
 `twlhd_tex_capture_plan` (`common/twlhd_tex_capture.c:264`) loads PC from
-`[SP+16] = [0x02FF4394 + 0x10 = 0x02FF43A4]`, which contains `0`. **FACT:** the
+`[SP+16]` (derived from the §3.6 trace: SP before pop = `0x02FF4394`, PCLOG2
+entry 1282299) = `[0x02FF4394 + 0x10 = 0x02FF43A4]`, which contains `0`. **FACT:** the
 CPU entered `twlhd_tex_capture_plan` mid-function at `0x02002640` (`:174`) after
 returning from the ITCM IRQ handler (`0x01FF86A0`) to `0x02001D50`, the BL
 suffix halfword of the 32-bit Thumb `bl twlhd_gx_rec_hook` at `0x02001D4E` in
@@ -662,14 +708,20 @@ image, and not at `TWLHD_RTC_EPOCH=1794927600` (2026-11-18 00:00:00 +0900),
 the six sampled epochs. **HYPOTHESIS:** the entry is caused by an IRQ taken
 between the two halfwords of the Thumb BL pair, with the calico SYS-mode IRQ
 handler leaving a different `LR_sys` so the BL suffix computed target = LR +
-offset. The BL encoding `f000 fab1` has offset +0x562; the normal target is
-`0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching `0x02002640` would
-require `LR = 0x02002640 − 0x562 = 0x020020DE` (Thumb `0x020020DF`). **Tension:**
-the observed `lr=02001D53` equals `(0x02001D4E + 4) | 1`, the prefix's own LR
-value, which does not match the clobbered-LR story. **UNVERIFIED:** the exact
-state of `LR_sys` across the IRQ entry and exit, the exact write (if any) that
-corrupted the return path, and whether real hardware could ever take the same
-path.
+offset. The BL encoding `f000 fab1` has offset +0x562:
+- The prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52`,
+  without the Thumb bit.
+- The suffix `fab1` at `0x02001D50` branches to `LR_before_suffix + 0x562` and
+  sets `LR = (address of next instruction) | 1 = 0x02001D52 | 1 = 0x02001D53`.
+The observed `lr=02001D53` is therefore the value the suffix itself writes, not
+the prefix's own LR, and does not contradict the hypothesis. The normal target
+from the prefix's LR is `0x02001D52 + 0x562 = 0x020022B4` (the hook), while
+reaching `0x02002640` would require `LR_before_suffix = 0x02002640 − 0x562 =
+0x020020DE` (Thumb `0x020020DF`). This hypothesis conflicts with the ring
+evidence that a hook-body PC precedes the IRQ; the conflict is recorded as an
+open item. **UNVERIFIED:** the exact state of `LR_sys` across the IRQ entry and
+exit, the exact write (if any) that corrupted the return path, and whether real
+hardware could ever take the same path.
 
 ---
 
@@ -688,6 +740,14 @@ path.
 3. **UNVERIFIED:** why the fault is sensitive to the RTC epoch and to a fresh
    (versus pre-written) cflash image. The experiments show both inputs matter,
    but the mechanism inside DeSmuME/libfat has not been isolated.
+
+4. **UNRESOLVED conflict:** the IRQ-between-BL-halves hypothesis predicts the BL
+   prefix at `0x02001D4E` would be the last PC before the IRQ and the hook body
+   would not execute, but the 64-entry ring shows the hook-body PC `0x020022CC`
+   immediately before the IRQ vector `00000018`. The ring also contains
+   `0x020020DE`, the LR value the hypothesis needs, but does not show how that
+   value reached `LR_sys` at the BL suffix. This conflict must be resolved by
+   logging `LR_sys` around the IRQ and the BL halfwords.
 
 ---
 
@@ -718,15 +778,21 @@ path.
   showing `TWLHD_DTCM_WRITE` logs `val & 0x0FFFF000`; `make test` passes.
 
 - **REQ-12 (round 2 repair of entry-trace report, 2026-11-18).** Removed the
-  remaining standalone `...` ellipsis placeholders so that §2.2–§2.4 now quote
-  the full commands and their raw unedited outputs for the five Nov-18
+  remaining standalone ellipsis placeholders so that §2.2–§2.4 now quote the
+  full commands and their raw unedited outputs for the five Nov-18
   non-reproducing runs, the RTC/cflash sweep, the side-by-side diff, the two
   `file` commands, and the old-image/current-epoch run; the capture-loop output
   is explicitly omitted rather than truncated. Also quoted the exact
-  `arm-none-eabi-objdump -d ... | grep -E ...` commands and their raw outputs
-  for the planner prologue/epilogue and the `bl twlhd_gx_rec_hook` call site in
-  §1, replacing the earlier `...`-abbreviated disassembly block. `make test`
-  passes.
+  `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E
+  '^020025d0 <twlhd_tex_capture_plan>:|^ 20025d0:|^ 200268c:|^ 200268e:|^ 2002690:|^ 200269a:'`
+  and
+  `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E
+  '^ 2001d4e:|^ 2001d52:'`
+  commands and their raw outputs for the planner prologue/epilogue and the
+  `bl twlhd_gx_rec_hook` call site in §1, replacing the earlier abbreviated
+  disassembly block. `make test` passes.
+
+- **REQ-13 (round 3 repair of entry-trace report, 2026-11-18).** Corrected the BL/LR arithmetic in §4 Open item 1, CAUSE, and `cubes64-branch0-diagnosis.md` Update item 1: the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52` (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 = 0x02001D53`; the observed `lr=02001D53` is the suffix's own LR result, not evidence against the clobbered-LR hypothesis. Removed the "Tension" sentence in all three places. Evidence: `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E '^ 2001d4e:|^ 2001d52:'` (`f000 fab1`). Relabelled the §3.4 hook-invocation inference as **HYPOTHESIS**, stated plainly that the ring does not show the BL prefix at `0x02001D4E` right before the IRQ, noted that `0x020020DE` (the LR value the hypothesis needs) also appears in the ring, and added Open item 4 naming the conflict with a hook-body PC (`0x020022CC`) immediately before the IRQ vector. Evidence: `grep TWLHD_PLAN_RANGE_ENTRY_RING /tmp/opencode/c64-final1/desmume.log`. Labelled `0x02FF43A4` in §4 Open item 2 and CAUSE as derived from the §3.6 trace (`SP = 0x02FF4394` before the final `pop {pc}`, PCLOG2 entry 1282299), +16. Evidence: `python3 /tmp/opencode/decode_pclog2.py /tmp/opencode/c64-final1/pclog2.bin 1282287 1282302`. Replaced the hand-added PCLOG2 index marker with the full scratch-decoder command and its raw, unannotated output. Quoted the full commands and raw outputs for the §1 `arm-none-eabi-nm`/`readelf` evidence, the §3.3 `TWLHD_BKPT` grep, the §3.4 `TWLHD_PLAN_RANGE_ENTRY`/`RING`/`SUMMARY` greps, the §3.6 `TWLHD_SP_ALERT` grep, and the §3.7 `TWLHD_DTCM_WRITE`/`TWLHD_DTCM_REGION` greps. Rewrote §2.4 to quote a no-override run and limit the non-old-epoch claim to "no `TWLHD_BKPT` line". Evidence: `mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1` (output `capture: /tmp/opencode/c64-noepoch-rerun-1/twlhd_frame_v2.bin`) and `grep -c TWLHD_BKPT /tmp/opencode/c64-noepoch-rerun-1/desmume.log` (`0`). Rewrote `cubes64-branch0-diagnosis.md` Update section diff sentence to state the diff was filtered with `grep -v '^TWLHD_FRAME'` and diverges at line 55 after path differences at lines 2, 7 and 25. Replaced the abbreviated objdump command reference in REQ-12 with the two full commands quoted in §1. `make test` passes.
 
 - **Build equivalence:** `make -C arm9v2 AUTODUMP_FRAME=120 CUBES=64` produced
   ROM CRC `1B79DB9D`.

@@ -1142,9 +1142,11 @@ The original Nov-17 23:25 runs with the existing scratch CLI
 (`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) reproduced
 the frame-129 register dump (`pc=01FF853C sp=02FF43A8 lr=02002767`). Fresh
 Nov-18 runs with the same binary and ROM did **not** reproduce, even though the
-autodump file content and ROM CRC were identical. A side-by-side log diff shows
-the old and new runs are identical up to `TWLHD_SWAP n=120 frame=122` and then
-diverge.
+autodump file content and ROM CRC were identical. A side-by-side log diff with
+`TWLHD_FRAME` lines filtered out (`grep -v '^TWLHD_FRAME'`) shows the logs match
+apart from path differences at lines 2, 7 and 25 (cflash image paths) until line
+55, where the old log has the `ARM OP_BKPT`/BKPT dump block and the new log
+instead continues with `TWLHD_SWAP n=180 frame=188`.
 
 A new instrumented scratch CLI
 (`/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`) with an
@@ -1164,11 +1166,18 @@ Consequences for the open items:
    assignment sequence). The next PC was `0x02002640` and `LR=0x02001D53`. The
    mechanism is **HYPOTHESIS:** an IRQ was taken between the two BL halfwords
    and the calico SYS-mode handler left a different `LR_sys`, so the suffix
-   computed target = LR + offset. The BL encoding `f000 fab1` is offset +0x562;
-   normal target `0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching
-   `0x02002640` would need `LR = 0x020020DE` (Thumb `0x020020DF`). **Tension:**
-   the observed `LR=0x02001D53` equals `(0x02001D4E + 4) | 1`, the prefix's own
-   LR, so the handler's actual LR value is **UNVERIFIED**.
+   computed target = LR + offset. The BL encoding `f000 fab1` is offset +0x562:
+   the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52`
+   (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to
+   `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 =
+   0x02001D53`. The observed `LR=0x02001D53` is therefore the value the suffix
+   itself writes, not the prefix's own LR, and does not contradict the
+   clobbered-LR story. The normal target from the prefix's LR is
+   `0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching
+   `0x02002640` would need `LR_before_suffix = 0x020020DE` (Thumb
+   `0x020020DF`). The handler's actual LR value is **UNVERIFIED**. The ring
+   evidence also contains an unresolved conflict documented in
+   `cubes64-entry-trace.md` Open item 4.
 2. **Open item 2 (abnormal SP):** settled as FACT about the model. The entry SP
    was normal (`0x02FF3E28`). Because the prologue was skipped, the epilogue's
    `add sp, r3` at `0x0200268E` unpairedly added 1372 bytes, moving SP to
