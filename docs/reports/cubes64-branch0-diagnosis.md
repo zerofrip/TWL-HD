@@ -1128,3 +1128,55 @@ regressed.
   `arm-none-eabi-objdump -s -j .main -j .main.rw -j .init_array -j .fini_array
   -j .eh_frame -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf`.
   `TESTS: make test` — no regression.
+
+---
+
+## Update (2026-11-18): entry-trace follow-up — reproduction achieved
+
+Follow-up investigation documented in `docs/reports/cubes64-entry-trace.md`.
+The rebuilt ROM still logs `ROM crc: 1B79DB9D` and the ELF addresses match the
+values above (`twlhd_tex_capture_plan` at `0x020025d0`, epilogue `pop {r4, r5,
+r6, r7, pc}` at `0x0200269A`).
+
+The original Nov-17 23:25 runs with the existing scratch CLI
+(`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) reproduced
+the frame-129 register dump (`pc=01FF853C sp=02FF43A8 lr=02002767`). Fresh
+Nov-18 runs with the same binary and ROM did **not** reproduce, even though the
+autodump file content and ROM CRC were identical. A side-by-side log diff shows
+the old and new runs are identical up to `TWLHD_SWAP n=120 frame=122` and then
+diverge.
+
+A new instrumented scratch CLI
+(`/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`) with an
+RTC-epoch override reproduces the reference dump when the epoch is pinned to
+the original run time (2026-11-17 ~23:24 +0900) and a fresh cflash image is
+used; epochs on Nov-18 (00:00, 00:24, 09:30) run to the watchdog with no fault.
+
+Consequences for the open items:
+
+1. **Open item 1 (entry origin):** settled as FACT about the model. The planner
+   entry address `0x020025d0`/`0x020025d1` was never reached. The function body
+   was first entered mid-function at `0x02002640`
+   (`common/twlhd_tex_capture.c:174`). The 64-entry PC ring shows the previous
+   PC was `0x02001D50` (`arm9v2/source/demo_frame.cpp:464`, inside the
+   `glRotateYi` / shim `Port` assignment sequence), immediately after an ITCM
+   IRQ handler return. The instruction at `0x02001D50` is `bl
+   twlhd_gx_rec_hook`. The mechanism that made the return land in the planner
+   is **HYPOTHESIS** (corrupted LR/return address).
+2. **Open item 2 (abnormal SP):** settled as FACT about the model. The entry SP
+   was normal (`0x02FF3E28`). Because the prologue was skipped, the epilogue's
+   `add sp, r3` at `0x0200268E` unpairedly added 1372 bytes, moving SP to
+   `0x02FF4384` and then to the fault SP `0x02FF43A8`, above `__sp_usr` and the
+   nominal DTCM top. The CPU was in SYS mode (`mode=0x1F`).
+3. **Open item 3 (root cause):** reduced to HYPOTHESIS. The faulting
+   instruction is `pop {pc}` at `0x0200269A` (`common/twlhd_tex_capture.c:264`),
+   but the exact write that corrupted the return path is **UNVERIFIED**.
+4. **Open item 4 (hardware relevance):** unchanged — **HYPOTHESIS**; no
+   hardware run exists.
+5. **New open item:** the exact RTC/cflash/FAT interaction inside DeSmuME that
+   triggers the corruption.
+
+See `docs/reports/cubes64-entry-trace.md` for the full raw logs, build details,
+the RTC sweep table, and the updated patch file
+(`desmume-dbg-patch/cubes64-entry-trace.patch`).
+`make test` passes.
