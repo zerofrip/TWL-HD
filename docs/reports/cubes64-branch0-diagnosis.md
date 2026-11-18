@@ -1128,3 +1128,82 @@ regressed.
   `arm-none-eabi-objdump -s -j .main -j .main.rw -j .init_array -j .fini_array
   -j .eh_frame -j .tinfo -j .loadlist arm9v2/twlhd-arm9v2-autodump-c64.elf`.
   `TESTS: make test` — no regression.
+
+---
+
+## Update (2026-11-18): entry-trace follow-up — reproduction achieved
+
+Follow-up investigation documented in `docs/reports/cubes64-entry-trace.md`.
+The rebuilt ROM still logs `ROM crc: 1B79DB9D` (see the run table at lines 191–193) and the ELF addresses match the
+values above (`twlhd_tex_capture_plan` at `0x020025d0`, epilogue `pop {r4, r5,
+r6, r7, pc}` at `0x0200269A`).
+
+The original Nov-17 23:25 runs with the existing scratch CLI
+(`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) reproduced
+the frame-129 register dump (`pc=01FF853C sp=02FF43A8 lr=02002767`). Fresh
+Nov-18 runs with the same binary and ROM produced no `TWLHD_BKPT`
+line. The autodump
+file content was identical between the two directly-compared runs (`c64-run1`
+and `c64-ref1`) and the ROM CRC was identical across every run quoted in
+`docs/reports/cubes64-entry-trace.md` §1. A side-by-side log diff with
+`TWLHD_FRAME` lines filtered out (`grep -v '^TWLHD_FRAME'`) shows the logs match
+apart from path differences at lines 2, 7 and 25 (cflash image paths) until line
+55, where the old log has the `ARM OP_BKPT`/BKPT dump block and the new log
+instead continues with `TWLHD_SWAP n=180 frame=188`.
+
+A new instrumented scratch CLI
+(`/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`) with an
+RTC-epoch override: with a fresh cflash image, reproduced the reference dump at
+`TWLHD_RTC_EPOCH=1794921881`, `1794925481` and `1794925511` (2026-11-17
+22:24:41, 23:24:41, 23:25:11 +0900); produced no `TWLHD_BKPT` line at
+`TWLHD_RTC_EPOCH=1794927600`, `1794929081` and `1794961800`.
+**HYPOTHESIS:** the observation covers only the six sampled epochs: reproduced at
+`TWLHD_RTC_EPOCH=1794921881` (2026-11-17 22:24:41 +0900),
+`TWLHD_RTC_EPOCH=1794925481` (2026-11-17 23:24:41 +0900), and
+`TWLHD_RTC_EPOCH=1794925511` (2026-11-17 23:25:11 +0900) with a fresh cflash
+image, and not at `TWLHD_RTC_EPOCH=1794927600` (2026-11-18 00:00:00 +0900),
+`TWLHD_RTC_EPOCH=1794929081` (2026-11-18 00:24:41 +0900), or
+`TWLHD_RTC_EPOCH=1794961800` (2026-11-18 09:30:00 +0900); the Nov-18 epochs
+produced no `TWLHD_BKPT` line.
+
+Consequences for the open items:
+
+1. **Open item 1 (entry origin):** settled as FACT about the model. The planner
+   entry address `0x020025d0`/`0x020025d1` was never reached. The function body
+   was first entered mid-function at `0x02002640`
+   (`common/twlhd_tex_capture.c:174`). The 64-entry PC ring shows the CPU
+   returned from the ITCM IRQ handler (`0x01FF86A0`) to `0x02001D50`, the BL
+   suffix halfword of the 32-bit Thumb `bl twlhd_gx_rec_hook` at `0x02001D4E`
+   (`arm9v2/source/demo_frame.cpp:464`, inside the `glRotateYi` / shim `Port`
+   assignment sequence). The next PC was `0x02002640` and `LR=0x02001D53`. The
+   mechanism is **HYPOTHESIS:** an IRQ was taken between the two BL halfwords
+   and the calico SYS-mode handler left a different `LR_sys`, so the suffix
+   computed target = LR + offset. The BL encoding `f000 fab1` is offset +0x562:
+   the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52`
+   (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to
+   `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 =
+   0x02001D53`. The observed `LR=0x02001D53` is therefore the value the suffix
+   itself writes, not the prefix's own LR, and does not contradict the
+   clobbered-LR story. The normal target from the prefix's LR is
+   `0x02001D52 + 0x562 = 0x020022B4` (the hook), while reaching
+   `0x02002640` would need `LR_before_suffix = 0x020020DE` (Thumb
+   `0x020020DF`). The handler's actual LR value is **UNVERIFIED**. The ring
+   evidence also contains an unresolved conflict documented in
+   `cubes64-entry-trace.md` Open item 4.
+2. **Open item 2 (abnormal SP):** settled as FACT about the model. The entry SP
+   was normal (`0x02FF3E28`). Because the prologue was skipped, the epilogue's
+   `add sp, r3` at `0x0200268E` unpairedly added 1372 bytes, moving SP to
+   `0x02FF4384` and then to the fault SP `0x02FF43A8`, above `__sp_usr` and the
+   nominal DTCM top. The CPU was in SYS mode (`mode=0x1F`).
+3. **Open item 3 (root cause):** reduced to HYPOTHESIS. The faulting
+   instruction is `pop {pc}` at `0x0200269A` (`common/twlhd_tex_capture.c:264`),
+   but the exact write that corrupted the return path is **UNVERIFIED**.
+4. **Open item 4 (hardware relevance):** unchanged — **HYPOTHESIS**; no
+   hardware run exists.
+5. **New open item:** the exact RTC/cflash/FAT interaction inside DeSmuME that
+   triggers the corruption.
+
+See `docs/reports/cubes64-entry-trace.md` for the full raw logs, build details,
+the RTC sweep table, and the updated patch file
+(`desmume-dbg-patch/cubes64-entry-trace.patch`).
+`make test` passes.
