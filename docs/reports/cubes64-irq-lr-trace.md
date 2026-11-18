@@ -965,3 +965,113 @@ vertex_count=36
 max_clip_deviation=0.007324
 colour_exactness=PASS
 ```
+
+---
+
+## Update (2026-11-18): IRQ return-address experiment
+
+Follow-up investigation documented in `docs/reports/cubes64-irq-return-address.md`.
+A new round-3 scratch patch
+(`$HOME/3ds/hwtest-staging/desmume-dbg-patch/cubes64-irq-return-address.patch`)
+and a new build (`$HOME/3ds/hwtest-staging/desmume-dbg-build5/cli/desmume-cli`)
+were used. The rebuilt ROM still logs `ROM crc: 1B79DB9D` and the ELF addresses
+match the values above.
+
+**FACT:** the build5 run reproduced the reference fault signature:
+
+```
+$ grep -m1 '^TWLHD_BKPT cpu=ARM9' /tmp/opencode/c64-irqreturn-r3-e1794921881-3/desmume.log
+TWLHD_BKPT cpu=ARM9 frame=129 max_frame=129 resets=1 pc=01FF853C cpsr=6000001F sp=02FF43A8 lr=02002767 intvec=00000000
+```
+
+**FACT:** the run reproduced the same `IRQ_ENTRY` / `IRQ_EXIT` pair with the
+same register values:
+
+```
+$ grep -E 'TWLHD_IRQTRACE (IRQ_ENTRY|IRQ_EXIT) seq=' /tmp/opencode/c64-irqreturn-r3-e1794921881-3/desmume.log | head -2
+TWLHD_IRQTRACE IRQ_EXIT seq=62551664 frame=129 pc=02001D50 sp=02FF3E28 cpsr=0000003F mode=1F lr=020020DF lr_sys=020020DF spsr=0000003F
+TWLHD_IRQTRACE IRQ_ENTRY seq=62551633 frame=129 pc=01FF8034 sp=02FF3F80 cpsr=00000092 mode=12 lr=02001D56 lr_sys=020020DF spsr=0000003F
+```
+
+**FACT:** the new instrumentation shows the IRQ was flagged at seq 62551631 with
+`ia=0x02001D52`, `ni=0x02001D54`, `R15=0x02001D56`, Thumb mode, and the entry LR
+written was `0x02001D56`:
+
+```
+$ grep 'TWLHD_IRQ_FLAG cpu=9.*frame=129' /tmp/opencode/c64-irqreturn-r3-e1794921881-3/desmume.log
+TWLHD_IRQ_FLAG cpu=9 seq=62551631 frame=129 ia=02001D52 ni=02001D54 r15=02001D56 cpsr=0000003F t=1
+```
+
+```
+$ grep 'TWLHD_IRQ_LR_WRITTEN cpu=9.*frame=129' /tmp/opencode/c64-irqreturn-r3-e1794921881-3/desmume.log
+TWLHD_IRQ_LR_WRITTEN cpu=9 seq=62551631 frame=129 lr_irq_written=02001D56 r14_irq=01FF8538
+```
+
+**FACT:** the exception-return LDM at `0x01FF86A0` popped `0x02001D52` but the
+model loaded `R15` / `next_instruction` as `0x02001D50`:
+
+```
+$ grep 'TWLHD_IRQ_RETURN cpu=9.*frame=129' /tmp/opencode/c64-irqreturn-r3-e1794921881-3/desmume.log
+TWLHD_IRQ_RETURN cpu=9 seq=62551663 frame=129 ldm_pc=02001D52 r15=02001D50 next_instruction=02001D50 cpsr=0000003F
+```
+
+**HYPOTHESIS:** the 2-byte loss is a DeSmuME model artefact in the LDM(3)
+exception-return path. The `TWLHD_IRQ_RETURN` marker fired in `OP_LDMIA2_W`
+(`arm_instructions.cpp:5409`; the mask is at `:5454`), which loads the return
+PC with `tmp & (0xFFFFFFFC | (BIT0(tmp)<<1))` instead of using the SPSR Thumb
+bit. Because the IRQ entry code writes `R14_irq = instruct_adr + 4` without the
+Thumb bit set, the return is misclassified as ARM-state and forced to a word
+boundary. The LR write and the handler `sub lr,#4` are consistent with the
+architecturally correct return address `0x02001D52`.
+
+**HYPOTHESIS:** Open item 4 (ring shows hook-body PC `0x020022CC` before IRQ) is
+consistent with correct execution, not a model artefact. The
+`TWLHD_IRQ_FLAG`/`TWLHD_IRQ_EXCEPTION` lines show the CPU was at `0x02001D52`
+when the IRQ was taken. The 64-entry ring records `0x020022CC` as the last
+guest PC because `0x020022CC` is the hook epilogue `pop {r4, pc}` that returns
+to the BL call site; this is consistent with the IRQ being taken at the
+hook-return boundary. The return-address discrepancy (return to `0x02001D50`) is
+explained by the LDM(3) exception-return masking hypothesis documented in
+`docs/reports/cubes64-irq-return-address.md` §3.2, not by an unlogged IRQ or a
+guest-side LR change.
+
+**REQ-20 (round 5 follow-up, 2026-11-18).** Ran the §6 next minimal experiment
+using a new round-3 patch and `desmume-dbg-build5`; quoted the complete capture
+script launch, the `set -x` `+ mkfs.fat -C ...` line, the post-run cflash
+`sha256sum`, the ROM CRC, the reproduced `TWLHD_BKPT` line, the new
+`TWLHD_IRQ_FLAG`/`TWLHD_IRQ_EXCEPTION`/`TWLHD_IRQ_LR_WRITTEN`/`TWLHD_IRQ_RETURN`
+lines, and the complete 117-line `awk` output (103 `TWLHD_R14_TRACE` records plus 6 `TWLHD_SP_CHANGE` and 8 `TWLHD_IRQ_*` lines) for seq 62551562–62551664.
+Determined that the LR written by `armcpu_irqException` is consistent with the
+architecturally correct return address, that hypotheses 2 and 3 are ruled out
+by the single logged exception and the LDM return-path measurement, that Open
+item 4 is a **HYPOTHESIS** of correct hook-return execution (the 2-byte return-PC
+loss remains the LDM(3) masking hypothesis), and that real-hardware impact is
+HYPOTHESIS pending the described (unimplemented) guest-side check.
+Did not modify product code, tests, harness, or pristine trees. Evidence: §1
+(build/cflash), §2 (experiment data), §3 (analysis), Verification (`make test`).
+
+## Verification
+
+```
+$ make test 2>&1 | tail -20
+OK
+PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_eq_scenes.py'
+................
+----------------------------------------------------------------------
+Ran 16 tests in 1.220s
+
+OK
+EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
+...............................................................................................................usage: compare_texture_capture.py <captured.bin> [angle]
+usage: compare_texture_capture.py <captured.bin> [angle]
+error: angle must be an integer
+........ssssssssssssssssssssssssssssssssssssssssss...........................................................................................................................................................................................................
+----------------------------------------------------------------------
+Ran 364 tests in 88.712s
+
+OK (skipped=42)
+/tmp/tmpque1hr7a/twlhd_frame_v2_tex_over.bin
+vertex_count=36
+max_clip_deviation=0.007324
+colour_exactness=PASS
+```
