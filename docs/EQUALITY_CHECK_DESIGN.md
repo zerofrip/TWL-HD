@@ -53,9 +53,11 @@ equality result.
   translucent-polygon depth/order semantics are out of scope (`docs/PHASE5B_PLAN.md:28-33`,
   `:745`).
 - **Six staged checks are proposed (EQ-1…EQ-6)**: EQ-1 is this document, EQ-2 and EQ-3 are
-  host-only, EQ-6 begins host-only and only then may need one owner-approved run, and EQ-4
-  and EQ-5 need one owner-approved run each. Section 5 derives every tolerance from a named
-  difference; hardware tolerances stay "to be derived from the first capture" on purpose.
+  host-only, EQ-6 begins host-only and only then may need one owner-approved run, and EQ-5
+  needs one owner-approved run. The EQ-4 trial ran on 2026-11-19 and found NTR-HR remote play
+  not reachable in TWL/DS mode (`docs/reports/eq4-ds-mode-capture.md`). Section 5 derives
+  every tolerance from a named difference; hardware tolerances stay "to be derived from the
+  first capture" on purpose.
 
 ## 1. The question and the current evidence baseline
 
@@ -293,7 +295,7 @@ is the specification only.
 | **(a3) Out-of-tree harness linking the core** | core API exists (`NDSSystem.h:478`, `GPU.h:1179`, `GPU.h:1889`) | ~100 lines of harness (estimate): init, load ROM, run N frames, read `nativeBuffer16[NDSDisplayID_Main]`, write PPM; lives in a separate GPL repo | the SW rasteriser's 256×192 RGB555 picture of our own ROM/frame | real DS; PICA200 rules | medium: build + link; GPL boundary |
 | **(a4) Out-of-tree custom renderer / viewer** | `viewer3D` and `GFX3D_GeometryList` are public (`gfx3d.h:642-653`, `:766`) | a small `Render3D`/`GPU3DInterface` subclass (or a driver view3d) that dumps `rawVtxList`/`clippedPolyList`; separate GPL repo | post-geometry **post-viewport** vertices (16.16 x/y, 0.31 z, 20.12 w) and clipped polygons, numerically | rasterisation, blending, hardware | low-medium: no emulator patch needed |
 | **(b) Owner photos of the demo ROMs** | Run 23 photos exist (`docs/TEXTURE_CAPTURE_DESIGN.md:1116-1145`) | none | gross layout/colour, gross regressions | numeric equality; camera, reflections, JPEG, moiré | zero code; the Run 14→17 correction is the cautionary precedent (`docs/HARDWARE_TEST_PROCEDURE_3DS.md:785-787`) |
-| **(c) NTR capture of the DS-mode top screen** | `tools/ntr_capture` streams NTR-HR; its policy lists the "TWL/DS-mode path" as owner-approval brick-risk (`tools/ntr_capture/README.md:241-251`) | a read-only trial: remote play while a demo ROM runs in TWL mode | exact RGB of whatever the 3DS streams | nothing yet — **UNKNOWN** whether NTR-HR works in TWL mode; no evidence in `tools/ntr_capture` or the docs | one owner-approved run; brick-risk classification |
+| **(c) NTR capture of the DS-mode top screen** | `tools/ntr_capture` streams NTR-HR; its policy lists the "TWL/DS-mode path" as owner-approval brick-risk (`tools/ntr_capture/README.md:241-251`) | a read-only trial: remote play while a demo ROM runs in TWL mode | exact RGB of whatever the 3DS streams | not reachable: the 2026-11-19 trial got no TCP 8000 connection while a DS ROM ran in TWL/DS mode (12 attempts); see `docs/reports/eq4-ds-mode-capture.md` | one owner-approved run; brick-risk classification |
 | **(d) Analytic geometry cross-check** | see (a4) | the same harness; comparison code may live in `tools/` (Apache) reading two text dumps | matrix/stack/assembly/transform equality, numerically | rasterisation, blending, hardware | cheapest independent check; tolerance from 4.12 quantum |
 | **(e) Second independent emulator (melonDS)** | audited in `docs/EMULATOR_TRACER_FEASIBILITY.md:63-72` (hook) and `:155` (M4) — not re-read this session | a melonDS hook/harness, separate GPL repo | cross-emulator agreement on our homebrew frames | hardware | medium; **UNVERIFIED** here (melonDS not read in this session) |
 | **(f) DS-side framebuffer dump from our own ROM** | **model says no for a texture-mapped bank**: only an LCDC/ABG/OBJ bank enters the CPU map (`MMU.cpp:443-458`, `:494-502`, `:504-511`), while MST=3 sends the bank only to `textureSlotAddr` (`MMU.cpp:555-558`); already recorded at `docs/TEXTURE_CAPTURE_DESIGN.md:1153`. Which mapping holds our 3D framebuffer is UNVERIFIED. The demo does map bank A to LCDC while uploading textures (`arm9v2/source/demo_frame.cpp:176-179`) then switches it to texture (`:186-187`) | a ROM change: after `SWAP_BUFFERS`, read the 256×192 15-bit framebuffer and write it through the existing FAT path — **after** a host-only check that the bank is CPU-mapped | the **exact DS picture**, bit-exact, no camera/JPEG/emulator | anything the DS does not display (e.g. hidden buffers) | one source/GBATEK question + one ROM change + one owner-approved run; hardware readback UNVERIFIED, model-level obstacle |
@@ -335,6 +337,13 @@ check whether the top screen shows the DS 3D output (a known scene) rather than 
 duplicate/blank/stale frame. One run, no writes, owner-approved. **HYPOTHESIS:** it may work,
 because the 3DS streams the top LCD whatever the running mode; **HYPOTHESIS:** it may return
 the 3DS's own compositor output instead of the DS framebuffer.
+
+**Result (2026-11-19):** **EQ-4: NTR-HR remote play (TCP 8000 / UDP 8001) is NOT reachable
+while a DS ROM runs in TWL/DS mode on this console (one run, 12 attempts 8 s apart,
+13:18:34-13:20:38, 2026-11-19); option (c) is not available as a numeric DS-mode capture.**
+The 3DS-mode control captured both screens; all 12 DS-mode attempts wrote no frame. The
+trial design and the two HYPOTHESES above are kept as pre-run text.
+Report: `docs/reports/eq4-ds-mode-capture.md`.
 
 **(d) Geometry-level cross-check.** The cheapest check that can catch a real defect. It must
 compare against DeSmuME's own numbers, not the host mock's, because the host mock cannot
@@ -467,6 +476,13 @@ console. "Owner approval" means the assistant may not run it. Effort is in pipel
 - **Cannot prove:** equality by itself; the capture is a JPEG stream, so the measured worst
   cell is 26 and the default tolerance is 28 (`docs/EMULATOR_VALIDATION.md:776-783`).
 
+**Result (2026-11-19):** **EQ-4: NTR-HR remote play (TCP 8000 / UDP 8001) is NOT reachable
+while a DS ROM runs in TWL/DS mode on this console (one run, 12 attempts 8 s apart,
+13:18:34-13:20:38, 2026-11-19); option (c) is not available as a numeric DS-mode capture.**
+Control (3DS mode) captured both screens; all 12 DS-mode attempts wrote no frame. The
+remaining hardware options are EQ-5 and EQ-6; EQ-3 is host-only and unaffected.
+Report: `docs/reports/eq4-ds-mode-capture.md`.
+
 ### EQ-5 — Real-DS qualitative photo comparison (HARDWARE, owner photos only)
 
 - **Goal:** side-by-side of the DS picture and our PICA picture for the same frame, judged
@@ -516,6 +532,8 @@ console. "Owner approval" means the assistant may not run it. Effort is in pipel
 3. **EQ-6 step 1 next** (host-only source question, no run); EQ-6 step 2 only if step 1 says
    the framebuffer bank is CPU-mapped, in which case it is worth one hardware run.
 4. **EQ-4** only if EQ-6 is blocked, or if numeric pixels of *arbitrary* content are needed.
+   This step was executed on 2026-11-19: EQ-4 is not available as a numeric DS-mode capture
+   (remote play not reachable in TWL/DS mode, `docs/reports/eq4-ds-mode-capture.md`).
 5. **EQ-5** last, as a sanity check that the pipeline's picture looks like the DS's to a
    human.
 
@@ -631,9 +649,11 @@ the tolerance is meaningless.
 
 ### 5.3 What cannot be set yet
 
-Hardware pixel tolerances for EQ-4/EQ-5/EQ-6 must be derived from the first capture, using
+Hardware pixel tolerances for EQ-5/EQ-6 must be derived from the first capture, using
 the same method (measured worst on a known-good control, bounded by the frame's separation
-midpoint). They are deliberately not guessed here. The only hardware numbers available today
+midpoint). They are deliberately not guessed here. EQ-4 produced no capture — remote play is
+not reachable in TWL/DS mode (2026-11-19, `docs/reports/eq4-ds-mode-capture.md`) — so the
+derivation falls to EQ-5 and EQ-6. The only hardware numbers available today
 are Run 17's ~2 levels (`docs/HARDWARE_TEST_PROCEDURE_3DS.md:783-787`) and the Run 20/21
 JPEG worst 26 with T=28 (`docs/EMULATOR_VALIDATION.md:776-783`,
 `docs/reports/tex-formats-tolerance.md:90-140`); both are for specific frames, not general
@@ -659,7 +679,7 @@ bounds.
 | GPL contamination | follow `docs/EMULATOR_TRACER_FEASIBILITY.md:112-145`: out-of-tree fork only, spec-only coupling, TWL-HD validators as black boxes |
 | Line-number drift in older docs | this file re-checks every cited line at `fc504ee0`; `arm11/source/renderer.c` citations in `docs/DS_GX_RESEARCH.md:182-187` (996-999/998) have drifted to `1532-1537` |
 | Hardware readback (EQ-6) disturbs the frame | read only after the frame is complete and before the next one; the texture-capture design already documents the analogous risk (`docs/TEXTURE_CAPTURE_DESIGN.md:326-360`) |
-| The DS picture may be unobtainable without a camera | option (c) is UNKNOWN; option (f) now has a model-level obstacle (section 3.3(f)). Neither is a promise; EQ-4 is one cheap run, EQ-6 starts with a free source check |
+| The DS picture may be unobtainable without a camera | option (c) was executed on 2026-11-19 and returned no capture (remote play not reachable in TWL/DS mode, `docs/reports/eq4-ds-mode-capture.md`); option (f) now has a model-level obstacle (section 3.3(f)). Neither is a promise; EQ-6 starts with a free source check |
 
 ### 6.3 Owner decisions (each with a recommendation and its evidence)
 
@@ -677,6 +697,13 @@ listed as owner-approval brick-risk (`:249`), so the owner must authorise it. Th
 numeric pixels instead of photos for every later hardware comparison. Do it before EQ-6: if
 EQ-4 works it gives numeric pixels of arbitrary content and EQ-6's remaining advantage
 (bit-exactness, no emulator in the loop) is only worth pursuing separately.
+
+**Result (2026-11-19):** **EQ-4: NTR-HR remote play (TCP 8000 / UDP 8001) is NOT reachable
+while a DS ROM runs in TWL/DS mode on this console (one run, 12 attempts 8 s apart,
+13:18:34-13:20:38, 2026-11-19); option (c) is not available as a numeric DS-mode capture.**
+The 3DS-mode control captured both screens; all 12 DS-mode attempts wrote no frame. The
+recommendation above is kept as the pre-run text.
+Report: `docs/reports/eq4-ds-mode-capture.md`.
 
 **D3 — Is pixel equality a goal at all?**
 **Recommend: only for the "must be equal" rows of section 2.3.** Fidelity to the DS
@@ -713,8 +740,10 @@ implementation matches the model we wrote it from, not that the model matches th
 
 ## 7. What could not be verified
 
-- **`ntr_capture` in TWL/DS mode.** No evidence in `tools/ntr_capture` or the docs; UNKNOWN
-  (section 3.3(c)). A read-only trial (EQ-4) would decide it.
+- **`ntr_capture` in TWL/DS mode — resolved by trial (2026-11-19).** NTR-HR remote play is
+  NOT reachable while a DS ROM runs in TWL/DS mode (one run, 12 attempts, no frame), so
+  option (c) is not available as a numeric DS-mode capture (section 3.3(c);
+  `docs/reports/eq4-ds-mode-capture.md`). Why the console leaves the network is UNVERIFIED.
 - **Hardware LCDC-VRAM readback.** A bank mapped LCDC/ABG/OBJ is CPU-readable in the DeSmuME
   model; a bank mapped as texture is not (`MMU.cpp:443-458`, `:555-558`;
   `docs/TEXTURE_CAPTURE_DESIGN.md:1153`). Which mapping our 3D framebuffer uses, and what
@@ -744,6 +773,7 @@ Repository (TWL-HD, current `HEAD`):
   `:901-918`.
 - Tolerance method: `docs/reports/tex-formats-tolerance.md:90-140`.
 - Cull/front-face hardware settlement: `docs/reports/5c4-black-screen-analysis.md:442-476`.
+- EQ-4 DS-mode capture trial (2026-11-19): `docs/reports/eq4-ds-mode-capture.md`.
 - Licensing and tracer precedent: `docs/EMULATOR_TRACER_FEASIBILITY.md:50`, `:58`,
   `:112-145`, `:151-155`.
 - Console policy: `tools/ntr_capture/README.md:235-251`.
