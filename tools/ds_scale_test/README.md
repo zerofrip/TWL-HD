@@ -23,8 +23,9 @@ output quoted here; HYPOTHESIS / UNVERIFIED = not measured.
 | `source/main.c` | ARM9 ROM: static 16-bit bitmap pattern + bottom console text |
 | `Makefile` | devkitARM/libnds build of `ds-scale-test.nds` |
 | `measure_scale.py` | capture-PNG analyser, stable `key=value` report |
-| `test_measure_scale.py` | synthetic-capture scale/offset tests |
+| `test_measure_scale.py` | synthetic-capture scale/offset tests + real-capture regression |
 | `test_pattern.py` | pattern.json ↔ header ↔ ROM-source consistency tests |
+| `fixtures/sc1_5_crop400x480.png` | real 2026-11-22 capture, 400×480 crop (§6) |
 
 The ROM links only `-lnds9`; it includes `<nds.h>` and links no TWL-HD
 GX/`common/` code (asserted by `test_pattern.py`).
@@ -251,10 +252,24 @@ HYPOTHESIS (`docs/reports/eq4b-cc3dsfs-ds-capture.md:78-82`).
 
 - Markers are matched by colour with tolerance 24 per channel: white
   r,g,b ≥ 231; red r ≥ 231, g,b ≤ 24; and analogously green/blue/yellow.
+- Each corner marker is the **connected block** of its colour nearest the
+  corresponding corner of the white-frame bbox (tl/tr/bl/br). Blocks use
+  8-connectivity, and same-colour blocks whose bounding boxes are at most
+  4 capture px apart are merged first: a real capture can split one marker
+  into alternating 1-px columns (see the fixture below). A marker counts as
+  found only if such a block has 16..400 pixels — one 8-DS-px square is about
+  7.5×10 capture px at the measured 0.9375/1.25, and a ragged 12×10 block on
+  the synthetic 1.5625× capture. The nearest block (block centroid to frame
+  corner) wins, so same-colour pollution elsewhere in the frame is ignored.
 - The white frame's white-pixel bounding box is the displayed DS image.
   `bbox_x0..bbox_x1` / `bbox_y0..bbox_y1` are inclusive capture pixels.
 - `scale_x = (bbox_x1-bbox_x0+1)/256`, `scale_y = (bbox_y1-bbox_y0+1)/192`
   (capture px per DS px); `offset_x`/`offset_y` are the bbox top-left.
+- `scale_x_check`, `scale_y_check`, `offset_x_check`, `offset_y_check` are an
+  independent cross-check: scale/offset derived from the four marker centres
+  (the centre of each `pattern.json` corner rect mapped to capture) minus the
+  frame-bbox values. They are reported, never fatal; on a correct capture the
+  offsets differ by < 1 capture px and the scales are unitless near 0.
 - `strip_h_contrast` / `strip_v_contrast` are the mean luminance difference
   between the expected-white and expected-black samples of the 1-px
   alternating strips, mapped through scale+offset. Near 0 ⇒ the 1-px
@@ -264,7 +279,8 @@ HYPOTHESIS (`docs/reports/eq4b-cc3dsfs-ds-capture.md:78-82`).
 - The report is one stable `key=value` line per key:
   `frame_found, corner_red, corner_green, corner_blue, corner_yellow,
   bbox_x0, bbox_y0, bbox_x1, bbox_y1, scale_x, scale_y, offset_x, offset_y,
-  strip_h_contrast, strip_v_contrast`.
+  strip_h_contrast, strip_v_contrast, scale_x_check, scale_y_check,
+  offset_x_check, offset_y_check`.
 - Exit 0 only when the frame and all four corners are found. Missing markers
   print the report and exit 1 with a one-line message such as
   `measure_scale: white frame not found in top-left 400x240 region`;
@@ -290,7 +306,77 @@ offset_x=0
 offset_y=0
 strip_h_contrast=245.039062
 strip_v_contrast=231.093750
+scale_x_check=-0.001524
+scale_y_check=0.002747
+offset_x_check=0.195122
+offset_y_check=-0.263736
 ```
+
+FACT — the committed fixture is a verbatim copy of the EQ-4c capture crop
+(400×480; §8 of the EQ-4b report is the capture procedure). Copy and hash:
+
+```
+$ cp "$HOME/3ds/hwtest-staging/cc3d-out/sc1_5_crop400x480.png" tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
+$ sha256sum tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
+badbe06090eb98b11e301640ef9098670da9a940b4d05a38b3857a035e9a1a1a  tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
+```
+
+FACT — the fixed analyser on that fixture, raw complete output:
+
+```
+$ python3 tools/ds_scale_test/measure_scale.py tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
+frame_found=1
+corner_red=1
+corner_green=1
+corner_blue=1
+corner_yellow=1
+bbox_x0=30
+bbox_y0=0
+bbox_x1=269
+bbox_y1=239
+scale_x=0.937500
+scale_y=1.250000
+offset_x=30
+offset_y=0
+strip_h_contrast=89.161784
+strip_v_contrast=156.618924
+scale_x_check=0.001524
+scale_y_check=-0.002747
+offset_x_check=0.304878
+offset_y_check=0.263736
+```
+
+FACT — the pre-fix analyser on the same fixture fails; this is the behaviour
+the fixture regression test locks out. Verified by saving a copy of
+`measure_scale.py` before the change (it reads `pattern.json` from its own
+directory, so that file was copied next to it):
+
+```
+$ cp tools/ds_scale_test/measure_scale.py /tmp/opencode/eq4c/measure_scale_old.py
+$ cp tools/ds_scale_test/pattern.json /tmp/opencode/eq4c/pattern.json
+$ python3 /tmp/opencode/eq4c/measure_scale_old.py tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
+measure_scale: corner marker(s) not found: corner_green corner_blue
+frame_found=1
+corner_red=1
+corner_green=0
+corner_blue=0
+corner_yellow=1
+bbox_x0=30
+bbox_y0=0
+bbox_x1=269
+bbox_y1=239
+scale_x=0.937500
+scale_y=1.250000
+offset_x=30
+offset_y=0
+strip_h_contrast=89.161784
+strip_v_contrast=156.618924
+```
+
+(exit status 1; the error line is stderr, the `key=value` lines are stdout.)
+The old rule took the bbox of *all* pixels of a colour class, so pollution
+inside tolerance moved the green/blue bboxes out of their quadrants; the new
+nearest-block rule finds the four markers at the frame corners (§6).
 
 ## 7. Tests
 
@@ -299,18 +385,26 @@ make test-ds-scale-test      # or: make test
 ```
 
 FACT — suite output (the two synthetic cases check scale/offset within 0.5
-capture px; the not-found case exits non-zero; PIL absence skips with a
-labelled reason):
+capture px; the not-found case exits non-zero; the two real-capture cases
+assert the fixture's exact keys and exit 0; PIL absence skips with a labelled
+reason, and a missing fixture skips the two fixture cases with a labelled
+reason):
 
 ```
 $ make test-ds-scale-test
 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_scale_test -p 'test_*.py'
-........
+..........
 ----------------------------------------------------------------------
-Ran 8 tests in 0.435s
+Ran 10 tests in 0.735s
 
 OK
 ```
+
+`test_measure_scale.py` keeps the two synthetic geometry cases (1.5625×
+nearest-neighbour and 1.0× centred) and the not-found case unchanged. The two
+added cases assert exactly the fixture output quoted in §6: all four markers,
+`bbox 30,0,269,239`, `scale_x 0.9375`, `scale_y 1.25`, `offset 30,0`, and
+`|*_check| < 1`; the subprocess case also requires exit status 0.
 
 `test_pattern.py` regenerates `include/pattern.h` into a temp file and diffs it
 against the committed header, checks every `pattern.json` element is inside
@@ -326,14 +420,14 @@ FACT — full root suite (tail; includes `test-ds-scale-test` as a prerequisite)
 $ make test
 ...
 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_scale_test -p 'test_*.py'
-........
+..........
 ----------------------------------------------------------------------
-Ran 8 tests in 0.440s
+Ran 10 tests in 0.723s
 
 OK
 ...
 ----------------------------------------------------------------------
-Ran 364 tests in 83.783s
+Ran 364 tests in 91.816s
 
 OK (skipped=42)
 ```
@@ -366,9 +460,16 @@ Every command here uses `$HOME` / `$DEVKITPRO` / `$DEVKITARM` / `$SD_ROOT`;
 no literal home-directory path is added. Check:
 
 ```
-$ grep -rn -E '/(home|Users)/' tools/ds_scale_test
+$ grep -rn -E '/(home|Users)/' tools/ds_scale_test docs/reports/eq4c-ds-scale-measurement.md
+(no output; exit status 1)
+$ git diff -U0 docs/EQUALITY_CHECK_DESIGN.md | grep -E '^\+.*/(home|Users)/'
 (no output; exit status 1)
 ```
+
+`docs/EQUALITY_CHECK_DESIGN.md` already contains literal home paths on three
+lines from earlier work (lines 5, 6 and 808; not quoted here); those lines are
+not touched, and the second command shows that the appended Update blocks add
+none.
 
 ## 10. Requirement traceability
 
@@ -436,17 +537,44 @@ command output quoted above; UNIT = unit test.
   exits_nonzero` passes (§7).
 - **REQ unit test synthesises PIL captures (1.5625/1.25 and 1.0 centred),
   verifies scale/offset within 0.5 capture px, labelled PIL skip** — BUILD:
-  `test_measure_scale.py`; 7 tests green (§7).
+  `test_measure_scale.py`; 10 tests green (§7; was 7 before the EQ-4c work).
 - **REQ README hardware procedure using existing capture flow** — BUILD: §8
   references `tools/cc3dsfs_capture/cc_shots.sh` and uses `$HOME`/`$SD_ROOT`.
 - **REQ ROM not run on hardware in this task** — BUILD: §8 and status line;
   no hardware command was run.
 - **REQ `make test` stays green** — BUILD: §7 full-run tail, exit 0.
+- **REQ (EQ-4c A) corner markers = connected colour block nearest the frame
+  corner, documented rule, per-colour tolerance** — BUILD: `measure_scale.py`
+  `_merge_groups`/`_find_marker` and the §6 rule; the fixture output quoted in
+  §6 is the evidence.
+- **REQ (EQ-4c A) scale/offset from the frame bbox cross-checked with the
+  marker centres as `*_check`, < 1 px discrepancy not fatal** — BUILD: §6 key
+  definitions; quoted `offset_*_check` 0.304878/0.263736 and
+  `scale_*_check` 0.001524/−0.002747; exit rule unchanged (§6).
+- **REQ (EQ-4c A) real fixture committed, exact keys asserted, synthetic
+  tests unchanged, and a test that fails with the old behaviour** — BUILD:
+  `fixtures/sc1_5_crop400x480.png` (sha256 in §6), the two fixture cases in
+  `test_measure_scale.py`, and the quoted pre-fix failure in §6; §7 output.
+- **REQ (EQ-4c B) measurement report with the raw data and FACT/HYPOTHESIS
+  labels** — BUILD: `docs/reports/eq4c-ds-scale-measurement.md`; the §6 quotes
+  are repeated verbatim there.
+- **REQ (EQ-4c B) append-only Update blocks after each Result EQ-4b** — BUILD:
+  `git diff docs/EQUALITY_CHECK_DESIGN.md` shows additions only, one block
+  after each of the three `Result EQ-4b` paragraphs.
+- **REQ (EQ-4c C) cc3dsfs source read with quoted commands; proposed command
+  line; UNVERIFIED where the source does not decide** — BUILD:
+  `docs/reports/eq4c-ds-scale-measurement.md` §6 quotes and the proposed
+  command; `$HOME/3ds/cc3dsfs` unmodified.
+- **REQ (EQ-4c) no hardware action, nothing sent to the console, cc3dsfs not
+  modified or run, no `git worktree` command** — BUILD: no hardware or cc3dsfs
+  command was run in this task; EQ-4c report §7 quotes
+  `git -C "$HOME/3ds/cc3dsfs" status --short` with no output.
 - **REQ scope: `git status` only new files under `tools/ds_scale_test/` plus
   root-Makefile hunks** — BUILD: below.
 
-FACT — final working-tree scope (build artefacts removed by `make clean`; the
-only modified tracked file is the root `Makefile`):
+FACT — scope after the original construction task (historical; build artefacts
+removed by `make clean`; the only modified tracked file was the root
+`Makefile`):
 
 ```
 $ git status --short --untracked-files=all
@@ -460,4 +588,16 @@ $ git status --short --untracked-files=all
 ?? tools/ds_scale_test/source/main.c
 ?? tools/ds_scale_test/test_measure_scale.py
 ?? tools/ds_scale_test/test_pattern.py
+```
+
+FACT — EQ-4c working-tree scope (`git status --short --untracked-files=all`,
+quoted verbatim):
+
+```
+ M docs/EQUALITY_CHECK_DESIGN.md
+ M tools/ds_scale_test/README.md
+ M tools/ds_scale_test/measure_scale.py
+ M tools/ds_scale_test/test_measure_scale.py
+?? docs/reports/eq4c-ds-scale-measurement.md
+?? tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
 ```

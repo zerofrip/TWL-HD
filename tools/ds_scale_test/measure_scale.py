@@ -5,8 +5,9 @@
 Reads the top-left 400x240 region (the New 3DS capture layout recorded in
 docs/reports/eq4b-cc3dsfs-ds-capture.md), finds the white frame and the four
 corner colour squares of the ds-scale-test pattern, and prints a stable
-`key=value` report: displayed bounding box, capture-px-per-DS-px scale, offset
-and a 1-px-alternation contrast hint.
+`key=value` report: displayed bounding box, capture-px-per-DS-px scale, offset,
+a marker-centre cross-check of scale/offset and a 1-px-alternation contrast
+hint.
 
     python3 measure_scale.py <capture.png>
 
@@ -30,6 +31,14 @@ PATTERN_JSON = os.path.join(HERE, "pattern.json")
 REGION_WIDTH = 400
 REGION_HEIGHT = 240
 TOLERANCE = 24
+# A capture can split one marker colour into 1-px columns (see the real
+# fixture), so same-colour blocks within this Chebyshev gap count as one marker.
+BLOCK_GAP = 4
+# Plausible pixel count of one 8-DS-px marker: ~7.5x10 capture px at the
+# measured scale, or a ragged 12x10 nearest-neighbour block on the synthetic
+# 1.5625x capture.
+BLOCK_MIN_AREA = 16
+BLOCK_MAX_AREA = 400
 
 REPORT_KEYS = (
     "frame_found",
@@ -47,6 +56,10 @@ REPORT_KEYS = (
     "offset_y",
     "strip_h_contrast",
     "strip_v_contrast",
+    "scale_x_check",
+    "scale_y_check",
+    "offset_x_check",
+    "offset_y_check",
 )
 
 CORNER_NAMES = (
@@ -55,6 +68,14 @@ CORNER_NAMES = (
     ("corner_blue", "corner_bl"),
     ("corner_yellow", "corner_br"),
 )
+
+# Index of the frame bbox corner nearest each marker.
+CORNER_POINTS = {
+    "corner_tl": (0, 1),
+    "corner_tr": (2, 1),
+    "corner_bl": (0, 3),
+    "corner_br": (2, 3),
+}
 
 
 def _near(pixel, rgb):
@@ -105,24 +126,70 @@ def _border_white_ratio(pixels, width, height, box):
     return (white / total) if total else 0.0
 
 
-def _corner_ok(box, frame, name):
-    """Require the colour blob in the expected quadrant of the frame."""
-    if box is None:
-        return False
-    x0, y0, x1, y1 = box
-    if (x1 - x0 + 1) < 2 or (y1 - y0 + 1) < 2:
-        return False
-    fx0, fy0, fx1, fy1 = frame
-    cx = (x0 + x1) / 2.0
-    cy = (y0 + y1) / 2.0
-    left = cx <= (fx0 + fx1) / 2.0
-    top = cy <= (fy0 + fy1) / 2.0
-    return {
-        "corner_tl": left and top,
-        "corner_tr": (not left) and top,
-        "corner_bl": left and (not top),
-        "corner_br": (not left) and (not top),
-    }[name]
+def _box_gap(a, b):
+    """Chebyshev distance between two inclusive bboxes (0 when touching)."""
+    dx = max(0, b[0] - a[2] - 1, a[0] - b[2] - 1)
+    dy = max(0, b[1] - a[3] - 1, a[1] - b[3] - 1)
+    return max(dx, dy)
+
+
+def _components(points):
+    """8-connected groups of (x, y) points."""
+    remaining = set(points)
+    groups = []
+    while remaining:
+        seed = remaining.pop()
+        stack = [seed]
+        group = [seed]
+        while stack:
+            x, y = stack.pop()
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    other = (x + dx, y + dy)
+                    if other in remaining:
+                        remaining.remove(other)
+                        stack.append(other)
+                        group.append(other)
+        groups.append(group)
+    return groups
+
+
+def _merge_groups(points):
+    """Merge connected blocks whose bboxes are at most BLOCK_GAP apart."""
+    groups = _components(points)
+    boxes = [_bbox(group) for group in groups]
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(groups)):
+            for j in range(i + 1, len(groups)):
+                if _box_gap(boxes[i], boxes[j]) <= BLOCK_GAP:
+                    groups[i].extend(groups[j])
+                    boxes[i] = _bbox(groups[i])
+                    del groups[j]
+                    del boxes[j]
+                    changed = True
+                    break
+            if changed:
+                break
+    return groups
+
+
+def _find_marker(points, corner):
+    """Centre of the plausible colour block nearest `corner`, else None."""
+    best = None
+    for group in _merge_groups(points):
+        area = len(group)
+        if area < BLOCK_MIN_AREA or area > BLOCK_MAX_AREA:
+            continue
+        cx = sum(p[0] for p in group) / float(area)
+        cy = sum(p[1] for p in group) / float(area)
+        distance = (cx - corner[0]) ** 2 + (cy - corner[1]) ** 2
+        if best is None or distance < best[0]:
+            best = (distance, (cx, cy))
+    if best is None:
+        return None
+    return best[1]
 
 
 def _sample(pixels, width, height, x, y):
@@ -163,16 +230,23 @@ def measure(image, pattern):
         "bbox_x0": 0, "bbox_y0": 0, "bbox_x1": 0, "bbox_y1": 0,
         "scale_x": 0.0, "scale_y": 0.0, "offset_x": 0, "offset_y": 0,
         "strip_h_contrast": 0.0, "strip_v_contrast": 0.0,
+        "scale_x_check": 0.0, "scale_y_check": 0.0,
+        "offset_x_check": 0.0, "offset_y_check": 0.0,
     }
 
+    markers = {}
     for key, name in CORNER_NAMES:
         elem = _element(pattern, name)
         color = elem.get("colour", elem.get("color"))
         points = [(x, y) for y in range(height) for x in range(width)
                   if _near(pixels[y * width + x], color)]
-        box = _bbox(points)
-        result[key] = 1 if (frame_found and _corner_ok(
-            box, frame_box, name)) else 0
+        centre = None
+        if frame_found:
+            ix, iy = CORNER_POINTS[name]
+            centre = _find_marker(points, (frame_box[ix], frame_box[iy]))
+        result[key] = 1 if centre is not None else 0
+        if centre is not None:
+            markers[name] = (centre, elem)
 
     if not frame_found:
         return result, frame_box, [key for key, _ in CORNER_NAMES
@@ -189,6 +263,29 @@ def measure(image, pattern):
     scale_y = (y1 - y0 + 1) / float(pattern["height"])
     result["scale_x"] = scale_x
     result["scale_y"] = scale_y
+
+    if len(markers) == len(CORNER_NAMES):
+        def ds_centre(elem):
+            return (elem["x"] + (elem["w"] - 1) / 2.0,
+                    elem["y"] + (elem["h"] - 1) / 2.0)
+
+        def span(names, axis):
+            capture = [markers[n][0][axis] for n in names]
+            ds = [ds_centre(markers[n][1])[axis] for n in names]
+            return (sum(capture) / len(names), sum(ds) / len(names))
+
+        xl, ds_xl = span(("corner_tl", "corner_bl"), 0)
+        xr, ds_xr = span(("corner_tr", "corner_br"), 0)
+        check_scale_x = (xr - xl) / (ds_xr - ds_xl)
+        check_offset_x = xl - (ds_xl + 0.5) * check_scale_x + 0.5
+        yt, ds_yt = span(("corner_tl", "corner_tr"), 1)
+        yb, ds_yb = span(("corner_bl", "corner_br"), 1)
+        check_scale_y = (yb - yt) / (ds_yb - ds_yt)
+        check_offset_y = yt - (ds_yt + 0.5) * check_scale_y + 0.5
+        result["scale_x_check"] = check_scale_x - scale_x
+        result["scale_y_check"] = check_scale_y - scale_y
+        result["offset_x_check"] = check_offset_x - x0
+        result["offset_y_check"] = check_offset_y - y0
 
     def capture_xy(ds_x, ds_y):
         cx = int(round(x0 + (ds_x + 0.5) * scale_x - 0.5))
@@ -222,6 +319,8 @@ def measure(image, pattern):
 
 
 def _format(key, value):
+    if key.endswith("_check"):
+        return "%.6f" % value
     if key.startswith("scale_") or key.endswith("_contrast"):
         return "%.6f" % value
     return "%d" % value

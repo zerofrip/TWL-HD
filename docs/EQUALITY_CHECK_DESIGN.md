@@ -348,6 +348,10 @@ Report: `docs/reports/eq4-ds-mode-capture.md`.
 **Result EQ-4b (2026-11-22):** **EQ-4b: a cc3dsfs capture board attached to the New 3DS captured the DS-mode top screen as numeric pixels on 2026-11-22 (36 frames, pure colours preserved). Option (c) is achievable by this route, not via NTR-HR (see EQ-4).** A passive USB capture board, not NTR-HR, supplies the pixels; the image scale/offset and the capture layout are UNVERIFIED.
 Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
 
+**Update (2026-11-22):** EQ-4c measured the DS 256×192 image in the EQ-4b capture: 240×240 capture px at x 30..269, y 0..239
+(scale_x 0.9375, scale_y 1.25, offset 30,0; all four corner markers found; marker-centre cross-check within 1 px).
+Report: `docs/reports/eq4c-ds-scale-measurement.md`.
+
 **(d) Geometry-level cross-check.** The cheapest check that can catch a real defect. It must
 compare against DeSmuME's own numbers, not the host mock's, because the host mock cannot
 reproduce the DS divider/sqrt/trig tables (`docs/EMULATOR_VALIDATION.md:53-54`). One
@@ -488,6 +492,10 @@ Report: `docs/reports/eq4-ds-mode-capture.md`.
 
 **Result EQ-4b (2026-11-22):** **EQ-4b: a cc3dsfs capture board attached to the New 3DS captured the DS-mode top screen as numeric pixels on 2026-11-22 (36 frames, pure colours preserved). Option (c) is achievable by this route, not via NTR-HR (see EQ-4).** The route tried after the EQ-4 failure was a cc3dsfs USB capture board (id 0752:8613); 36 frames were captured, image scale/offset UNVERIFIED.
 Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
+
+**Update (2026-11-22):** EQ-4c measured the DS 256×192 image in the EQ-4b capture: 240×240 capture px at x 30..269, y 0..239
+(scale_x 0.9375, scale_y 1.25, offset 30,0; all four corner markers found; marker-centre cross-check within 1 px).
+Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
 ### EQ-5 — Real-DS qualitative photo comparison (HARDWARE, owner photos only)
 
@@ -713,6 +721,10 @@ Report: `docs/reports/eq4-ds-mode-capture.md`.
 
 **Result EQ-4b (2026-11-22):** **EQ-4b: a cc3dsfs capture board attached to the New 3DS captured the DS-mode top screen as numeric pixels on 2026-11-22 (36 frames, pure colours preserved). Option (c) is achievable by this route, not via NTR-HR (see EQ-4).** The recommendation's goal (numeric DS-mode pixels) is met by the capture board, not by NTR-HR; the recommendation above is kept as pre-run text.
 Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
+
+**Update (2026-11-22):** EQ-4c measured the DS 256×192 image in the EQ-4b capture: 240×240 capture px at x 30..269, y 0..239
+(scale_x 0.9375, scale_y 1.25, offset 30,0; all four corner markers found; marker-centre cross-check within 1 px).
+Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
 **D3 — Is pixel equality a goal at all?**
 **Recommend: only for the "must be equal" rows of section 2.3.** Fidelity to the DS
