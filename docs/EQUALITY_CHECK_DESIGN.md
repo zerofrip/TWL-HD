@@ -354,6 +354,8 @@ Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
 **Erratum (2026-11-23):** the EQ-4b capture was decoded as 32-bpp BGRX although the XWD header says `bits_per_pixel=24` (first 14 fields `(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)`); the real layout is 3-byte BGR with `bytes_per_line` 5120, so the Update above (`scale_x 0.9375`, offset 30) is the mis-decoded input's number, not the board's. Corrected single-capture (`vt1b_2`) facts: DS pixel (x,y) at capture (40+1.25x, 1.25y); quads white (255,255,255), grey (132,134,132), red (255,0,0), black (0,0,0), background (66,69,66) ±3 (UNVERIFIED). Invalid: the EQ-4b "pure colours preserved" and the eq4c hypotheses 2/3 (0.75 squeeze, non-identity colour path, DS white (255,251,255)). Valid: the board-connects / numeric-pixels verdict and the eq4c §6 source reading. Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.
 
+**Update (2026-11-23):** EQ-4e recorded a scene5 hardware capture through the fixed decoder: the top 400×240 crop shows the rotating textured quad in five colour cells (black background, white, yellow (255,255,24), green (0,255,8), blue (0,0,247), red (255,0,0)), consistent with the white initial vertex colour (EQ-4d; two ROM variants); no cyan (24,255,255) or magenta (255,24,255) at count ≥ 20 in the histogram. A pixel comparison with the PICA render still needs a static, non-rotating build to align phase. Report: `docs/reports/eq4e-scene5-hw-capture.md`.
+
 **(d) Geometry-level cross-check.** The cheapest check that can catch a real defect. It must
 compare against DeSmuME's own numbers, not the host mock's, because the host mock cannot
 reproduce the DS divider/sqrt/trig tables (`docs/EMULATOR_VALIDATION.md:53-54`). One
@@ -500,6 +502,8 @@ Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
 Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
 **Erratum (2026-11-23):** the EQ-4b capture was decoded as 32-bpp BGRX although the XWD header says `bits_per_pixel=24` (first 14 fields `(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)`); the real layout is 3-byte BGR with `bytes_per_line` 5120, so the Update above (`scale_x 0.9375`, offset 30) is the mis-decoded input's number, not the board's. Corrected single-capture (`vt1b_2`) facts: DS pixel (x,y) at capture (40+1.25x, 1.25y); quads white (255,255,255), grey (132,134,132), red (255,0,0), black (0,0,0), background (66,69,66) ±3 (UNVERIFIED). Invalid: the EQ-4b "pure colours preserved" and the eq4c hypotheses 2/3 (0.75 squeeze, non-identity colour path, DS white (255,251,255)). Valid: the board-connects / numeric-pixels verdict and the eq4c §6 source reading. Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.
+
+**Update (2026-11-23):** EQ-4e recorded a scene5 hardware capture through the fixed decoder: the top 400×240 crop shows the rotating textured quad in five colour cells (black background, white, yellow (255,255,24), green (0,255,8), blue (0,0,247), red (255,0,0)), consistent with the white initial vertex colour (EQ-4d; two ROM variants); no cyan (24,255,255) or magenta (255,24,255) at count ≥ 20 in the histogram. A pixel comparison with the PICA render still needs a static, non-rotating build to align phase. Report: `docs/reports/eq4e-scene5-hw-capture.md`.
 
 ### EQ-5 — Real-DS qualitative photo comparison (HARDWARE, owner photos only)
 
@@ -731,6 +735,8 @@ Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
 Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
 **Erratum (2026-11-23):** the EQ-4b capture was decoded as 32-bpp BGRX although the XWD header says `bits_per_pixel=24` (first 14 fields `(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)`); the real layout is 3-byte BGR with `bytes_per_line` 5120, so the Update above (`scale_x 0.9375`, offset 30) is the mis-decoded input's number, not the board's. Corrected single-capture (`vt1b_2`) facts: DS pixel (x,y) at capture (40+1.25x, 1.25y); quads white (255,255,255), grey (132,134,132), red (255,0,0), black (0,0,0), background (66,69,66) ±3 (UNVERIFIED). Invalid: the EQ-4b "pure colours preserved" and the eq4c hypotheses 2/3 (0.75 squeeze, non-identity colour path, DS white (255,251,255)). Valid: the board-connects / numeric-pixels verdict and the eq4c §6 source reading. Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.
+
+**Update (2026-11-23):** EQ-4e recorded a scene5 hardware capture through the fixed decoder: the top 400×240 crop shows the rotating textured quad in five colour cells (black background, white, yellow (255,255,24), green (0,255,8), blue (0,0,247), red (255,0,0)), consistent with the white initial vertex colour (EQ-4d; two ROM variants); no cyan (24,255,255) or magenta (255,24,255) at count ≥ 20 in the histogram. A pixel comparison with the PICA render still needs a static, non-rotating build to align phase. Report: `docs/reports/eq4e-scene5-hw-capture.md`.
 
 **D3 — Is pixel equality a goal at all?**
 **Recommend: only for the "must be equal" rows of section 2.3.** Fidelity to the DS

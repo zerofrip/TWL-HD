@@ -18,6 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MEASURE = os.path.join(HERE, "measure_scale.py")
 FIXTURE = os.path.join(
     HERE, "fixtures", "sc1_5_crop400x480_misdecoded.png")
+HW_FIXTURE = os.path.join(HERE, "fixtures", "sc4_3_top400x240.png")
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
@@ -111,6 +112,47 @@ class MeasureScaleTest(unittest.TestCase):
             line.split("=", 1) for line in completed.stdout.splitlines())
         self.assertEqual(report["frame_found"], "1")
         self.assertEqual(report["scale_x"], "0.937500")
+        self.assertEqual(report["scale_y"], "1.250000")
+
+    @unittest.skipUnless(
+        os.path.exists(HW_FIXTURE),
+        "fixture sc4_3_top400x240.png is missing")
+    def test_hw_capture_measures_corrected_scale(self):
+        """Real 2026-11-23 capture (corrected decoder): the DS image is
+        320x240 capture px at (40,0), uniform 1.25x."""
+        with Image.open(HW_FIXTURE) as image:
+            result, _box, missing = measure(PATTERN, image)
+        self.assertEqual(missing, [])
+        self.assertEqual(result["frame_found"], 1)
+        for key in ("corner_red", "corner_green", "corner_blue",
+                    "corner_yellow"):
+            self.assertEqual(result[key], 1, key)
+        self.assertEqual(
+            (result["bbox_x0"], result["bbox_y0"],
+             result["bbox_x1"], result["bbox_y1"]), (40, 0, 359, 239))
+        self.assertEqual(result["scale_x"], 1.25)
+        self.assertEqual(result["scale_y"], 1.25)
+        self.assertEqual((result["offset_x"], result["offset_y"]), (40, 0))
+        for key in ("scale_x_check", "scale_y_check",
+                    "offset_x_check", "offset_y_check"):
+            self.assertLess(abs(result[key]), 1.0, key)
+
+    @unittest.skipUnless(
+        os.path.exists(HW_FIXTURE),
+        "fixture sc4_3_top400x240.png is missing")
+    def test_hw_capture_exits_zero(self):
+        """The real capture analyses cleanly and prints the corrected keys."""
+        completed = subprocess.run(
+            [sys.executable, MEASURE, HW_FIXTURE],
+            capture_output=True, text=True)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(completed.stderr, "")
+        report = dict(
+            line.split("=", 1) for line in completed.stdout.splitlines())
+        self.assertEqual(report["frame_found"], "1")
+        self.assertEqual(report["bbox_x0"], "40")
+        self.assertEqual(report["bbox_x1"], "359")
+        self.assertEqual(report["scale_x"], "1.250000")
         self.assertEqual(report["scale_y"], "1.250000")
 
     def test_missing_markers_exits_nonzero(self):

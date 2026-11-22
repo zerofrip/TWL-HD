@@ -6,10 +6,11 @@ New 3DS (through the cc3dsfs capture board used for EQ-4b) shows the DS
 256×192 top screen inside the 400×240 capture region: bounding box, horizontal
 and vertical scale, offset, and whether 1-px alternation survives resampling.
 
-**Status of this task:** BUILD/UNIT only. The ROM was **not run on hardware**.
-Build, pattern/header consistency and the analyser are verified on the host;
-the display output, the 400×240 capture layout and the resampling hint are
-**UNVERIFIED** until the owner runs the procedure in §8. Labels follow
+**Status:** the ROM ran on hardware on 2026-11-23 (owner: placed the ROM on
+the SD card and started it from TWiLight Menu++); §6 quotes the measurement
+from that correctly decoded capture. That measurement is **one console, one
+ROM, one capture**. Build, pattern/header consistency and the analyser are
+verified on the host. Labels follow
 `docs/reports/eq4b-cc3dsfs-ds-capture.md:11-14`: FACT = a command and its raw
 output quoted here; HYPOTHESIS / UNVERIFIED = not measured.
 
@@ -23,9 +24,15 @@ output quoted here; HYPOTHESIS / UNVERIFIED = not measured.
 | `source/main.c` | ARM9 ROM: static 16-bit bitmap pattern + bottom console text |
 | `Makefile` | devkitARM/libnds build of `ds-scale-test.nds` |
 | `measure_scale.py` | capture-PNG analyser, stable `key=value` report |
-| `test_measure_scale.py` | synthetic-capture scale/offset tests + mis-decoded regression |
+| `fixture_colours.py` | measured corner, gradient and strip colours of a capture (§6) |
+| `colour_histogram.py` | most frequent colours of the top 400×240 capture crop (eq4e) |
+| `test_measure_scale.py` | synthetic-capture scale/offset tests + mis-decoded regression + real-capture case |
+| `test_fixture_colours.py` | real-capture corner/gradient colour test |
+| `test_colour_histogram.py` | synthetic ordering + real scene5-capture colour test |
 | `test_pattern.py` | pattern.json ↔ header ↔ ROM-source consistency tests |
 | `fixtures/sc1_5_crop400x480_misdecoded.png` | 2026-11-22 capture crop decoded as 32-bpp BGRX; **mis-decoded regression sample**, not a measurement (§6) |
+| `fixtures/sc4_3_top400x240.png` | 2026-11-23 hardware capture of this ROM through the fixed decoder; 400×240 top crop (§6) |
+| `fixtures/s5b_7_top400x240.png` | 2026-11-23 hardware capture of the scene5 ROM, top 400×240 crop; `colour_histogram.py` input (eq4e) |
 
 The ROM links only `-lnds9`; it includes `<nds.h>` and links no TWL-HD
 GX/`common/` code (asserted by `test_pattern.py`).
@@ -108,6 +115,13 @@ Mapping used by `gen_pattern.py` / `source/main.c`:
   tie: v5=17 displays 140 (4 from 144), v5=18 displays 148 (also 4), and
   `round(144*31/255) = round(17.506) = 18` chooses 18. The deviations (e.g.
   32→33, 240→239) are the 5-bit quantisation, not a pattern error.
+
+FACT (2026-11-23 hardware capture) — on `fixtures/sc4_3_top400x240.png` all 16
+measured steps match this table (`match=yes` for every step, compared on the
+red channel; raw `fixture_colours.py` output in §6). The ROM writes one grey
+value into R, G and B; the capture reads G up to 4 lower than R/B at the high
+steps (e.g. step 15 measures `(239,235,239)`). The cause of that G deviation
+is UNVERIFIED; no cause is offered.
 
 ## 4. Why 256×256 and only 192 rows
 
@@ -313,15 +327,13 @@ offset_x_check=0.195122
 offset_y_check=-0.263736
 ```
 
-FACT — the committed fixture is a verbatim copy of the EQ-4c capture crop
-(400×480; §8 of the EQ-4b report is the capture procedure). **SUPERSEDED
-(2026-11-23):** this fixture was decoded as 32-bpp BGRX and is therefore
-mis-decoded input; it is now committed as
+FACT — the mis-decoded fixture is a verbatim copy of the EQ-4c capture crop
+(400×480; §8 of the EQ-4b report is the capture procedure). It was decoded as
+32-bpp BGRX and is therefore mis-decoded input; it is committed as
 `fixtures/sc1_5_crop400x480_misdecoded.png` and kept only as a regression
-sample of the bug. The numbers below are the mis-decoded input's output, not a
-hardware measurement; a re-capture through the fixed 24-bpp decoder (a
-hardware re-run of the ds-scale-test ROM) is planned and not part of this
-task. Copy and hash (historical command and hash, kept verbatim):
+sample of the bug. The numbers below are that mis-decoded input's output, not a
+hardware measurement. Copy and hash (historical command and hash, kept
+verbatim):
 
 ```
 $ cp "$HOME/3ds/hwtest-staging/cc3d-out/sc1_5_crop400x480.png" tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
@@ -386,6 +398,112 @@ The old rule took the bbox of *all* pixels of a colour class, so pollution
 inside tolerance moved the green/blue bboxes out of their quadrants; the new
 nearest-block rule finds the four markers at the frame corners (§6).
 
+### FACT — measured hardware scale, 2026-11-23
+
+The owner placed `ds-scale-test.nds` (sha256
+`76afec0633e8783c46e1aa5b8eb797d5b7ceaa11a1cb51aceaf084382a2c042a`, §5) on the
+SD card and started it from TWiLight Menu++; the capture is a passive cc3dsfs
+capture of the New 3DS in DS mode (capture board; flags `--enabled_both 0
+--enabled_top 1 --scaling_top 1`; decoded with the fixed
+`tools/cc3dsfs_capture/xwd2png.py`). OWNER-REPORTED, not a quoted output.
+
+FACT — the committed fixture is the correctly decoded top 400×240 region and
+is byte-identical to the owner's file:
+
+```
+$ cp "$HOME/3ds/hwtest-staging/cc3d-out/sc4_3_top400x240.png" tools/ds_scale_test/fixtures/sc4_3_top400x240.png
+$ cmp "$HOME/3ds/hwtest-staging/cc3d-out/sc4_3_top400x240.png" tools/ds_scale_test/fixtures/sc4_3_top400x240.png ; echo "exit status $?"
+exit status 0
+$ sha256sum tools/ds_scale_test/fixtures/sc4_3_top400x240.png
+f7ad03e17a82ba03a03d210b440ba31490654029c21f50e899ec096f8cd198d5  tools/ds_scale_test/fixtures/sc4_3_top400x240.png
+```
+
+FACT — `measure_scale.py` on that fixture, raw complete output (**one console,
+one ROM, one capture**):
+
+```
+$ python3 tools/ds_scale_test/measure_scale.py tools/ds_scale_test/fixtures/sc4_3_top400x240.png
+frame_found=1
+corner_red=1
+corner_green=1
+corner_blue=1
+corner_yellow=1
+bbox_x0=40
+bbox_y0=0
+bbox_x1=359
+bbox_y1=239
+scale_x=1.250000
+scale_y=1.250000
+offset_x=40
+offset_y=0
+strip_h_contrast=179.928060
+strip_v_contrast=167.788628
+scale_x_check=-0.001589
+scale_y_check=-0.002148
+offset_x_check=0.173241
+offset_y_check=0.176034
+```
+
+The measured DS 256×192 image is 320×240 capture px at capture
+(40,0)..(359,239): DS pixel (x,y) at capture (40 + 1.25x, 1.25y), horizontal
+and vertical scale 1.25, offset (40,0). This replaces the mis-decoded
+`0.9375`/offset-30 numbers above; the marker-centre cross-checks are within
+0.2 capture px. It is the same mapping as
+`tools/ds_vtxcolor_test/capture_mapping.json`.
+
+FACT — measured colours and strip profile from the same fixture, raw complete
+output of `fixture_colours.py`:
+
+```
+$ python3 tools/ds_scale_test/fixture_colours.py tools/ds_scale_test/fixtures/sc4_3_top400x240.png
+corner_tl=255,0,0
+corner_tr=0,251,0
+corner_bl=0,0,255
+corner_br=255,251,0
+gradient_i=0 ds_x=8 rgb=0,0,0 expected=0 match=yes
+gradient_i=1 ds_x=24 rgb=16,16,16 expected=16 match=yes
+gradient_i=2 ds_x=40 rgb=33,32,33 expected=33 match=yes
+gradient_i=3 ds_x=56 rgb=49,48,49 expected=49 match=yes
+gradient_i=4 ds_x=72 rgb=66,65,66 expected=66 match=yes
+gradient_i=5 ds_x=88 rgb=82,81,82 expected=82 match=yes
+gradient_i=6 ds_x=104 rgb=99,97,99 expected=99 match=yes
+gradient_i=7 ds_x=120 rgb=115,113,115 expected=115 match=yes
+gradient_i=8 ds_x=136 rgb=132,130,132 expected=132 match=yes
+gradient_i=9 ds_x=152 rgb=148,146,148 expected=148 match=yes
+gradient_i=10 ds_x=168 rgb=156,154,156 expected=156 match=yes
+gradient_i=11 ds_x=184 rgb=173,170,173 expected=173 match=yes
+gradient_i=12 ds_x=200 rgb=189,186,189 expected=189 match=yes
+gradient_i=13 ds_x=216 rgb=206,203,206 expected=206 match=yes
+gradient_i=14 ds_x=232 rgb=222,219,222 expected=222 match=yes
+gradient_i=15 ds_x=248 rgb=239,235,239 expected=239 match=yes
+gradient_match_count=16/16
+strip_i=0 rgb=255,251,255
+strip_i=1 rgb=8,8,8
+strip_i=2 rgb=165,166,165
+strip_i=3 rgb=16,20,16
+strip_i=4 rgb=255,251,255
+strip_i=5 rgb=16,20,16
+strip_i=6 rgb=165,162,165
+strip_i=7 rgb=16,20,16
+strip_i=8 rgb=255,251,255
+strip_i=9 rgb=24,24,24
+strip_i=10 rgb=165,166,165
+strip_i=11 rgb=16,20,16
+strip_i=12 rgb=255,251,255
+strip_i=13 rgb=16,20,16
+strip_i=14 rgb=165,162,165
+strip_i=15 rgb=16,20,16
+```
+
+The corner marker centres measure red `(255,0,0)`, green `(0,251,0)`, blue
+`(0,0,255)` and yellow `(255,251,0)`; green/yellow read G=251, 4 below ideal
+255 (cause UNVERIFIED, none offered). All 16 gradient steps match the §3
+table. The strip row shows the 1-px alternation surviving but blended across
+capture pixels (for example `165` between white and black at DS x=2, where one
+capture pixel covers parts of two DS pixels). That is an **observation** of the
+profile; calling the resampling filter "bilinear-like" is a HYPOTHESIS reading
+of it, not a filter identification.
+
 ## 7. Tests
 
 ```
@@ -395,15 +513,16 @@ make test-ds-scale-test      # or: make test
 FACT — suite output (the two synthetic cases check scale/offset within 0.5
 capture px; the not-found case exits non-zero; the two mis-decoded-fixture
 cases assert the published old keys and exit 0 as a regression pin — **not**
-hardware measurements; PIL absence skips with a labelled reason, and a missing
-fixture skips the two fixture cases with a labelled reason):
+hardware measurements; the two real-capture cases assert the corrected keys of
+`fixtures/sc4_3_top400x240.png`; PIL absence skips with a labelled reason, and
+a missing fixture skips only its own cases with a labelled reason):
 
 ```
 $ make test-ds-scale-test
 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_scale_test -p 'test_*.py'
-..........
+...............
 ----------------------------------------------------------------------
-Ran 10 tests in 0.735s
+Ran 15 tests in 1.209s
 
 OK
 ```
@@ -414,7 +533,16 @@ mis-decoded-fixture cases pin the old output quoted in §6 as **mis-decoded
 input** (all four markers, `bbox 30,0,269,239`, `scale_x 0.9375`,
 `scale_y 1.25`, `offset 30,0`, and `|*_check| < 1`); the subprocess case also
 requires exit status 0. They are a bug-regression pin, not a statement about
-the console.
+the console. The two real-capture cases assert the §6 measured keys
+(`bbox 40,0,359,239`, `scale_x`/`scale_y` 1.25, `offset 40,0`,
+`|*_check| < 1`) and that the analyser exits 0 on the fixture.
+
+`test_fixture_colours.py` runs `fixture_colours.py` on
+`fixtures/sc4_3_top400x240.png` and asserts the four measured corner colours
+and `match=yes` for all 16 gradient steps. `test_colour_histogram.py` checks
+the deterministic ordering on a synthetic PNG and, on
+`fixtures/s5b_7_top400x240.png`, that the six eq4e colours are printed and
+neither `(24,255,255)` nor `(255,24,255)` reaches count 20.
 
 `test_pattern.py` regenerates `include/pattern.h` into a temp file and diffs it
 against the committed header, checks every `pattern.json` element is inside
@@ -430,19 +558,19 @@ FACT — full root suite (tail; includes `test-ds-scale-test` as a prerequisite)
 $ make test
 ...
 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_scale_test -p 'test_*.py'
-..........
+...............
 ----------------------------------------------------------------------
-Ran 10 tests in 0.723s
+Ran 15 tests in 1.198s
 
 OK
 ...
 ----------------------------------------------------------------------
-Ran 364 tests in 91.816s
+Ran 364 tests in 83.780s
 
 OK (skipped=42)
 ```
 
-## 8. Hardware procedure (owner; NOT run in this task)
+## 8. Hardware procedure (owner; run 2026-11-23)
 
 1. Build: `make -C tools/ds_scale_test`.
 2. Copy `tools/ds_scale_test/ds-scale-test.nds` to the SD card's
@@ -461,8 +589,9 @@ OK (skipped=42)
    numbers (which scale the New 3DS uses, which filter) is UNVERIFIED until
    that run.
 
-The ROM is **NOT to be run on hardware in this task**; step 4 needs the
-cc3dsfs binary built out of tree (not in this repository) and the console.
+The ROM was run on hardware by the owner on 2026-11-23; §6 records that
+measurement. Step 4 needs the cc3dsfs binary built out of tree (not in this
+repository) and the console.
 
 ## 9. Privacy
 
@@ -613,3 +742,24 @@ quoted verbatim):
 ?? docs/reports/eq4c-ds-scale-measurement.md
 ?? tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
 ```
+
+### Requirement traceability — 2026-11-23 hardware capture
+
+- **REQ record the three hardware captures as fixtures** — FACT: §1 rows and
+  the §6 `cp`/`cmp`/`sha256sum` block for
+  `fixtures/sc4_3_top400x240.png`; the vtxcolor and scene5 fixtures are
+  recorded in `docs/reports/eq4d-ds-vertex-colour-hw.md` and
+  `docs/reports/eq4e-scene5-hw-capture.md`.
+- **REQ real-tool test asserting the measured scale/offset** — FACT: the §6
+  output and the two real-capture cases in §7.
+- **REQ replace the SUPERSEDED hardware-scale statements with measured
+  values** — FACT: §6 "FACT — measured hardware scale, 2026-11-23" replaces
+  the SUPERSEDED paragraph; the mis-decoded fixture and its regression cases
+  are untouched.
+- **REQ measured colours, gradient comparison and strip observation** — FACT:
+  §6 `fixture_colours.py` raw output; §3 measured annotation.
+- **REQ never weaken tests** — FACT: the mis-decoded cases are unchanged; §7
+  suite 15 tests OK.
+- **REQ FACT only with command + raw output, `$HOME` only, no worktree
+  commands, targeted diff** — FACT: every quote in §§3/6, §9 grep, no
+  `git worktree` command.

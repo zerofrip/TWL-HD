@@ -21,6 +21,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MEASURE = os.path.join(HERE, "measure_vtxcolor.py")
 SCALE_DIR = os.path.join(os.path.dirname(HERE), "ds_scale_test")
 FIXTURE = os.path.join(HERE, "fixtures", "vt1b_2_top400x240.png")
+VARIANT2_FIXTURE = os.path.join(
+    HERE, "fixtures", "vt2_2_top400x240.png")
 
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
@@ -140,6 +142,26 @@ class MeasureVtxcolorTest(unittest.TestCase):
         """Real 2026-11-23 capture: qA has no colour command and measures white,
         identical to the explicit white qB; C black, D grey, E red."""
         with Image.open(FIXTURE) as image:
+            report, missing = measure_vtxcolor.measure(image, QUADS, MAPPING)
+        self.assertEqual(missing, [])
+        self.assertEqual(report["geometry_found"], 1)
+        for key, want in (("qA_rgb", (255, 255, 255)),
+                          ("qB_rgb", (255, 255, 255)),
+                          ("qC_rgb", (0, 0, 0)),
+                          ("qD_rgb", (132, 134, 132)),
+                          ("qE_rgb", (255, 0, 0)),
+                          ("bg_rgb", (66, 69, 66))):
+            for got, expected in zip(report[key], want):
+                self.assertLessEqual(abs(got - expected), 12, key)
+        self.assertEqual(report["default_colour_class"], "same_as_qB")
+
+    @unittest.skipUnless(
+        os.path.exists(VARIANT2_FIXTURE),
+        "fixture vt2_2_top400x240.png is missing")
+    def test_variant2_fixture_measures_same_as_variant1(self):
+        """Real 2026-11-23 capture of VARIANT=2 (reset after an empty
+        displayed frame): the classification is the same as variant 1."""
+        with Image.open(VARIANT2_FIXTURE) as image:
             report, missing = measure_vtxcolor.measure(image, QUADS, MAPPING)
         self.assertEqual(missing, [])
         self.assertEqual(report["geometry_found"], 1)

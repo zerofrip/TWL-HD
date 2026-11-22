@@ -438,3 +438,20 @@ measures the initial vertex colour as white (255,255,255) from the single
 `vt1b_2` capture: `docs/reports/eq4d-ds-vertex-colour-hw.md`. The earlier
 "not black" hardware observation is consistent with this; the exact value is
 still one-capture and loader-state-bound.
+
+---
+
+## Update 2026-11-23: scene5 capture through the fixed decoder (EQ-4e)
+
+The scene5 ROM (`twlhd-s5cull-plain`, sha256 prefix `1bde37007ab36c05`) was
+captured again on 2026-11-23 and decoded correctly. The most frequent colours
+of the top 400×240 crop are black `(0,0,0)` (background), white
+`(255,255,255)`, yellow `(255,255,24)`, green `(0,255,8)`, blue `(0,0,247)` and
+red `(255,0,0)`; neither cyan `(24,255,255)` nor magenta `(255,24,255)` appears
+at count ≥ 20. Consistent with the white initial vertex colour (EQ-4d, two
+ROM variants). Pixel comparison with the PICA render is not done: it needs a
+static, non-rotating build to align the quad phase. Report:
+`docs/reports/eq4e-scene5-hw-capture.md`.
+
+**Requirement:** append-only pointer to EQ-4e (2026-11-23 fixture task) — FACT:
+this block adds lines only; the analysis above is unchanged.

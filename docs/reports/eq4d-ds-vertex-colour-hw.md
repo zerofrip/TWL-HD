@@ -204,3 +204,65 @@ $ git diff -U0 -- docs/reports/scene5-colour-diagnosis.md docs/reports/melonds-s
   FACT/HYPOTHESIS labels and limits** — FACT: this report.
 - **REQ no literal home paths, no worktree operations, targeted diff** — FACT:
   §6 and the final `git status`/`git diff --stat` in the task's report.
+
+## Variant 2 result (2026-11-23)
+
+Appended after §7; every earlier section above is unchanged.
+
+**OWNER-REPORTED (not a quoted output):** the owner built `VARIANT=2` (reset
+after one empty displayed frame, §6 of `tools/ds_vtxcolor_test/README.md`),
+placed the ROM on the SD card and started it from TWiLight Menu++ in DS mode on
+the New 3DS. The capture is a passive cc3dsfs capture with the same flags as
+§2: `--enabled_both 0 --enabled_top 1 --scaling_top 1`, decoded with the fixed
+`tools/cc3dsfs_capture/xwd2png.py`; the fixture is its top 400×240 region.
+
+**FACT** — the ROM sha256 (matches `tools/ds_vtxcolor_test/README.md` §5):
+
+```
+$ cd "$HOME/3ds/hwtest-staging" && sha256sum vtx-v2.nds
+4862ae4db81eee9abaa4ec8207f2934f25f7bfb5ce25e988613a274c06255fca  vtx-v2.nds
+```
+
+**FACT** — the committed fixture is byte-identical to the owner's crop:
+
+```
+$ cp "$HOME/3ds/hwtest-staging/cc3d-out/vt2_2_top400x240.png" tools/ds_vtxcolor_test/fixtures/vt2_2_top400x240.png
+$ cmp "$HOME/3ds/hwtest-staging/cc3d-out/vt2_2_top400x240.png" tools/ds_vtxcolor_test/fixtures/vt2_2_top400x240.png ; echo "exit status $?"
+exit status 0
+$ sha256sum tools/ds_vtxcolor_test/fixtures/vt2_2_top400x240.png
+2cf880f055c630610768f16e8b3765e743a5bab9f8cf98bd4daabbacd7fd94e8  tools/ds_vtxcolor_test/fixtures/vt2_2_top400x240.png
+```
+
+**FACT** — `measure_vtxcolor.py` on that fixture, raw complete output:
+
+```
+$ python3 tools/ds_vtxcolor_test/measure_vtxcolor.py tools/ds_vtxcolor_test/fixtures/vt2_2_top400x240.png
+geometry_found=1
+qA_rgb=255,255,255
+qB_rgb=255,255,255
+qC_rgb=0,0,0
+qD_rgb=132,134,132
+qE_rgb=255,0,0
+bg_rgb=66,69,66
+default_colour_class=same_as_qB
+```
+
+Variant 2 (reset after one empty displayed frame) gives the **same
+classification as variant 1** (`same_as_qB`; qA and qB both measure
+(255,255,255), tolerance 12). The new test
+`test_variant2_fixture_measures_same_as_variant1` asserts this.
+
+**HYPOTHESIS (unchanged, now on two ROM variants):** the initial current vertex
+colour of this DS hardware path is **white**. Limits are the same as §4 (one
+console, loader/TWiLight state, one capture per variant) plus **two ROM
+variants, one console**: variant 1 and variant 2 agree, but neither rules out a
+loader-dependent state on another console, and the capture colour path is not
+identity (`qD` (132,134,132), background (66,69,66)). This block supersedes the
+§4 limit "Variant 2 … is not yet run" without deleting it.
+
+**Privacy:** all commands above use `$HOME`; the appended lines add no literal
+home path.
+
+**Requirement:** part B of the 2026-11-23 fixture task — the fixture-(2) test,
+this append-only block and the raw output above; the earlier text and the §4
+limit are kept (superseded, not deleted).
