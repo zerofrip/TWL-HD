@@ -1,0 +1,19 @@
+{
+  "width": 256,
+  "height": 192,
+  "id": "ds-scale-test-1",
+  "background": [0, 0, 0],
+  "elements": [
+    {"name": "cross_v", "type": "rect", "x": 128, "y": 0, "w": 1, "h": 192, "colour": [255, 255, 255]},
+    {"name": "cross_h", "type": "rect", "x": 0, "y": 96, "w": 256, "h": 1, "colour": [255, 255, 255]},
+    {"name": "block3x3", "type": "rect", "x": 127, "y": 95, "w": 3, "h": 3, "colour": [255, 255, 255]},
+    {"name": "hstrip", "type": "alt_columns", "x": 0, "y": 40, "w": 256, "h": 8, "colour": [255, 255, 255], "period": 2, "phase": 0},
+    {"name": "vstrip", "type": "alt_rows", "x": 40, "y": 0, "w": 8, "h": 192, "colour": [255, 255, 255], "period": 2, "phase": 0},
+    {"name": "gradient", "type": "gradient", "x": 0, "y": 140, "w": 256, "h": 16, "colour": [0, 0, 0], "step_px": 16, "step_value": 16},
+    {"name": "corner_tl", "type": "rect", "x": 1, "y": 1, "w": 8, "h": 8, "colour": [255, 0, 0]},
+    {"name": "corner_tr", "type": "rect", "x": 247, "y": 1, "w": 8, "h": 8, "colour": [0, 255, 0]},
+    {"name": "corner_bl", "type": "rect", "x": 1, "y": 183, "w": 8, "h": 8, "colour": [0, 0, 255]},
+    {"name": "corner_br", "type": "rect", "x": 247, "y": 183, "w": 8, "h": 8, "colour": [255, 255, 0]},
+    {"name": "frame", "type": "frame", "x": 0, "y": 0, "w": 256, "h": 192, "colour": [255, 255, 255]}
+  ]
+}

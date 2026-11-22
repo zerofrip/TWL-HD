@@ -1,4 +1,4 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-cc3dsfs host-test clean arm11-diag \
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-cc3dsfs test-ds-scale-test host-test clean arm11-diag \
 	emu-expected emu-validate emu-validate-tex azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
@@ -595,10 +595,16 @@ test-eq-scenes:
 test-cc3dsfs:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/cc3dsfs_capture -p 'test_xwd2png.py'
 
+# DS top-screen scale-test suite (tools/ds_scale_test/). Discovered explicitly:
+# the aggregate pass below does not descend into tools/ds_scale_test (no
+# __init__.py).
+test-ds-scale-test:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_scale_test -p 'test_*.py'
+
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli \
 	tests/host/build/tex_capture_cli \
-	test-eq2 test-eq3 test-eq-scenes test-cc3dsfs
+	test-eq2 test-eq3 test-eq-scenes test-cc3dsfs test-ds-scale-test
 	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:
