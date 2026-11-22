@@ -155,3 +155,49 @@ The DS-mode pixels are numeric PNGs, unlike the 2026-11-19 NTR-HR route
   `arm9v2/` or `arm11/` is modified and no existing test is touched;
   `docs/EQUALITY_CHECK_DESIGN.md` gains only appended blocks.
 - **TESTS: `make test`**
+
+## 9. Erratum (2026-11-23)
+
+Append-only correction. The 2026-11-22 capture was decoded wrongly:
+`tools/cc3dsfs_capture/xwd2png.py` treated the `xwd -root` screenshot as
+32 bits per pixel ('BGRX') although the file is 24 bpp. The real header is
+(python `struct '>25I'` of the first 100 bytes of a real capture, first 14
+fields):
+
+```
+(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)
+```
+
+i.e. `pixmap_depth=24`, width 1280, height 720, `bits_per_pixel=24`
+(index 11), `bytes_per_line=5120` (index 12), `ncolors`/visual-class field 5.
+The data are 3-byte BGR pixels (row stride `bytes_per_line=5120`). Decoding
+them as 4-byte BGRX squeezed the picture horizontally by 3/4 and produced
+repeating R/G/B channel stripes on coloured regions; decoding as 3-byte BGR
+with the header stride gives the correct picture.
+
+Evidence on the same capture (`raw_vt1b_2.xwd`): the old decoder gave a
+non-black top bbox x30..269 (`scale_x` 0.9375 measured from the
+ds-scale-test ROM); the correct decoder gives x40..359, y0..239 (the DS
+256×192 screen shown uniformly 1.25× as 320×240 centred, offset x=40), and the
+quad colours exactly white (255,255,255), explicit grey 16/31 =
+(132,134,132) (= `(16<<3)|(16>>2)`, identity colour path), red (255,0,0),
+black (0,0,0), background (66,69,66) = 5-bit 8 expanded to 66, with ±3
+dither-like variation (**UNVERIFIED**: no cause is offered for that variation).
+
+**Correction of this report.** The per-frame statistics in section 4 were
+taken from mis-decoded PNGs and are **invalid as measurements of the board**
+(they describe the mis-decoded image). The statement that "pure colours were
+preserved" (section 4 and the section 6 verdict) is invalid for the same
+reason. The `(255,251,255)` DS-white reading belongs to `eq4c` and is also an
+artefact.
+
+**What remains valid.** The board connects (`[cc3dsfs] Connected to Opt.
+N3DS - USB 0`) and the route shows the DS-mode top screen as numeric pixels;
+that part of the EQ-4b verdict stands. The corrected geometry and colour facts
+above are from the single 2026-11-23 `vt1b_2` capture — **single-capture
+basis** — recorded in `docs/reports/eq4d-ds-vertex-colour-hw.md`. The
+2026-11-22 statistics must be re-taken through the fixed decoder before they
+are used again.
+
+Report: `docs/reports/eq4d-ds-vertex-colour-hw.md` (decoder fix, tests,
+corrected mapping).

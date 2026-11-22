@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for tools/ds_vtxcolor_test/measure_vtxcolor.py.
 
-Synthesises a 400x240 capture by inverting the measured EQ-4c mapping and
-checking the report/classification for three default colours, plus a
-geometry-not-found case.  Cross-checks capture_mapping.json against
-measure_scale.py on the committed ds_scale_test fixture.  Skips with a labelled
-reason when PIL is missing (or the fixture is missing, for that one test).
+Synthesises a 400x240 capture by inverting the corrected mapping and checking
+the report/classification for three default colours, plus a geometry-not-found
+case.  Cross-checks capture_mapping.json against measure_scale.py on a
+synthetic uniform-1.25 capture, and checks the real vt1b_2 fixture.  Skips with
+a labelled reason when PIL is missing (or the fixture is missing, for that one
+test).
 """
 
 import json
@@ -19,7 +20,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEASURE = os.path.join(HERE, "measure_vtxcolor.py")
 SCALE_DIR = os.path.join(os.path.dirname(HERE), "ds_scale_test")
-FIXTURE = os.path.join(SCALE_DIR, "fixtures", "sc1_5_crop400x480.png")
+FIXTURE = os.path.join(HERE, "fixtures", "vt1b_2_top400x240.png")
 
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
@@ -134,18 +135,43 @@ class MeasureVtxcolorTest(unittest.TestCase):
         self.assertIn("geometry_found=0", completed.stdout)
 
     @unittest.skipUnless(
-        os.path.exists(FIXTURE), "fixture sc1_5_crop400x480.png is missing")
-    def test_mapping_matches_measure_scale_on_fixture(self):
-        """capture_mapping.json must equal what measure_scale.py measures."""
+        os.path.exists(FIXTURE), "fixture vt1b_2_top400x240.png is missing")
+    def test_real_fixture_measures_initial_white(self):
+        """Real 2026-11-23 capture: qA has no colour command and measures white,
+        identical to the explicit white qB; C black, D grey, E red."""
+        with Image.open(FIXTURE) as image:
+            report, missing = measure_vtxcolor.measure(image, QUADS, MAPPING)
+        self.assertEqual(missing, [])
+        self.assertEqual(report["geometry_found"], 1)
+        for key, want in (("qA_rgb", (255, 255, 255)),
+                          ("qB_rgb", (255, 255, 255)),
+                          ("qC_rgb", (0, 0, 0)),
+                          ("qD_rgb", (132, 134, 132)),
+                          ("qE_rgb", (255, 0, 0)),
+                          ("bg_rgb", (66, 69, 66))):
+            for got, expected in zip(report[key], want):
+                self.assertLessEqual(abs(got - expected), 12, key)
+        self.assertEqual(report["default_colour_class"], "same_as_qB")
+
+    @unittest.skipUnless(
+        HAVE_PIL, "PIL is not available; measure_scale cross-check skipped")
+    def test_mapping_matches_measure_scale_on_synthetic_capture(self):
+        """capture_mapping.json must equal what measure_scale.py measures on a
+        synthetic uniform-1.25 capture (the corrected geometry)."""
         if SCALE_DIR not in sys.path:
             sys.path.insert(0, SCALE_DIR)
+        import gen_pattern  # noqa: E402
         import measure_scale  # noqa: E402
 
         with open(os.path.join(SCALE_DIR, "pattern.json"), "r",
                   encoding="utf-8") as f:
             pattern = json.load(f)
-        with Image.open(FIXTURE) as image:
-            result, _box, missing = measure_scale.measure(image, pattern)
+        pattern_image = Image.frombytes(
+            "RGB", (pattern["width"], pattern["height"]),
+            gen_pattern.render_rgb(pattern))
+        capture = Image.new("RGB", (400, 240), (0, 0, 0))
+        capture.paste(pattern_image.resize((320, 240), Image.NEAREST), (40, 0))
+        result, _box, missing = measure_scale.measure(capture, pattern)
         self.assertEqual(missing, [])
         self.assertEqual(result["scale_x"], MAPPING["scale_x"])
         self.assertEqual(result["scale_y"], MAPPING["scale_y"])

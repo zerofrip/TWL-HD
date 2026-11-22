@@ -425,3 +425,16 @@ section 3).
 - **Fix status:** option (a) is merged (interpreter initial colour white). The
   hardware observation supports its direction; the exact hardware value and the
   `INITIAL_STATE_UNKNOWN` capture gap remain open.
+
+---
+
+## Update 2026-11-23: capture decode corrected
+
+The cc3dsfs-derived colour counts and the `(255,251,255)` white reading quoted
+from the earlier captures were taken from mis-decoded PNGs (24-bpp XWD decoded
+as 32-bpp BGRX). That reading is an artefact, not hardware evidence. The
+dedicated `tools/ds_vtxcolor_test` ROM, captured through the fixed decoder,
+measures the initial vertex colour as white (255,255,255) from the single
+`vt1b_2` capture: `docs/reports/eq4d-ds-vertex-colour-hw.md`. The earlier
+"not black" hardware observation is consistent with this; the exact value is
+still one-capture and loader-state-bound.

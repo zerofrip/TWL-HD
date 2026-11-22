@@ -23,9 +23,9 @@ output quoted here; HYPOTHESIS / UNVERIFIED = not measured.
 | `source/main.c` | ARM9 ROM: static 16-bit bitmap pattern + bottom console text |
 | `Makefile` | devkitARM/libnds build of `ds-scale-test.nds` |
 | `measure_scale.py` | capture-PNG analyser, stable `key=value` report |
-| `test_measure_scale.py` | synthetic-capture scale/offset tests + real-capture regression |
+| `test_measure_scale.py` | synthetic-capture scale/offset tests + mis-decoded regression |
 | `test_pattern.py` | pattern.json ↔ header ↔ ROM-source consistency tests |
-| `fixtures/sc1_5_crop400x480.png` | real 2026-11-22 capture, 400×480 crop (§6) |
+| `fixtures/sc1_5_crop400x480_misdecoded.png` | 2026-11-22 capture crop decoded as 32-bpp BGRX; **mis-decoded regression sample**, not a measurement (§6) |
 
 The ROM links only `-lnds9`; it includes `<nds.h>` and links no TWL-HD
 GX/`common/` code (asserted by `test_pattern.py`).
@@ -256,11 +256,12 @@ HYPOTHESIS (`docs/reports/eq4b-cc3dsfs-ds-capture.md:78-82`).
   corresponding corner of the white-frame bbox (tl/tr/bl/br). Blocks use
   8-connectivity, and same-colour blocks whose bounding boxes are at most
   4 capture px apart are merged first: a real capture can split one marker
-  into alternating 1-px columns (see the fixture below). A marker counts as
-  found only if such a block has 16..400 pixels — one 8-DS-px square is about
-  7.5×10 capture px at the measured 0.9375/1.25, and a ragged 12×10 block on
-  the synthetic 1.5625× capture. The nearest block (block centroid to frame
-  corner) wins, so same-colour pollution elsewhere in the frame is ignored.
+  into alternating 1-px columns (see the mis-decoded fixture below). A marker
+  counts as found only if such a block has 16..400 pixels — one 8-DS-px square
+  is about 7.5×10 capture px on the mis-decoded sample (0.9375/1.25), 10×10 at
+  the corrected 1.25/1.25, and a ragged 12×10 block on the synthetic 1.5625×
+  capture. The nearest block (block centroid to frame corner) wins, so
+  same-colour pollution elsewhere in the frame is ignored.
 - The white frame's white-pixel bounding box is the displayed DS image.
   `bbox_x0..bbox_x1` / `bbox_y0..bbox_y1` are inclusive capture pixels.
 - `scale_x = (bbox_x1-bbox_x0+1)/256`, `scale_y = (bbox_y1-bbox_y0+1)/192`
@@ -313,7 +314,14 @@ offset_y_check=-0.263736
 ```
 
 FACT — the committed fixture is a verbatim copy of the EQ-4c capture crop
-(400×480; §8 of the EQ-4b report is the capture procedure). Copy and hash:
+(400×480; §8 of the EQ-4b report is the capture procedure). **SUPERSEDED
+(2026-11-23):** this fixture was decoded as 32-bpp BGRX and is therefore
+mis-decoded input; it is now committed as
+`fixtures/sc1_5_crop400x480_misdecoded.png` and kept only as a regression
+sample of the bug. The numbers below are the mis-decoded input's output, not a
+hardware measurement; a re-capture through the fixed 24-bpp decoder (a
+hardware re-run of the ds-scale-test ROM) is planned and not part of this
+task. Copy and hash (historical command and hash, kept verbatim):
 
 ```
 $ cp "$HOME/3ds/hwtest-staging/cc3d-out/sc1_5_crop400x480.png" tools/ds_scale_test/fixtures/sc1_5_crop400x480.png
@@ -385,10 +393,10 @@ make test-ds-scale-test      # or: make test
 ```
 
 FACT — suite output (the two synthetic cases check scale/offset within 0.5
-capture px; the not-found case exits non-zero; the two real-capture cases
-assert the fixture's exact keys and exit 0; PIL absence skips with a labelled
-reason, and a missing fixture skips the two fixture cases with a labelled
-reason):
+capture px; the not-found case exits non-zero; the two mis-decoded-fixture
+cases assert the published old keys and exit 0 as a regression pin — **not**
+hardware measurements; PIL absence skips with a labelled reason, and a missing
+fixture skips the two fixture cases with a labelled reason):
 
 ```
 $ make test-ds-scale-test
@@ -402,9 +410,11 @@ OK
 
 `test_measure_scale.py` keeps the two synthetic geometry cases (1.5625×
 nearest-neighbour and 1.0× centred) and the not-found case unchanged. The two
-added cases assert exactly the fixture output quoted in §6: all four markers,
-`bbox 30,0,269,239`, `scale_x 0.9375`, `scale_y 1.25`, `offset 30,0`, and
-`|*_check| < 1`; the subprocess case also requires exit status 0.
+mis-decoded-fixture cases pin the old output quoted in §6 as **mis-decoded
+input** (all four markers, `bbox 30,0,269,239`, `scale_x 0.9375`,
+`scale_y 1.25`, `offset 30,0`, and `|*_check| < 1`); the subprocess case also
+requires exit status 0. They are a bug-regression pin, not a statement about
+the console.
 
 `test_pattern.py` regenerates `include/pattern.h` into a temp file and diffs it
 against the committed header, checks every `pattern.json` element is inside
@@ -553,8 +563,10 @@ command output quoted above; UNIT = unit test.
   `scale_*_check` 0.001524/−0.002747; exit rule unchanged (§6).
 - **REQ (EQ-4c A) real fixture committed, exact keys asserted, synthetic
   tests unchanged, and a test that fails with the old behaviour** — BUILD:
-  `fixtures/sc1_5_crop400x480.png` (sha256 in §6), the two fixture cases in
-  `test_measure_scale.py`, and the quoted pre-fix failure in §6; §7 output.
+  `fixtures/sc1_5_crop400x480_misdecoded.png` (historical filename/hash in §6;
+  renamed and relabelled mis-decoded input on 2026-11-23), the two fixture
+  cases in `test_measure_scale.py`, and the quoted pre-fix failure in §6; §7
+  output.
 - **REQ (EQ-4c B) measurement report with the raw data and FACT/HYPOTHESIS
   labels** — BUILD: `docs/reports/eq4c-ds-scale-measurement.md`; the §6 quotes
   are repeated verbatim there.

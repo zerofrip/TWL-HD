@@ -333,16 +333,16 @@ python3 tools/ds_vtxcolor_test/measure_vtxcolor.py <capture.png>
 Input: a cc3dsfs 1280×720 root screenshot or a cropped top-screen PNG. Only
 the top-left 400×240 region is analysed, as in `measure_scale.py`.
 
-- Shared constants live in `capture_mapping.json`: `scale_x=0.9375`,
-  `scale_y=1.25`, `offset_x=30`, `offset_y=0`, taken from
-  `docs/reports/eq4c-ds-scale-measurement.md`. The mapping is
+- Shared constants live in `capture_mapping.json`: `scale_x=1.25`,
+  `scale_y=1.25`, `offset_x=40`, `offset_y=0` (corrected 2026-11-23; see
+  `docs/reports/eq4d-ds-vertex-colour-hw.md`). The mapping is
   `capture_x = offset_x + (ds_x + 0.5)·scale_x − 0.5` (and the same for y);
-  `measure_scale.py` is not modified. `test_measure_vtxcolor.py` asserts the
-  constants equal what `measure_scale.py` measures on the committed fixture.
+  DS pixel (x, y) appears at capture (40 + 1.25x, 1.25y). `measure_scale.py`
+  is not modified. `test_measure_vtxcolor.py` asserts the constants equal what
+  `measure_scale.py` measures on a synthetic uniform-1.25 capture.
 - For each quad A..E the analyser maps the **centre 16×16 DS-pixel patch**
   through the mapping and takes the median R, G, B over the covered capture
-  pixels. The median absorbs the 0.9375 non-integer resampling and the
-  observed 1-px column interleaving.
+  pixels. The median absorbs the 1.25 non-integer nearest-neighbour resampling.
 - The background patch is the centre 16×16 patch at DS `(128, 8)` — above all
   quads, inside 0..255×0..191.
 - Report, one `key=value` per line, in this order:
@@ -357,8 +357,7 @@ the top-left 400×240 region is analysed, as in `measure_scale.py`.
   `same_as_qB`, `same_as_qC`, `same_as_qD`, `same_as_qE` (qA vs the *measured*
   reference median), then `black` (within 12 of (0,0,0)), `white` (within 12
   of (255,255,255)), `grey` (max channel − min channel ≤ 12), else `other`.
-  The relative classes are robust to the non-identity capture colour path
-  (EQ-4c: DS white shows (255,251,255), zero shows 0..8); the absolute
+  The relative classes are robust to small capture deviations; the absolute
   black/white classes necessarily use ideal 8-bit values. The raw medians are
   always printed, so the owner can reclassify.
 
@@ -387,16 +386,35 @@ default_colour_class=same_as_qB
 make test-ds-vtxcolor-test      # or: make test
 ```
 
-FACT — suite output (14 tests):
+FACT — suite output (15 tests; the two additions are the real-fixture case and
+the synthetic `measure_scale.py` cross-check, replacing the old
+mis-decoded-fixture cross-check):
 
 ```
 $ make test-ds-vtxcolor-test
 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_vtxcolor_test -p 'test_*.py'
-..............
+...............
 ----------------------------------------------------------------------
-Ran 14 tests in 0.644s
+Ran 15 tests in 0.739s
 
 OK
+```
+
+FACT — the analyser on the corrected 2026-11-23 capture
+(`fixtures/vt1b_2_top400x240.png`, sha256
+`f48c9f1be832516466b45e74dd35728f64aa0c5963587c078642a2bf3a8acb1c`), raw
+complete output:
+
+```
+$ python3 tools/ds_vtxcolor_test/measure_vtxcolor.py tools/ds_vtxcolor_test/fixtures/vt1b_2_top400x240.png
+geometry_found=1
+qA_rgb=255,255,255
+qB_rgb=255,255,255
+qC_rgb=0,0,0
+qD_rgb=132,134,132
+qE_rgb=255,0,0
+bg_rgb=66,69,66
+default_colour_class=same_as_qB
 ```
 
 - `test_measure_vtxcolor.py` synthesises 400×240 captures in memory with PIL
@@ -404,10 +422,11 @@ OK
   expansion) and checks: A==B white ⇒ `same_as_qB`, A==C black ⇒
   `same_as_qC`, A=(200,200,200) ⇒ `grey`, the reference medians and
   background, a subprocess success case (report keys + exit 0), a flat capture
-  ⇒ non-zero exit with `geometry not found`, and the `measure_scale.py`
-  fixture cross-check. PIL absence skips the class with the labelled reason
+  ⇒ non-zero exit with `geometry not found`, the real fixture above (within
+  tolerance 12), and the `measure_scale.py` cross-check on a synthetic
+  uniform-1.25 capture. PIL absence skips the class with the labelled reason
   `PIL is not available; measure_vtxcolor capture tests skipped`; a missing
-  fixture skips only the cross-check with its own label.
+  fixture skips only the fixture case with its own label.
 - `test_quads.py` regenerates `include/quads.h` into a temp file and diffs the
   committed header, checks every quad is inside 256×192 and in the required
   A..E order/rect/colour, checks qA has no colour, checks each 5-bit channel
@@ -452,7 +471,9 @@ colour_exactness=PASS
 4. Capture the top screen. `tools/cc3dsfs_capture/cc_shots.sh` launches
    cc3dsfs itself without the EQ-4c layout flags (`cc_shots.sh:12`), so either
    run cc3dsfs with those flags and use the script's xwd→png loop, or record
-   the exact invocation used. The EQ-4c proposed flags are:
+   the exact invocation used. The flags actually used for the 2026-11-23
+   `vt1b` capture (the `cc_shots_flags.sh vt1b 3 3` equivalent) were
+   `--enabled_both 0 --enabled_top 1 --scaling_top 1`:
    ```
    xvfb-run -a -s "-screen 0 1280x720x24" "$CC3DSFS_BIN" --auto_connect --no_audio --no_auto_save --enabled_both 0 --enabled_top 1 --scaling_top 1
    ```
@@ -498,11 +519,12 @@ $ grep -rn -E '/(home|Users)/' tools/ds_vtxcolor_test
   proven only by the libnds GL2D convention quoted in §4. DS half-pixel and Y
   flip details could shift a quad by one pixel; the centre 16×16 medians are
   tolerant to that.
-- **Capture colour path (HYPOTHESIS):** EQ-4c measured a non-identity path
-  (DS white → (255,251,255), black → 0..8). `same_as_qX` compares against the
-  measured reference quads and absorbs this; absolute `black`/`white`/`grey`
-  could mislabel if the real path distorts more than tolerance 12. The raw
-  medians are always printed.
+- **Capture colour path:** the 2026-11-23 `vt1b_2` fixture shows an identity
+  path on the sampled quads (white 255,255,255; grey 132,134,132). The old
+  "non-identity path (DS white → (255,251,255), black → 0..8)" reading came
+  from a mis-decoded capture and is superseded; `same_as_qX` still compares
+  against the measured reference quads, and the raw medians are always
+  printed.
 - **`cc_shots.sh` flags:** plain `cc_shots.sh` may produce a layout different
   from the 400×240 assumption; the analyser then exits 1 with a clear
   "geometry not found" message.
@@ -559,7 +581,7 @@ command output quoted above; UNIT = unit test.
   `-DDSVTX_VARIANT_RESET=1`, `source/main.c` block, §5 both builds/hashes, §6
   semantics and limits.
 - **REQ `measure_vtxcolor.py`: 400×240 top-left region, shared mapping
-  constants json (0.9375/1.25, offset 30,0), centre 16×16 medians for A..E and
+  constants json (1.25/1.25, offset 40,0), centre 16×16 medians for A..E and
   background, `key=value` lines, `default_colour_class` from the listed
   domain at tolerance 12, non-zero only on geometry** — BUILD: §7 spec and
   synthetic output; `test_measure_vtxcolor.py` synthetic cases.
@@ -569,7 +591,9 @@ command output quoted above; UNIT = unit test.
   cross-check.
 - **REQ mapping cross-check against `measure_scale.py` on the committed
   fixture (or labelled skip)** — BUILD: `test_mapping_matches_measure_scale_on
-  _fixture`; §8.
+  _synthetic_capture`; §8. (Corrected 2026-11-23: the cross-check now runs on
+  a synthetic uniform-1.25 capture because the old committed fixture was
+  mis-decoded input; see §13.)
 - **REQ quote build output, ROM sha256 and `ndstool -i` excerpt; document the
   owner hardware procedure (SD copy, TWiLight, capture flags, measure)** —
   BUILD: §5 and §9.
@@ -597,3 +621,23 @@ $ git status --short --untracked-files=all
 ?? tools/ds_vtxcolor_test/test_measure_vtxcolor.py
 ?? tools/ds_vtxcolor_test/test_quads.py
 ```
+
+## 13. Erratum (2026-11-23)
+
+The 2026-11-22 capture was decoded wrongly: `tools/cc3dsfs_capture/xwd2png.py`
+treated the 24-bpp XWD as 32-bpp BGRX, which squeezes the picture horizontally
+by 3/4. All earlier mapping/colour statements taken from that capture are
+superseded. Corrected facts, from the 2026-11-23 `vt1b` capture (a single
+capture, so the 1.25× uniform scale and the x=40 offset are single-capture
+basis):
+
+- `capture_mapping.json` is now `scale_x=1.25, scale_y=1.25, offset_x=40,
+  offset_y=0`.
+- The real fixture `fixtures/vt1b_2_top400x240.png` measures qA=white,
+  qB=white, qC=black, qD=(132,134,132), qE=red, background (66,69,66) — see
+  §8.
+- The old `sc1_5_crop400x480.png` numbers (0.9375 x-scale, 30-px offset,
+  "DS white (255,251,255)", "0.9375/1.25") came from mis-decoded input and are
+  regression-pinned only, not hardware measurements.
+
+Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.

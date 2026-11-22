@@ -16,7 +16,8 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEASURE = os.path.join(HERE, "measure_scale.py")
-FIXTURE = os.path.join(HERE, "fixtures", "sc1_5_crop400x480.png")
+FIXTURE = os.path.join(
+    HERE, "fixtures", "sc1_5_crop400x480_misdecoded.png")
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
@@ -72,10 +73,12 @@ class MeasureScaleTest(unittest.TestCase):
         self.assert_geometry(result, 256, 192, 72, 24)
 
     @unittest.skipUnless(
-        os.path.exists(FIXTURE), "fixture sc1_5_crop400x480.png is missing")
-    def test_real_capture_measures(self):
-        """Real 2026-11-22 capture: all four markers found (the pre-fix
-        detection reported corner_green and corner_blue missing)."""
+        os.path.exists(FIXTURE),
+        "fixture sc1_5_crop400x480_misdecoded.png is missing")
+    def test_misdecoded_capture_measures_old_numbers(self):
+        """Regression pin for the BUG, not a hardware measurement: this capture
+        was decoded as 32-bpp BGRX (see xwd2png.py), so its 0.9375/30 numbers
+        are the mis-decoded input, kept here so they cannot silently change."""
         with Image.open(FIXTURE) as image:
             result, _box, missing = measure(PATTERN, image)
         self.assertEqual(missing, [])
@@ -94,8 +97,11 @@ class MeasureScaleTest(unittest.TestCase):
             self.assertLess(abs(result[key]), 1.0, key)
 
     @unittest.skipUnless(
-        os.path.exists(FIXTURE), "fixture sc1_5_crop400x480.png is missing")
-    def test_real_capture_exits_zero(self):
+        os.path.exists(FIXTURE),
+        "fixture sc1_5_crop400x480_misdecoded.png is missing")
+    def test_misdecoded_capture_exits_zero(self):
+        """The mis-decoded regression sample still analyses cleanly (old exit
+        status), labelled mis-decoded input — it is not a hardware fact."""
         completed = subprocess.run(
             [sys.executable, MEASURE, FIXTURE],
             capture_output=True, text=True)

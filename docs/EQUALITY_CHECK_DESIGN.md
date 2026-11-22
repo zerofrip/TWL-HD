@@ -352,6 +352,8 @@ Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
 (scale_x 0.9375, scale_y 1.25, offset 30,0; all four corner markers found; marker-centre cross-check within 1 px).
 Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
+**Erratum (2026-11-23):** the EQ-4b capture was decoded as 32-bpp BGRX although the XWD header says `bits_per_pixel=24` (first 14 fields `(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)`); the real layout is 3-byte BGR with `bytes_per_line` 5120, so the Update above (`scale_x 0.9375`, offset 30) is the mis-decoded input's number, not the board's. Corrected single-capture (`vt1b_2`) facts: DS pixel (x,y) at capture (40+1.25x, 1.25y); quads white (255,255,255), grey (132,134,132), red (255,0,0), black (0,0,0), background (66,69,66) ±3 (UNVERIFIED). Invalid: the EQ-4b "pure colours preserved" and the eq4c hypotheses 2/3 (0.75 squeeze, non-identity colour path, DS white (255,251,255)). Valid: the board-connects / numeric-pixels verdict and the eq4c §6 source reading. Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.
+
 **(d) Geometry-level cross-check.** The cheapest check that can catch a real defect. It must
 compare against DeSmuME's own numbers, not the host mock's, because the host mock cannot
 reproduce the DS divider/sqrt/trig tables (`docs/EMULATOR_VALIDATION.md:53-54`). One
@@ -496,6 +498,8 @@ Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
 **Update (2026-11-22):** EQ-4c measured the DS 256×192 image in the EQ-4b capture: 240×240 capture px at x 30..269, y 0..239
 (scale_x 0.9375, scale_y 1.25, offset 30,0; all four corner markers found; marker-centre cross-check within 1 px).
 Report: `docs/reports/eq4c-ds-scale-measurement.md`.
+
+**Erratum (2026-11-23):** the EQ-4b capture was decoded as 32-bpp BGRX although the XWD header says `bits_per_pixel=24` (first 14 fields `(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)`); the real layout is 3-byte BGR with `bytes_per_line` 5120, so the Update above (`scale_x 0.9375`, offset 30) is the mis-decoded input's number, not the board's. Corrected single-capture (`vt1b_2`) facts: DS pixel (x,y) at capture (40+1.25x, 1.25y); quads white (255,255,255), grey (132,134,132), red (255,0,0), black (0,0,0), background (66,69,66) ±3 (UNVERIFIED). Invalid: the EQ-4b "pure colours preserved" and the eq4c hypotheses 2/3 (0.75 squeeze, non-identity colour path, DS white (255,251,255)). Valid: the board-connects / numeric-pixels verdict and the eq4c §6 source reading. Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.
 
 ### EQ-5 — Real-DS qualitative photo comparison (HARDWARE, owner photos only)
 
@@ -725,6 +729,8 @@ Report: `docs/reports/eq4b-cc3dsfs-ds-capture.md`.
 **Update (2026-11-22):** EQ-4c measured the DS 256×192 image in the EQ-4b capture: 240×240 capture px at x 30..269, y 0..239
 (scale_x 0.9375, scale_y 1.25, offset 30,0; all four corner markers found; marker-centre cross-check within 1 px).
 Report: `docs/reports/eq4c-ds-scale-measurement.md`.
+
+**Erratum (2026-11-23):** the EQ-4b capture was decoded as 32-bpp BGRX although the XWD header says `bits_per_pixel=24` (first 14 fields `(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)`); the real layout is 3-byte BGR with `bytes_per_line` 5120, so the Update above (`scale_x 0.9375`, offset 30) is the mis-decoded input's number, not the board's. Corrected single-capture (`vt1b_2`) facts: DS pixel (x,y) at capture (40+1.25x, 1.25y); quads white (255,255,255), grey (132,134,132), red (255,0,0), black (0,0,0), background (66,69,66) ±3 (UNVERIFIED). Invalid: the EQ-4b "pure colours preserved" and the eq4c hypotheses 2/3 (0.75 squeeze, non-identity colour path, DS white (255,251,255)). Valid: the board-connects / numeric-pixels verdict and the eq4c §6 source reading. Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.
 
 **D3 — Is pixel equality a goal at all?**
 **Recommend: only for the "must be equal" rows of section 2.3.** Fidelity to the DS

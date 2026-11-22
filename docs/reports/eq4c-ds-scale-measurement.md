@@ -480,3 +480,60 @@ earlier work (lines 5, 6 and 808; not quoted here). Those lines are untouched
 the appended Update blocks add none.
 
 No `git worktree` command was run. No hardware command was run in this task.
+
+## 8. Erratum (2026-11-23)
+
+Append-only correction. The analysed capture was decoded wrongly:
+`tools/cc3dsfs_capture/xwd2png.py` treated the `xwd -root` screenshot as
+32 bits per pixel ('BGRX') although the file is 24 bpp. The real header is
+(python `struct '>25I'` of the first 100 bytes of a real capture, first 14
+fields):
+
+```
+(107, 7, 2, 24, 1280, 720, 0, 0, 32, 0, 8, 24, 5120, 5)
+```
+
+i.e. `pixmap_depth=24`, width 1280, height 720, `bits_per_pixel=24`
+(index 11), `bytes_per_line=5120` (index 12), `ncolors`/visual-class field 5.
+The data are 3-byte BGR pixels (row stride `bytes_per_line=5120`). Decoding
+them as 4-byte BGRX squeezed the picture horizontally by 3/4 and produced
+repeating R/G/B channel stripes on coloured regions.
+
+Evidence on the same capture (`raw_vt1b_2.xwd`): the old decoder gave a
+non-black top bbox x30..269 (`scale_x` 0.9375 measured from the
+ds-scale-test ROM); the correct decoder gives x40..359, y0..239 (the DS
+256×192 screen shown uniformly 1.25× as 320×240 centred, offset x=40), and the
+quad colours exactly white (255,255,255), explicit grey 16/31 =
+(132,134,132) (= `(16<<3)|(16>>2)`, identity colour path), red (255,0,0),
+black (0,0,0), background (66,69,66) = 5-bit 8 expanded to 66, with ±3
+dither-like variation (**UNVERIFIED**: no cause is offered for that variation).
+
+**Invalidated statements (the measurements were of mis-decoded images).**
+
+- The §3 measured result and §2 raw data: `scale_x=0.937500`,
+  `bbox_x0=30`, offset `(30, 0)` are the mis-decoded input's numbers, not the
+  board's. The fixture `sc1_5_crop400x480.png` is renamed
+  `sc1_5_crop400x480_misdecoded.png` and kept only as a bug-regression sample.
+- §4 hypothesis 2 ("window squeezes horizontally by 0.75") is **invalid** as a
+  measurement; it was inferred from the artefact.
+- §4 hypothesis 3 ("colour path is not identity", "DS white (255,251,255)",
+  "G=251", "0..8 zero levels") is **invalid**; the corrected capture shows an
+  identity path on the sampled quads (white 255,255,255, grey 132,134,132,
+  black 0,0,0).
+- The scene5 colour counts (including yellow/cyan/magenta) taken from these
+  mis-decoded images are invalid; see the append-only pointers in
+  `docs/reports/scene5-colour-diagnosis.md` and
+  `docs/reports/melonds-scene5-check.md`.
+
+**What remains valid.** The capture board connects and shows the DS-mode top
+screen as numeric pixels (§1-2, EQ-4b). The cc3dsfs source reading in §6 is
+unaffected by the decoder bug and stands.
+
+**Corrected geometry/colour facts** (single 2026-11-23 `vt1b_2` capture —
+**single-capture basis**: uniform 1.25× and x offset 40 come from that one
+capture): DS pixel (x, y) appears at capture (40 + 1.25x, 1.25y); quads white
+(255,255,255), explicit grey (132,134,132), red (255,0,0), black (0,0,0),
+background (66,69,66) ±3 (**UNVERIFIED**). A re-capture of the ds-scale-test
+ROM through the fixed decoder is planned and is **not** part of this task.
+
+Report: `docs/reports/eq4d-ds-vertex-colour-hw.md`.

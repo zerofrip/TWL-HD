@@ -322,3 +322,15 @@ HYPOTHESIS, bounded away from black by the owner's photo).**
    melonDS has no vertex alpha and uses `POLYGON_ATTR` alpha
    (`GPU3D_Soft.cpp:531`), which differs from both DeSmuME's forced 0 and our
    `(a+1)/32`.
+
+---
+
+## Update 2026-11-23: capture decode corrected
+
+The cc3dsfs capture colour counts and the `(255,251,255)` DS-white reading cited
+earlier were taken from mis-decoded PNGs (24-bpp XWD decoded as 32-bpp BGRX).
+They are not hardware evidence. The dedicated `tools/ds_vtxcolor_test` ROM,
+captured through the fixed decoder, measures the initial vertex colour as white
+(255,255,255): `docs/reports/eq4d-ds-vertex-colour-hw.md`. That agrees with
+DeSmuME and disagrees with melonDS, on one capture and one loader state
+(HYPOTHESIS, not a settled value).
