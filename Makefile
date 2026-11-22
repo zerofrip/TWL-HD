@@ -1,4 +1,4 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test host-test clean arm11-diag \
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-eq4-hw-compare test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test host-test clean arm11-diag \
 	emu-expected emu-validate emu-validate-tex azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
@@ -589,6 +589,18 @@ test-eq3:
 test-eq-scenes:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_eq_scenes.py'
 
+# arm9v2 STATIC_ANGLE Makefile validation (dry-run only). Run explicitly; the
+# discover pass in `test` sets ARM9V2_STATIC_DISCOVER_SKIP so it is not
+# executed twice.
+test-arm9v2-static:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_arm9v2_static_angle.py'
+
+# EQ-4 hardware-capture comparison suite (tools/eq4_hw_compare.py). Run
+# explicitly; the discover pass in `test` sets EQ4_HW_COMPARE_DISCOVER_SKIP so
+# it is not executed twice.
+test-eq4-hw-compare:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_eq4_hw_compare.py'
+
 # cc3dsfs capture helper suite (tools/cc3dsfs_capture/test_xwd2png.py).
 # Discovered explicitly: the aggregate pass below does not descend into
 # tools/cc3dsfs_capture (no __init__.py).
@@ -610,8 +622,11 @@ test-ds-vtxcolor-test:
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli \
 	tests/host/build/tex_capture_cli \
-	test-eq2 test-eq3 test-eq-scenes test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test
-	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
+	test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-eq4-hw-compare \
+	test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test
+	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 \
+	ARM9V2_STATIC_DISCOVER_SKIP=1 EQ4_HW_COMPARE_DISCOVER_SKIP=1 \
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:
 	$(MAKE) -C arm7 clean

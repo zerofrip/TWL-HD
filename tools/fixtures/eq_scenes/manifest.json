@@ -61,6 +61,26 @@
       "eq3_reason": "textured scene: eq3 has no texture model and the geometry list carries no texture state"
     },
     {
+      "scene": "scene5-static0",
+      "build": "SCENE=5 STATIC_ANGLE=0 AUTODUMP_FRAME=240",
+      "harness": "harness_s5_st0_f240.txt",
+      "ours": "ours_s5_st0_f240.txt",
+      "expected_polys": 1,
+      "expected_verts": 4,
+      "eq3": "not-comparable",
+      "eq3_reason": "fixed-angle textured scene: eq3 has no white face class and no texture model, so its six cube face classes collapse the white textured cells onto magenta (tool-model limitation)"
+    },
+    {
+      "scene": "scene5-static30",
+      "build": "SCENE=5 STATIC_ANGLE=30 AUTODUMP_FRAME=240",
+      "harness": "harness_s5_st30_f240.txt",
+      "ours": "ours_s5_st30_f240.txt",
+      "expected_polys": 1,
+      "expected_verts": 4,
+      "eq3": "not-comparable",
+      "eq3_reason": "fixed-angle textured scene: eq3 has no white face class and no texture model, so its six cube face classes collapse the white textured cells onto magenta (tool-model limitation)"
+    },
+    {
       "scene": "cubes",
       "build": "CUBES=2 AUTODUMP_FRAME=240",
       "harness": "harness_c2_f240.txt",

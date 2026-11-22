@@ -334,14 +334,254 @@ renderer, tolerance or harness/DeSmuME file was modified.
   demo ROMs and confirmed by each harness header; the driver checks it per row
   and marks a different frame NOT-COMPARABLE.
 
-## 6. Tests
+## 6. Fixed-angle (`STATIC_ANGLE`) textured scene (2026-11-23)
+
+The rotating scene 5 can be frozen at a build-time angle so every frame is
+identical. This is the reference-picture input for the EQ-4 hardware capture
+comparison (`docs/EQ4_HW_COMPARE.md`); the hardware run itself is a later,
+separate step.
+
+### 6.1 Build option
+
+`arm9v2/Makefile` composes `AUTODUMP` -> `VP` -> `CUBES` -> `SCENE` ->
+`STATIC_ANGLE` -> `DIAGSCREEN`. `STATIC_ANGLE` must be empty (the default) or
+a decimal integer in 0..359; anything else stops the build with
+
+```
+*** STATIC_ANGLE must be empty or a decimal integer in 0..359 (got: 360).  Stop.
+```
+
+The block appends `-st<angle>` to both `TARGET` and `BUILD` and defines
+`-DTWLHD_DEMO_STATIC_ANGLE_DEG=<angle>`. Unset/empty leaves TARGET, BUILD and
+CFLAGS untouched, so the default ROMs stay byte-identical (6.3). The define is
+accepted but unused when `SCENE != 5`, the same acceptance rule as `VP_*`.
+`tools/test_arm9v2_static_angle.py` (target `make test-arm9v2-static`) dry-runs
+the eight validation cases.
+
+| Static build variables (in `arm9v2/`) | ROM |
+|---|---|
+| `SCENE=5 STATIC_ANGLE=0 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s5-st0.nds` |
+| `SCENE=5 STATIC_ANGLE=30 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s5-st30.nds` |
+| `SCENE=5 STATIC_ANGLE=0` (plain, hardware) | `twlhd-arm9v2-s5-st0.nds` |
+| `SCENE=5 STATIC_ANGLE=30` (plain, hardware) | `twlhd-arm9v2-s5-st30.nds` |
+
+### 6.2 Angles and their justification
+
+The textured quad lies in the z = 0 plane (`demo_frame.cpp:209-215`), the
+camera is on +z looking at the origin (`:359`), and the animated build applies
+`glRotateXi(angle); glRotateYi(angle)` about the same X-then-Y pair
+(`:360-361`). So 0 degrees leaves the quad face-on to the camera and 30
+degrees is an oblique view about the same two axes. Degrees are converted to
+the DS binary angle convention (32768 == 360, `main.cpp:262-263`) with integer
+truncation: `degrees * 32768 / 360` (30 -> 2730, 315 -> 28672).
+
+```
+$ sed -n '357,363p' arm9v2/source/demo_frame.cpp
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
+#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG) && TWLHD_DEMO_SCENE == 5
+    /* Fixed modelview angle (STATIC_ANGLE=0..359 in the Makefile): the
+     * animated build rotates by the frame counter, in binary angle units
+     * (32768 == 360 degrees, main.cpp:262-263). Degrees -> binary units with
+$ grep -n 'glRotateXi\|glRotateYi' arm9v2/source/demo_frame.cpp
+367:    glRotateXi((int)((unsigned)TWLHD_DEMO_STATIC_ANGLE_DEG * 32768u / 360u));
+368:    glRotateYi((int)((unsigned)TWLHD_DEMO_STATIC_ANGLE_DEG * 32768u / 360u));
+370:    glRotateXi((int)angle);
+371:    glRotateYi((int)angle);
+421:    glRotateXi((int)angle);
+422:    glRotateYi((int)angle);
+474:        glRotateXi((int)angle);
+475:        glRotateYi((int)angle);
+```
+
+### 6.3 Byte-identity of the existing ROMs
+
+The pair was built before the edit and rebuilt from `make -C arm9v2 clean`
+after it. Both pairs are equal; the scene5 value matches the recorded
+`tools/fixtures/eq_scenes/README.md` baseline `35a50aad...`.
+
+Before:
+
+```
+$ make -C arm9v2 -j4
+$ sha256sum arm9v2/twlhd-arm9v2.nds
+d7427286347d809c17376af6c5037b0d08e3de28f5b8c08d42f3e747450cfb6a  arm9v2/twlhd-arm9v2.nds
+$ make -C arm9v2 -j4 SCENE=5 AUTODUMP_FRAME=240
+$ sha256sum arm9v2/twlhd-arm9v2-autodump-s5.nds
+35a50aadc30dbf26d7fa389192a908024cffaa515614c378e389e3efd45d82bd  arm9v2/twlhd-arm9v2-autodump-s5.nds
+```
+
+After:
+
+```
+$ make -C arm9v2 clean && make -C arm9v2 -j4
+$ sha256sum arm9v2/twlhd-arm9v2.nds
+d7427286347d809c17376af6c5037b0d08e3de28f5b8c08d42f3e747450cfb6a  arm9v2/twlhd-arm9v2.nds
+$ make -C arm9v2 -j4 SCENE=5 AUTODUMP_FRAME=240
+$ sha256sum arm9v2/twlhd-arm9v2-autodump-s5.nds
+35a50aadc30dbf26d7fa389192a908024cffaa515614c378e389e3efd45d82bd  arm9v2/twlhd-arm9v2-autodump-s5.nds
+```
+
+### 6.4 EMULATOR chain and verdicts (2026-11-23)
+
+Commands (scratch directory, ROMs/PPMs not committed):
+
+```
+$ make -C arm9v2 -j4 SCENE=5 STATIC_ANGLE=0 AUTODUMP_FRAME=240
+$ sha256sum arm9v2/twlhd-arm9v2-autodump-s5-st0.nds
+8f4d506fbbe92e693e0727a3c71e7c9392f1cbb677a37d350d8c15e87b8d960e
+$ $HOME/3ds/twlhd-desmume-harness/harness \
+    arm9v2/twlhd-arm9v2-autodump-s5-st0.nds 242 --out harness.txt --ppm harness.ppm
+$ DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-build/cli/desmume-cli DESMUME_TIMEOUT=45 \
+    tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-s5-st0.nds capture
+$ tests/host/build/gx_interp_cli --eq2 capture/twlhd_frame_v2.bin > ours.txt
+$ python3 tools/eq2_compare.py harness.txt ours.txt
+PASS frame=242 polygons=1 vertices=4
+x: worst 0 16.16 px tol 65536 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+y: worst 0 16.16 px tol 65536 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+z: worst 0 0.31 tol 1073741 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+w: worst 0 20.12 tol 16 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+r: worst 0 6-bit tol 2 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+g: worst 0 6-bit tol 2 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+b: worst 0 6-bit tol 2 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+tex-s: worst 0 12.4 reported, not gated at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+tex-t: worst 0 12.4 reported, not gated at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+$ cp capture/twlhd_frame_v2.bin sd/twlhd_frame.bin
+$ tools/azahar_host/build/azahar_host --core $HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+    --game arm11/twlhd-arm11.3dsx --frames 200 --press A:60-63 --shot 199 \
+    --out azahar --sd-root sd
+$ python3 tools/eq3_compare.py harness.ppm azahar_199.ppm
+MISMATCH colour-g-nominal: 255 > 8 at face magenta
+MISMATCH colour-b-nominal: 28 > 8 at face yellow
+MISMATCH colour-b-nominal: 12 > 8 at face green
+FAIL faces desmume=magenta,red,yellow,green,blue ours=magenta,red,yellow,green,blue
+```
+
+For `STATIC_ANGLE=30` the same commands produce ROM sha256
+`30337896a415a433376f8478db1ebe973ce401f4bb657d9d9b878bb27ff2063e` and EQ-2:
+
+```
+PASS frame=242 polygons=1 vertices=4
+x: worst 960 16.16 px tol 65536 at poly 0 (rawpoly 0) vertex 1 (our vertex 5)
+y: worst 743 16.16 px tol 65536 at poly 0 (rawpoly 0) vertex 2 (our vertex 0)
+z: worst 122797 0.31 tol 2011915 at poly 0 (rawpoly 0) vertex 1 (our vertex 5)
+w: worst 0 20.12 tol 16 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+r: worst 0 6-bit tol 2 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+g: worst 0 6-bit tol 2 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+b: worst 0 6-bit tol 2 at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+tex-s: worst 0 12.4 reported, not gated at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+tex-t: worst 0 12.4 reported, not gated at poly 0 (rawpoly 0) vertex 0 (our vertex 2)
+```
+
+EQ-3 for `STATIC_ANGLE=30`:
+
+```
+MISMATCH bbox-bottom: 17 > 2 at face magenta
+MISMATCH colour-g-nominal: 255 > 8 at face magenta
+MISMATCH centroid-y: 2.146264130135094 > 2 at face yellow
+MISMATCH colour-b-nominal: 28 > 8 at face yellow
+MISMATCH colour-b-nominal: 12 > 8 at face green
+MISMATCH centroid-x: 2.1890537858020593 > 2 at face blue
+FAIL faces desmume=magenta,red,yellow,green,blue ours=magenta,red,yellow,green,blue
+```
+
+The EQ-3 FAIL is a **tool-model limitation, not a pipeline defect**:
+`eq3_compare` has six cube face classes and no white class, so the white
+textured cells collapse onto magenta (distance tie at 255^2) and then fail the
+declared-class interior colour check; it also has no texture model. The
+manifest rows therefore declare `eq3: "not-comparable"` with that reason, the
+same shape as the rotating scene5 row; the actual verdict lines above are
+quoted and nothing is forced to PASS.
+
+### 6.5 Static-ness proof
+
+The harness PPM is identical at two different frames, so the ROM itself does
+not rotate:
+
+```
+$ $HOME/3ds/twlhd-desmume-harness/harness arm9v2/twlhd-arm9v2-autodump-s5-st0.nds 102 \
+    --out harness_f102.txt --ppm harness_f102.ppm
+$ $HOME/3ds/twlhd-desmume-harness/harness arm9v2/twlhd-arm9v2-autodump-s5-st0.nds 242 \
+    --out harness.txt --ppm harness.ppm
+$ sha256sum harness_f102.ppm harness.ppm
+799d6bada988e642540cede5a1e7bebb569a99f2722dc08927ecf8effb78a1d1  harness_f102.ppm
+799d6bada988e642540cede5a1e7bebb569a99f2722dc08927ecf8effb78a1d1  harness.ppm
+```
+
+`STATIC_ANGLE=30` gives the same pair at
+`4b10a82e9fe94488dce1309b982aee32a033b2fb25d19e0630abc8e9392549aa`.
+
+### 6.6 Committed fixtures
+
+Two manifest rows, `scene5-static0` and `scene5-static30`, were added to
+`tools/fixtures/eq_scenes/manifest.json`; the `SCENES` tuple in
+`tools/eq_scenes.py` is unchanged, so the documented full-run mode does not
+require the static scratch ROMs.
+
+| File | SHA-256 |
+|---|---|
+| `harness_s5_st0_f240.txt` | `b8bd5c33fdf8f0627ac20e7c679d0a3f1dc4706eca9c78482930c95987f34148` |
+| `ours_s5_st0_f240.txt` | `aa6f9b0cb9e9f20e8f52a8106a6fd43bfabae4adc0e1bbc1ee8c92c86d0e274f` |
+| `harness_s5_st30_f240.txt` | `197bf7f78694eb51dfc5534111c0413aed9e8009d3f94d092dde59c0680b2e63` |
+| `ours_s5_st30_f240.txt` | `09caa4574c21ff6a1a7ea08f0f1ed1302b1211a2fb346c6855d1a98b00150a60` |
+| `harness_s5_st0_f240.png` | `dce0a5c7f6decfdd78c0d65547f43e840818fe41bcf55c1f6dd68b51a8e848bb` |
+| `harness_s5_st30_f240.png` | `5be2f7e0d772421b814af1712f2197c2d087b0363ea806e7189113758421bd35` |
+
+The PNGs are the 256x192 harness PPMs converted losslessly with PIL; they are
+431 B and 1396 B, well under the 100 KB fixture limit. They are reference
+pictures only, not committed PPMs.
+
+### 6.7 Plain hardware ROMs (built, not run, not committed)
+
+Build recipe chosen: the same Makefile variables without `AUTODUMP_FRAME`, i.e.
+`make -C arm9v2 SCENE=5 STATIC_ANGLE=<A>`.
+
+```
+$ sha256sum arm9v2/twlhd-arm9v2-s5-st0.nds arm9v2/twlhd-arm9v2-s5-st30.nds
+345bc8efc51706c8e5cc5b4cfb8f49a226c5fe93dc0154fb59aadad9bc937081  arm9v2/twlhd-arm9v2-s5-st0.nds
+1b6cb5c10fe32e85f2c498d145240836476c40360a9a86f9a8dc9df44944a105  arm9v2/twlhd-arm9v2-s5-st30.nds
+$ ndstool -i arm9v2/twlhd-arm9v2-s5-st0.nds
+Header information:
+0x00	Game title               	HOMEBREW
+0x0C	Game code                	####
+0x12	Unit code                	0x02
+0x14	Device capacity          	0x01 (2 Mbit)
+0x20	ARM9 ROM offset          	0x4000
+0x24	ARM9 entry address       	0x2004800
+0x2C	ARM9 code size           	0x21FEC
+0x30	ARM7 ROM offset          	0x26000
+0x3C	ARM7 code size           	0xB374
+```
+
+The `STATIC_ANGLE=30` plain ROM differs only in the ARM9 code size
+(`0x21FF4`) and the SHA-256 above. The earlier `s5cull-plain.nds` was built in
+an out-of-repo staging directory (docs/reports/eq4e-scene5-hw-capture.md
+records only its SHA-256 prefix `1bde3700`); its exact recipe is
+**UNVERIFIED**, so the plain build above is documented as the chosen recipe
+and no claim is made that it reproduces that file.
+
+### 6.8 What section 6 does not prove
+
+- **DS hardware.** All chain results are DeSmuME/Azahar EMULATOR output. The
+  plain ROMs are build evidence only; neither was run on a console.
+- **Texture/structure equality.** EQ-3 is a tool-model FAIL (6.4), not a
+  picture match; the geometry and vertex colour match (EQ-2) and the static
+  reference is stable (6.5).
+- **Capture-board behaviour.** The EQ-4 comparison tool
+  (`docs/EQ4_HW_COMPARE.md`) exists, but the real hardware capture is a later
+  owner step and is UNVERIFIED here.
+
+
+## 7. Tests
 
 `tools/test_eq_scenes.py` runs via `make test-eq-scenes`; the discover pass in
 `make test` sets `EQ_SCENES_DISCOVER_SKIP` so it executes exactly once. It uses
 only the committed text fixtures in `tools/fixtures/eq_scenes/` (no harness,
 DeSmuME or Azahar needed):
 
-- the seven-row manifest table: real scene-5 PASS, compared counts 6/24 etc.,
+- the nine-row manifest table: real scene-5 PASS (including the two
+  `STATIC_ANGLE` rows), compared counts 6/24 etc.,
   `0 compared (reference 10/30)` for the rows where EQ-2 did not run, and the
   NOT-COMPARABLE rows; plus a negative test that a perturbed black-vs-white
   `ours_s5_f240.txt` still FAILs with `MISMATCH r: 63 > 2`;

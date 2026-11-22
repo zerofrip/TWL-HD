@@ -139,12 +139,15 @@ class EqScenesManifestTest(unittest.TestCase):
         result = run_tool("--manifest", MANIFEST)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for scene in ("cube", "scene1", "scene2", "scene3", "scene4",
-                      "scene5", "cubes"):
+                      "scene5", "scene5-static0", "scene5-static30", "cubes"):
             self.assertIn("%-8s" % scene, result.stdout)
         self.assertIn("polys/verts", result.stdout)
-        # Scene5 now matches the DeSmuME white-initial-colour model.
+        # Scene5 now matches the DeSmuME white-initial-colour model, including
+        # the two fixed-angle STATIC_ANGLE builds (same geometry/colour).
         self.assertIn("scene5: PASS", result.stdout)
-        self.assertIn("summary: 7 rows, 4 PASS, 0 FAIL, 3 NOT-COMPARABLE",
+        self.assertIn("scene5-static0: PASS", result.stdout)
+        self.assertIn("scene5-static30: PASS", result.stdout)
+        self.assertIn("summary: 9 rows, 6 PASS, 0 FAIL, 3 NOT-COMPARABLE",
                       result.stdout)
         # The old colour failure is gone; the negative test below guards the
         # INITIAL_STATE_UNKNOWN gap.

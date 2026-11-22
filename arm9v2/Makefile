@@ -152,6 +152,30 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
+# Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the textured scene 5
+# modelview rotation with a fixed angle (degrees) instead of the frame counter,
+# so every frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS
+# untouched so the default ROM is byte-identical. This block runs after the
+# AUTODUMP, VP, CUBES and SCENE blocks, so the suffixes compose; the define is
+# accepted but unused when SCENE != 5 (the same acceptance rule as VP).
+# The DS binary angle convention is 32768 == 360 degrees (main.cpp:262-263),
+# so the source converts degrees to binary units with truncation:
+# angle = degrees * 32768 / 360 (30 -> 2730, 315 -> 28672).
+#---------------------------------------------------------------------------------
+STATIC_ANGLE_STRIPPED	:=	$(strip $(STATIC_ANGLE))
+ifneq ($(STATIC_ANGLE_STRIPPED),)
+STATIC_ANGLE_OK := $(shell echo '$(STATIC_ANGLE_STRIPPED)' | grep -Eq '^(0|[1-9][0-9]*)$$' && test $(STATIC_ANGLE_STRIPPED) -le 359 && echo ok)
+ifeq ($(STATIC_ANGLE_OK),)
+$(error STATIC_ANGLE must be empty or a decimal integer in 0..359 (got: $(STATIC_ANGLE)))
+endif
+TARGET		:=	$(TARGET)-st$(STATIC_ANGLE_STRIPPED)
+BUILD		:=	$(BUILD)-st$(STATIC_ANGLE_STRIPPED)
+CFLAGS		+=	-DTWLHD_DEMO_STATIC_ANGLE_DEG=$(STATIC_ANGLE_STRIPPED)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_STATIC_ANGLE_DEG=$(STATIC_ANGLE_STRIPPED)
+endif
+
+#---------------------------------------------------------------------------------
 # Optional diagnostic build: DIAGSCREEN=1..9 produces a variant ROM that changes
 # exactly one suspected display factor so the owner can bisect on real hardware.
 # Unset/empty/0 leaves TARGET, BUILD and CFLAGS untouched so the default ROM is
@@ -199,7 +223,7 @@ $(shell mkdir -p $(BUILD))
 
 # make cannot see -D changes in the object prerequisites, so record the define
 # set in the variant BUILD directory and drop stale objects when it changes.
-TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
+TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_STATIC_ANGLE=$(STATIC_ANGLE_STRIPPED) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
 ifneq ($(strip $(TWLHD_FLAGS_STAMP)),$(strip $(shell cat $(BUILD)/flags.stamp 2>/dev/null)))
 $(shell rm -f $(BUILD)/*.o $(BUILD)/*.d)
 endif
@@ -262,6 +286,8 @@ clean:
 	@rm -f twlhd-arm9v2*-s[0-9]*.elf twlhd-arm9v2*-s[0-9]*.nds twlhd-arm9v2*-s[0-9]*.arm9 twlhd-arm9v2*-s[0-9]*.guard twlhd-arm9v2*-s[0-9]*.guard.nm twlhd-arm9v2*-s[0-9]*.map
 	@rm -fr build-diag* build-*-diag*
 	@rm -f twlhd-arm9v2*-diag*.elf twlhd-arm9v2*-diag*.nds twlhd-arm9v2*-diag*.arm9 twlhd-arm9v2*-diag*.guard twlhd-arm9v2*-diag*.guard.nm twlhd-arm9v2*-diag*.map
+	@rm -fr build-*st[0-9]*
+	@rm -f twlhd-arm9v2*st[0-9]*.elf twlhd-arm9v2*st[0-9]*.nds twlhd-arm9v2*st[0-9]*.arm9 twlhd-arm9v2*st[0-9]*.guard twlhd-arm9v2*st[0-9]*.guard.nm twlhd-arm9v2*st[0-9]*.map
 
 #---------------------------------------------------------------------------------
 else

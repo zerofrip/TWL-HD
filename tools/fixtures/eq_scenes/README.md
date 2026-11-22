@@ -25,6 +25,12 @@ repository; the tooling remains Apache-2.0, the same posture as
 | `ours_s4_f240.txt` | `19ded23d37ce3c8394a4e9683c71d4054903e7598c1b0d08836abe3742e99777` |
 | `harness_s5_f240.txt` | `7d6b34d41134ed31bedb818bdc6de2d43bff0becb513ed6efe58cd30e918a6a0` |
 | `ours_s5_f240.txt` | `f41557ef6149c5786d6660b6f2ddd6a03e1fdfafab83f0fd0261a4dfdfd11c0b` |
+| `harness_s5_st0_f240.txt` | `b8bd5c33fdf8f0627ac20e7c679d0a3f1dc4706eca9c78482930c95987f34148` |
+| `ours_s5_st0_f240.txt` | `aa6f9b0cb9e9f20e8f52a8106a6fd43bfabae4adc0e1bbc1ee8c92c86d0e274f` |
+| `harness_s5_st0_f240.png` | `dce0a5c7f6decfdd78c0d65547f43e840818fe41bcf55c1f6dd68b51a8e848bb` |
+| `harness_s5_st30_f240.txt` | `197bf7f78694eb51dfc5534111c0413aed9e8009d3f94d092dde59c0680b2e63` |
+| `ours_s5_st30_f240.txt` | `09caa4574c21ff6a1a7ea08f0f1ed1302b1211a2fb346c6855d1a98b00150a60` |
+| `harness_s5_st30_f240.png` | `5be2f7e0d772421b814af1712f2197c2d087b0363ea806e7189113758421bd35` |
 | `harness_c2_f240.txt` | `5d0497d03c9729243286f36cb499185cb8dc74543d41574a2dc59845e1dba0d9` |
 | `manifest.json` | `aca18a079521c9df42d0cab7532d94326b3b7ebc80181fc84bdbdd17d19ea917` |
 | `manifest_pass.json` | `1b89eb0c91b9a8eb60fcdc899d853bb5e1396738d2b4bc325233eae4637b7c57` |
@@ -37,6 +43,8 @@ Build variables (arm9v2/Makefile) and ROM SHA-256 of the run:
 | scene2 | `SCENE=2 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s2.nds` | `d84f210b6f92c6a5c7a35c76dcfcaa0a142524ae578f974812cb6ae04a4097ed` |
 | scene4 | `SCENE=4 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s4.nds` | `a2297c91e9a2065191a8cb3b189c66fcfc81114864ff41cde38c37b4d0e62cf9` |
 | scene5 | `SCENE=5 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s5.nds` | `35a50aadc30dbf26d7fa389192a908024cffaa515614c378e389e3efd45d82bd` |
+| scene5-static0 | `SCENE=5 STATIC_ANGLE=0 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s5-st0.nds` | `8f4d506fbbe92e693e0727a3c71e7c9392f1cbb677a37d350d8c15e87b8d960e` |
+| scene5-static30 | `SCENE=5 STATIC_ANGLE=30 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-s5-st30.nds` | `30337896a415a433376f8478db1ebe973ce401f4bb657d9d9b878bb27ff2063e` |
 | cubes | `CUBES=2 AUTODUMP_FRAME=240` | `twlhd-arm9v2-autodump-c2.nds` | `703dcad675871fb7d67d417ff5f2634577c7445f76416761c58ee03f8c582d15` |
 
 The cube row in both manifests reuses the existing real pair in
