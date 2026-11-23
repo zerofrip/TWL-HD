@@ -57,6 +57,23 @@ gate: the largest A1/A2 separation over black is only 7 levels (a = 4), so a
 flat 8-level discrimination gate would make every quad ambiguous.  VOTE_SEP (3)
 is the separate, tighter gate.
 
+Per-channel analysis
+--------------------
+The whole-RGB ``verdict=`` above can be pulled to one convention by a single
+channel.  So for every quad the tool also prints, per channel, the measured 8-bit
+value, the A1/A2 expectations of the 6-bit model and which one is nearer.  The
+expectations are **per channel**: green uses the ``6bit_round`` output
+``round(v6*255/63)``; red and blue use the ``6bit_565`` model ``expand5(v6>>1)``
+(see expected.py).  A channel votes A1/A2 only when its two distances differ by
+>= 2, else ``ambiguous``.  The green votes give ``g_channel_verdict`` (A2 only
+when no quad votes A1 and >= 5 vote A2, symmetric for A1, else UNDECIDED;
+NOT-COMPARABLE when the run is not comparable).  ``6bit_565`` is a **MODEL** of a
+565-quantised display path and a **HYPOTHESIS**; the origin of the red/blue
+5-bit quantisation (DS engine vs 3DS display path) is **UNVERIFIED**.  A
+per-(variant, convention, channel) summed |measured - expected| fit table is
+printed after the verdict.  ``verdict=`` stays a whole-RGB family fit and is
+**not decisive when the channels disagree**; ``verdict_note=`` says so.
+
     python3 measure_alpha.py [--native] <capture.png>
 
 Exit status: 0 decided (A1 or A2); 1 UNDECIDED or NOT-COMPARABLE (report still
@@ -68,7 +85,8 @@ import math
 import os
 import sys
 
-from expected import VARIANTS, expand5, expected8, separations
+from expected import (VARIANTS, VARIANT_565, expand5, expected6_565,
+                      expected8, separations)
 
 try:
     from PIL import Image
@@ -224,6 +242,46 @@ def _quad_deviation(measured, expected):
     return sum(abs(m - e) for m, e in zip(measured, _triple(expected)))
 
 
+PC_CHANNELS = ("R", "G", "B")
+
+
+def _pc_vote(measured, a1, a2):
+    """Per-channel vote: A1/A2 only when the two distances differ by >= 2.
+
+    Returns (vote, d1, d2); ``ambiguous`` covers equal distances and a
+    difference smaller than 2 8-bit levels.
+    """
+    d1 = abs(measured - a1)
+    d2 = abs(measured - a2)
+    if abs(d1 - d2) < 2:
+        return "ambiguous", d1, d2
+    return ("A1" if d1 < d2 else "A2"), d1, d2
+
+
+def _fit_triple(alpha, backdrop5, convention, variant):
+    """Per-channel expected (R, G, B) for a variant under one convention."""
+    if variant == VARIANT_565:
+        return expected6_565(alpha, backdrop5, convention)
+    value = expected8(alpha, backdrop5, convention, variant)
+    return (value, value, value)
+
+
+def _fit_table(quads, variants):
+    """Per-(variant, convention, channel) summed |measured - expected| rows."""
+    rows = []
+    for variant in variants:
+        for convention in ("A1", "A2"):
+            totals = [0, 0, 0]
+            for q in quads:
+                exp = _fit_triple(q["alpha"], q["b5"], convention, variant)
+                for i in range(3):
+                    totals[i] += abs(q["measured"][i] - exp[i])
+            for channel, total in zip(PC_CHANNELS, totals):
+                rows.append(("fit_%s_%s_%s" % (variant, convention, channel),
+                             str(total)))
+    return rows
+
+
 def measure(image, data, mapping):
     """Measure a PIL image.
 
@@ -284,9 +342,21 @@ def measure(image, data, mapping):
         A2 = {v: expected8(alpha, b5, "A2", v) for v in VARIANTS}
         sep = separations(alpha, b5)
         entry = {"name": quad["name"], "measured": rgb, "A1": A1, "A2": A2,
-                 "sep": sep}
+                 "sep": sep, "alpha": alpha, "b5": b5}
         entry["nearest"] = _nearest(rgb, A1[PRIMARY_VARIANT], A2[PRIMARY_VARIANT]) \
             if sep[PRIMARY_VARIANT] >= VOTE_SEP else "ambiguous"
+        # Per-channel 6-bit-family analysis: green uses the 6bit_round output,
+        # red/blue the 6bit_565 model expand5(v6>>1).
+        e565_a1 = expected6_565(alpha, b5, "A1")
+        e565_a2 = expected6_565(alpha, b5, "A2")
+        entry["pc"] = {}
+        for idx, channel in enumerate(PC_CHANNELS):
+            m = rgb[idx]
+            e1 = e565_a1[idx]
+            e2 = e565_a2[idx]
+            vote, _d1, _d2 = _pc_vote(m, e1, e2)
+            entry["pc"][channel] = {"measured": m, "A1": e1, "A2": e2,
+                                    "vote": vote}
         quads.append(entry)
 
         lines.append(("quad_%s_measured" % entry["name"], _fmt_rgb(rgb)))
@@ -296,6 +366,12 @@ def measure(image, data, mapping):
             lines.append(("quad_%s_A2_%s" % (entry["name"], variant),
                           _fmt_rgb([A2[variant]] * 3)))
         lines.append(("quad_%s_nearest" % entry["name"], entry["nearest"]))
+        for channel in PC_CHANNELS:
+            pc = entry["pc"][channel]
+            lines.append(
+                ("quad_%s_pc_%s" % (entry["name"], channel),
+                 "measured=%d A1=%d A2=%d near=%s"
+                 % (pc["measured"], pc["A1"], pc["A2"], pc["vote"])))
 
     if not comparable:
         verdict = "NOT-COMPARABLE"
@@ -322,6 +398,32 @@ def measure(image, data, mapping):
                   "blend floor; output round-half-up(v6*255/63)"))
     lines.extend(best_lines)
     lines.append(("verdict", verdict))
+
+    # --- per-channel 6-bit analysis summary --------------------------------
+    lines.extend(_fit_table(quads, tuple(VARIANTS) + (VARIANT_565,)))
+    g_votes = {"A1": 0, "A2": 0, "ambiguous": 0}
+    for q in quads:
+        g_votes[q["pc"]["G"]["vote"]] += 1
+    if not comparable:
+        g_verdict = "NOT-COMPARABLE"
+    elif g_votes["A1"] == 0 and g_votes["A2"] >= 5:
+        g_verdict = "A2"
+    elif g_votes["A2"] == 0 and g_votes["A1"] >= 5:
+        g_verdict = "A1"
+    else:
+        g_verdict = "UNDECIDED"
+    lines.append(("g_votes_A1", str(g_votes["A1"])))
+    lines.append(("g_votes_A2", str(g_votes["A2"])))
+    lines.append(("g_votes_ambiguous", str(g_votes["ambiguous"])))
+    lines.append(("g_channel_verdict", g_verdict))
+    if g_verdict != verdict:
+        lines.append(("verdict_note",
+                      "channels disagree; G channel=%s but verdict=%s; "
+                      "verdict= is not decisive when channels disagree"
+                      % (g_verdict, verdict)))
+    else:
+        lines.append(("verdict_note",
+                      "G channel and verdict agree (%s)" % verdict))
     return lines, verdict, comparable
 
 

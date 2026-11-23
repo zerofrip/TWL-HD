@@ -19,6 +19,7 @@ import unittest
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 MEASURE = os.path.join(HERE, "measure_alpha.py")
+FIXTURE = os.path.join(HERE, "fixtures", "al1_3_top400x240.png")
 
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
@@ -48,14 +49,23 @@ def ds_colour(ds_x, ds_y, convention, variant="8bit_round"):
         if (quad["x"] <= ds_x < quad["x"] + quad["w"]
                 and quad["y"] <= ds_y < quad["y"] + quad["h"]):
             b5 = BACKDROP_BY_NAME[quad["backdrop"]]["colour5"][0]
+            if variant == expected.VARIANT_565:
+                return expected.expected6_565(quad["alpha"], b5, convention)
             v = expected.expected8(quad["alpha"], b5, convention, variant)
             return (v, v, v)
     for bd in DATA["backdrops"]:
         if (bd["x"] <= ds_x < bd["x"] + bd["w"]
                 and bd["y"] <= ds_y < bd["y"] + bd["h"]):
-            v = expected.expand5(bd["colour5"][0])
+            c5 = bd["colour5"][0]
+            if variant == expected.VARIANT_565:
+                # Opaque surface of colour c5 through the 565 display model.
+                return expected.expected6_565(31, c5, "A2", src5=c5)
+            v = expected.expand5(c5)
             return (v, v, v)
-    v = expected.expand5(DATA["clear5"][0])
+    c5 = DATA["clear5"][0]
+    if variant == expected.VARIANT_565:
+        return expected.expected6_565(31, c5, "A2", src5=c5)
+    v = expected.expand5(c5)
     return (v, v, v)
 
 
@@ -197,6 +207,51 @@ class MeasureAlphaTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 1)
         self.assertIn("verdict=NOT-COMPARABLE", completed.stdout)
 
+    def test_565_a2_capture_g_channel_a2(self):
+        lines, _verdict, comparable = measure_alpha.measure(
+            synthetic_capture("A2", expected.VARIANT_565), DATA, MAPPING)
+        report = report_dict(lines)
+        self.assertTrue(comparable)
+        self.assertEqual(report["g_votes_A1"], "0")
+        self.assertGreaterEqual(int(report["g_votes_A2"]), 5)
+        self.assertEqual(report["g_channel_verdict"], "A2")
+
+    def test_565_a1_capture_g_channel_a1(self):
+        lines, _verdict, comparable = measure_alpha.measure(
+            synthetic_capture("A1", expected.VARIANT_565), DATA, MAPPING)
+        report = report_dict(lines)
+        self.assertTrue(comparable)
+        self.assertEqual(report["g_votes_A2"], "0")
+        self.assertGreaterEqual(int(report["g_votes_A1"]), 5)
+        self.assertEqual(report["g_channel_verdict"], "A1")
+
+    def test_flat_grey_g_channel_not_comparable(self):
+        image = Image.new("RGB", (400, 240), (128, 128, 128))
+        lines, verdict, comparable = measure_alpha.measure(
+            image, DATA, MAPPING)
+        report = report_dict(lines)
+        self.assertFalse(comparable)
+        self.assertEqual(verdict, "NOT-COMPARABLE")
+        self.assertEqual(report["geometry_found"], "0")
+        self.assertEqual(report["g_channel_verdict"], "NOT-COMPARABLE")
+
+    def test_real_fixture_g_channel_a2(self):
+        """Pinned literals from the quoted real-hardware run (report eq4i)."""
+        image = Image.open(FIXTURE)
+        image.load()
+        lines, verdict, comparable = measure_alpha.measure(
+            image, DATA, MAPPING)
+        report = report_dict(lines)
+        self.assertTrue(comparable)
+        self.assertEqual(report["g_votes_A1"], "0")
+        self.assertEqual(report["g_votes_A2"], "10")
+        self.assertEqual(report["g_votes_ambiguous"], "4")
+        self.assertEqual(report["g_channel_verdict"], "A2")
+        self.assertEqual(verdict, "A1")  # whole-RGB artefact is preserved
+        self.assertIn("not decisive", report["verdict_note"])
+        self.assertEqual(report["fit_6bit_565_A2_R"], "0")
+        self.assertEqual(report["fit_6bit_565_A2_B"], "0")
+
 
 class VerdictLogicTest(unittest.TestCase):
     """Pure classifier-logic tests that do not need PIL."""
@@ -210,6 +265,15 @@ class VerdictLogicTest(unittest.TestCase):
                 "sep": {"v": 0}}
         self.assertEqual(measure_alpha._variant_verdict([quad], "v"),
                          "UNDECIDED")
+
+    def test_pc_vote_ambiguity_threshold(self):
+        # Equal distances and a difference < 2 are ambiguous.
+        self.assertEqual(measure_alpha._pc_vote(10, 5, 15)[0], "ambiguous")
+        self.assertEqual(measure_alpha._pc_vote(10, 8, 13)[0], "ambiguous")
+        self.assertEqual(measure_alpha._pc_vote(10, 6, 14)[0], "ambiguous")
+        # A distance difference of >= 2 votes for the nearer side.
+        self.assertEqual(measure_alpha._pc_vote(10, 8, 20)[0], "A1")
+        self.assertEqual(measure_alpha._pc_vote(10, 20, 8)[0], "A2")
 
     def _quad(self, measured, a1, a2):
         return {"measured": measured,

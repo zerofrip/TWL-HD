@@ -250,3 +250,5 @@ Full commands and complete output: report §5.
 Full corrected output: report §5.2; the suite is 43 tests.
 
 **Update (2026-11-23):** repair 4 trimmed duplicated report text (no code or test change) and relabelled the §5.2/README §11 output-stage sentence HYPOTHESIS/UNVERIFIED; the total diff vs `main` is now below the 117,760-byte limit (report §10).
+
+**Update (2026-11-23):** EQ-4i measured the convention on real hardware (one New 3DS DS-mode run, one capture session, one ROM): the fixture `tools/ds_alpha_test/fixtures/al1_3_top400x240.png` makes the current tool report `verdict=A1`, but that is a classifier-model artefact — the green channel is the DeSmuME 6-bit **A2** value on the decisive quads (`g_channel_verdict=A2`, `g_votes_A1=0 g_votes_A2=10 g_votes_ambiguous=4`) and red/blue are the 5-bit quantisation of those 6-bit values (`6bit_565` R/B fit deviation 0 on all 14 quads). The `6bit_565` model is a HYPOTHESIS and the origin of the R/B quantisation is UNVERIFIED. Full output and labels: `docs/reports/eq4i-alpha-hw-result.md`.

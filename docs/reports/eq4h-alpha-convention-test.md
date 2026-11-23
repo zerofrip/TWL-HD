@@ -785,3 +785,14 @@ FACT — the total diff against `main` is below the 117,760-byte hard limit:
 $ git diff main | wc -c
 117609
 ```
+
+## 11. Note (2026-11-23): the hardware `verdict=A1` artefact
+
+EQ-4i measured the same ROM on real hardware (one New 3DS DS-mode run, one
+capture session, one ROM) and shows that the whole-RGB `verdict=A1` discussed
+above is a classifier-model artefact on hardware too: the green channel of the
+capture matches the 6-bit **A2** expectation on the decisive quads while
+red/blue match the 5-bit quantisation of those 6-bit values, so no scalar
+family can fit and the total-deviation vote lands on `5bit_round/A1`. This note
+is appended only; the body above is unchanged. See
+`docs/reports/eq4i-alpha-hw-result.md`.

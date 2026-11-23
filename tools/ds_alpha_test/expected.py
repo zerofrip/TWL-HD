@@ -23,6 +23,16 @@ hardware rounds and where it drops to 5 bits:
     framebuffer (5->6 ``material_5bit_to_6bit`` and 6->8
     ``material_6bit_to_8bit``) and is a **HYPOTHESIS** for real hardware.
 
+A fourth, *per-channel* model ``6bit_565`` is provided but deliberately kept
+out of ``VARIANTS`` (that tuple drives the scalar tables and the 565 model is a
+triple).  It models a 565-quantised display path on top of the 6-bit blend:
+``R = B = expand5(v6>>1)`` and ``G = round_half_up(v6*255/63)``, i.e. red and
+blue keep only 5 of the 6 bits while green keeps all 6.  ``expected6_565``
+returns that ``(R, G, B)`` triple; ``expected6`` returns the shared blended
+``v6``.  This is a **MODEL** of a 565-quantised display path and a
+**HYPOTHESIS**; the origin of the red/blue 5-bit quantisation (the DS engine vs
+the 3DS display path) is **UNVERIFIED**.
+
 Rounding is always **round-half-up** (``floor(x + 0.5)``), never Python's
 banker's rounding, so the printed tables are reproducible.  ``floor`` variants
 are included to show how much a truncating rasteriser would move the result.
@@ -44,6 +54,9 @@ QUADS_JSON = os.path.join(HERE, "quads.json")
 ALPHAS = (4, 8, 12, 16, 20, 24, 28)
 VARIANTS = ("5bit_round", "5bit_floor", "8bit_round", "8bit_floor",
             "6bit_round")
+# Per-channel 565 model, intentionally NOT in VARIANTS: VARIANTS indices drive
+# the scalar expected8/separations contract, while this one is an (R,G,B) triple.
+VARIANT_565 = "6bit_565"
 CONVENTIONS = ("A1", "A2")
 
 # Best-case separation (8-bit levels) below which a quad cannot reliably
@@ -81,24 +94,48 @@ def weight(alpha, convention):
     raise ValueError("convention must be A1 or A2: %r" % (convention,))
 
 
+def expected6(alpha, backdrop5, convention, src5=31):
+    """Blended 6-bit intermediate ``v6`` of the DeSmuME-style pipeline.
+
+    This is the value ``expected8(..., "6bit_round")`` rounds to 8 bits.  A2 is
+    DeSmuME-exact (``alpha = a+1``, integer blend, ``>>5``); A1 is the
+    counterfactual ``floor(w*S6 + (1-w)*B6)``.  HYPOTHESIS for real hardware.
+    """
+    if convention not in CONVENTIONS:
+        raise ValueError("convention must be A1 or A2: %r" % (convention,))
+    src6 = expand6(src5)
+    back6 = expand6(backdrop5)
+    if convention == "A2":
+        alpha6 = alpha + 1
+        v6 = (alpha6 * src6 + (32 - alpha6) * back6) >> 5
+    else:
+        w = weight(alpha, convention)
+        v6 = int(math.floor(w * src6 + (1.0 - w) * back6))
+    return max(0, min(63, v6))
+
+
+def expected6_565(alpha, backdrop5, convention, src5=31):
+    """Per-channel ``(R, G, B)`` triple for a 565-quantised display path.
+
+    ``R = B = expand5(v6>>1)`` (5 of the 6 bits) and ``G = round(v6*255/63)``
+    (all 6 bits), where ``v6 = expected6(...)``.  **MODEL** of a 565-quantised
+    display path, **HYPOTHESIS**; the origin of the R/B 5-bit quantisation (DS
+    engine vs 3DS display path) is **UNVERIFIED**.
+    """
+    v6 = expected6(alpha, backdrop5, convention, src5)
+    rb = expand5(v6 >> 1)
+    return (rb, round_half_up(v6 * 255.0 / 63.0), rb)
+
+
 def expected8(alpha, backdrop5, convention, variant, src5=31):
     """Expected 8-bit display value of one blended channel."""
     if variant not in VARIANTS:
         raise ValueError("unknown variant: %r" % (variant,))
     w = weight(alpha, convention)
     if variant == "6bit_round":
-        src6 = expand6(src5)
-        back6 = expand6(backdrop5)
-        if convention == "A2":
-            # DeSmuME-exact: alpha = a+1, integer blend in 6-bit units, >>5.
-            alpha6 = alpha + 1
-            v6 = (alpha6 * src6 + (32 - alpha6) * back6) >> 5
-        else:
-            # Counterfactual A1 (no source basis); floor mirrors the >>5 floor.
-            v6 = int(math.floor(w * src6 + (1.0 - w) * back6))
-        v6 = max(0, min(63, v6))
         # HYPOTHESIS output stage: round-half-up(v6*255/63).
-        return round_half_up(v6 * 255.0 / 63.0)
+        return round_half_up(expected6(alpha, backdrop5, convention, src5)
+                             * 255.0 / 63.0)
     if variant.startswith("5bit"):
         raw5 = w * src5 + (1.0 - w) * backdrop5
         if variant == "5bit_round":
@@ -163,6 +200,10 @@ def _print_formula():
           "(material_5bit_to_6bit / material_6bit_to_8bit, "
           "utils/colorspacehandler/colorspacehandler.cpp:97-134) -- "
           "HYPOTHESIS for real hardware, NOT a hardware measurement")
+    print("6bit_565 : R = B = expand5(v6>>1) ; G = round_half_up(v6*255/63) "
+          "with v6 from 6bit_round -- MODEL of a 565-quantised display path, "
+          "HYPOTHESIS; the origin of the R/B 5-bit quantisation "
+          "(DS engine vs 3DS display path) is UNVERIFIED")
     print("rounding: round-half-up = floor(x + 0.5)")
     print()
 
