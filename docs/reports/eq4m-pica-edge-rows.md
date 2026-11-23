@@ -957,6 +957,15 @@ which of the two produces the measured mapping is not decided here.
 - The row-0 artefact (§2.7) should be understood before any future host-based
   per-row claim; it is one row and does not affect §2.4-§2.6.
 
+**Update (2026-11-24):** EQ-4n resolved the §3.3/§5.2 UNVERIFIED split: the
+one-capture-row (`+0.8000` DS) shift and the row-0 artefact are the Azahar
+libretro core's software presentation — `renderer_software.cpp` reads the top
+framebuffer with a one-column error (`stride-x`, i.e. columns 240..1 instead
+of 239..0) and `libretro_window.cpp` maps that column axis to the 400x240 PPM
+rows; `tools/azahar_host` itself copies rows verbatim. The arm11 target,
+viewport and clipfix have no one-row term, and the PICA top-left rule accounts
+only for the integer-grid `ceil`. See `docs/reports/eq4n-arm11-row-shift.md`.
+
 ## 8. House rules
 
 - New files: `tools/ds_edge_test/record/main.cpp`,
