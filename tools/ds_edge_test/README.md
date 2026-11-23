@@ -23,7 +23,8 @@ Result and full evidence: `docs/reports/eq4k-edge-rows.md`.
 | `gen_quads.py` | generates `include/quads.h` |
 | `include/quads.h` | committed build-time output of `gen_quads.py` |
 | `source/main.c` | ARM9 ROM: static opaque scene; bottom screen blank |
-| `Makefile` | devkitARM/libnds build (copied from `ds_alpha_test`) |
+| `record/main.cpp` | ARM9 variant: same scene, records the v2 GX frame (see §4) |
+| `Makefile` | devkitARM/libnds build (copied from `ds_alpha_test`); `make record` builds the recorder variant |
 | `measure_rows.py` | native-frame row/column analyser and capture-PNG edge reader |
 | `capture_mapping.json` | committed copy of the EQ-4c DS→capture mapping (reused) |
 | `test_quads.py` | geometry / header / ROM-source consistency |
@@ -83,6 +84,12 @@ $ sha256sum tools/ds_edge_test/ds-edge-test.nds
 FACT — raw output and the `sha256` are quoted in report §2. `include/quads.h`
 is regenerated from `quads.json` by the Makefile rule and is byte-identical to
 the committed copy (`test_quads.py`).
+
+`make -C tools/ds_edge_test record` builds `ds-edge-record.nds`, the same scene
+with `common/twlhd_gx_record.c` and libfat linked. It writes
+`/twlhd_frame_v2.bin` for the decode/render chain; the plain `ds-edge-test.nds`
+stays libnds-only (`test_quads.py`). See `docs/reports/eq4m-pica-edge-rows.md`
+§1.3-§1.5.
 
 ## 5. `measure_rows.py`
 

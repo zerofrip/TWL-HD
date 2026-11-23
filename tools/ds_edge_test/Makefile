@@ -43,6 +43,23 @@ LIBS		:=	-lnds9
 LIBDIRS		:=	$(LIBNDS)
 
 #---------------------------------------------------------------------------------
+# Recorder variant: the same static scene, but every GFX_* / MATRIX_* write goes
+# through common/twlhd_gx_record.c and the completed frame is written to
+# /twlhd_frame_v2.bin (record/main.cpp; the dump is arm9v2/source/main.cpp
+# :240-268). It links common/ code and libfat, so the plain-ROM target and the
+# "no common/ code" assertion in test_quads.py stay scoped to ds-edge-test.
+#---------------------------------------------------------------------------------
+RECORD	?=	0
+ifeq ($(RECORD),1)
+TARGET		:=	ds-edge-record
+BUILD		:=	build-record
+SOURCES		:=	record ../../common
+INCLUDES	:=	include ../../common ../../arm9v2/include
+LIBS		:=	-lnds9 -lfat
+CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions
+endif
+
+#---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------
 
@@ -72,10 +89,14 @@ export INCLUDE		:=	$(foreach dir,$(INCLUDES),-I$(CURDIR)/$(dir)) \
 
 export LIBPATHS		:=	$(foreach dir,$(LIBDIRS),-L$(dir)/lib)
 
-.PHONY: $(BUILD) clean all
+.PHONY: $(BUILD) clean all record
 
 #---------------------------------------------------------------------------------
 all: $(BUILD)
+
+# Recursive top-level make so RECORD=1 reaches the build-directory sub-make.
+record:
+	@$(MAKE) --no-print-directory -C $(CURDIR) RECORD=1 all
 
 include/quads.h: quads.json gen_quads.py
 	python3 $(CURDIR)/gen_quads.py $(CURDIR)/quads.json $(CURDIR)/include/quads.h
@@ -87,7 +108,8 @@ $(BUILD): include/quads.h
 #---------------------------------------------------------------------------------
 clean:
 	@echo clean ...
-	@rm -fr $(BUILD) $(TARGET).elf $(TARGET).nds $(TARGET).arm9
+	@rm -fr build build-record $(TARGET).elf $(TARGET).nds $(TARGET).arm9 \
+		ds-edge-record.elf ds-edge-record.nds ds-edge-record.arm9
 
 #---------------------------------------------------------------------------------
 else
