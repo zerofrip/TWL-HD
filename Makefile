@@ -1,4 +1,4 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-eq4-hw-compare test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test test-ds-alpha-test test-ds-edge-test host-test clean arm11-diag \
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-eq4-hw-compare test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows host-test clean arm11-diag \
 	emu-expected emu-validate emu-validate-tex azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
@@ -637,12 +637,18 @@ test-ds-alpha-test:
 test-ds-edge-test:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/ds_edge_test -p 'test_*.py'
 
+# EQ-4o real-hardware row fixtures (tools/eq4o_hw_rows/). Discovered explicitly:
+# the aggregate pass below does not descend into tools/eq4o_hw_rows (no
+# __init__.py).
+test-eq4o-hw-rows:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4o_hw_rows -p 'test_*.py'
+
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli \
 	tests/host/build/tex_capture_cli \
 	test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-eq4-hw-compare \
 	test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test \
-	test-ds-alpha-test test-ds-edge-test
+	test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows
 	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 \
 	ARM9V2_STATIC_DISCOVER_SKIP=1 EQ4_HW_COMPARE_DISCOVER_SKIP=1 \
 	FIT_MAPPING_DISCOVER_SKIP=1 \

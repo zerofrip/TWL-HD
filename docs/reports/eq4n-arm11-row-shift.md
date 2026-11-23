@@ -840,6 +840,8 @@ the GX interpreter, and do not change `common/twlhd_clipfix.c`; if a host-based
 comparison must be exact, account for the presentation row in the host/analysis
 tool (or fix the external core), and re-validate on hardware.
 
+**Hardware result:** see `docs/reports/eq4o-hw-row-shift.md` (EQ-4o).
+
 ## 5. REQ 4 — tests (FACT)
 
 No code was added; existing suites were run unchanged:
