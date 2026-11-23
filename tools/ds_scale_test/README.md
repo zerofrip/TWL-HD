@@ -24,6 +24,8 @@ output quoted here; HYPOTHESIS / UNVERIFIED = not measured.
 | `source/main.c` | ARM9 ROM: static 16-bit bitmap pattern + bottom console text |
 | `Makefile` | devkitARM/libnds build of `ds-scale-test.nds` |
 | `measure_scale.py` | capture-PNG analyser, stable `key=value` report |
+| `fit_mapping.py` | sub-pixel least-squares fit of the DS -> capture `a, b` mapping (EQ-4g) |
+| `../test_fit_mapping.py` | synthetic-recovery, negative-control and real-fixture tests for `fit_mapping.py` (own `make test-fit-mapping` target) |
 | `fixture_colours.py` | measured corner, gradient and strip colours of a capture (§6) |
 | `colour_histogram.py` | most frequent colours of the top 400×240 capture crop (eq4e) |
 | `test_measure_scale.py` | synthetic-capture scale/offset tests + mis-decoded regression + real-capture case |

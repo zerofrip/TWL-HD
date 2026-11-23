@@ -200,3 +200,21 @@ these four PASSes and both non-PASS controls; fixtures live in
 per angle; not bit-exactness, not other scenes/consoles, and the alpha
 convention (`a/31` vs `(a+1)/32`) stays UNVERIFIED (all alpha 31). Report:
 `docs/reports/eq4f-scene5-static-hw-compare.md`.
+
+## 10. Capture-offset fit (2026-11-23)
+
+Append-only pointer. `docs/reports/eq4g-capture-offset.md` fits the capture
+mapping from the ds-scale-test pattern with sub-pixel 50 %-midpoint edges and
+finds `a_x=1.250383, b_x=39.933172` (RMS 0.072 capture px),
+`a_y=1.250790, b_y=-0.168453` (RMS 0.026 capture px) on
+`tools/ds_scale_test/fixtures/sc4_3_top400x240.png`. That is at most 0.135 DS px
+from the default mapping `(1.25, 40, 1.25, 0)`, so the ~1-2 DS px scene5 offset
+recorded in section 9 is not explained by the mapping: re-running the section 9
+pairs with the fitted mapping via `tools/eq4g_fit_compare.py` leaves, against
+the PICA render (`ours`), `dy` negative in all 20 quoted class pairs (-0.3001 to
+-2.5699 DS px) and `dx` mixed (-1.7386 to +0.9474 DS px), with
+`bbox_dev_top=2` in all four pairs and `bbox_dev_left` 0-1. The
+DeSmuME-harness arm of that cross-check is UNVERIFIED (its commands and output
+are not quoted in the report). The default mapping,
+the tolerances and this tool are deliberately unchanged; the report recommends
+no mapping change.
