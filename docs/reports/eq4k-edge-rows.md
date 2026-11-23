@@ -652,3 +652,22 @@ FACT — privacy check:
 $ grep -rn -E '/(home|Users)/' tools/ds_edge_test
 (no output; exit status 1)
 ```
+
+## 11. Note (2026-11-23): the hardware result for the §6 prediction table
+
+The owner ran `ds-edge-test.nds` on a real New 3DS in DS mode (TWiLight Menu++,
+one capture session, passive cc3dsfs capture) and the result is recorded in
+`docs/reports/eq4l-edge-rows-hw-result.md`. It resolves the §6 table in favour
+of the "nominal" rows: `measure_rows.py` on the fixture
+`tools/ds_edge_test/fixtures/ed1_3_top400x240.png` prints `classification=none`
+with every measurable `row_offset` between `-0.0758` and `-0.0759`, the
+`top_band` bottom edge at `hw=15.9241` (nominal 16), and raw pixel probes show
+white at capture rows 0–4 and 236–239 (col 100). The hardware therefore has a
+**16-row top band starting at the first capture row** and a bottom band that
+**reaches the last capture row** — the DeSmuME `Ceil16_16` `+1` (17-row top
+band, squares `33..64`) is an emulator property, not the hardware convention.
+HYPOTHESIS: this is the cause of the 1-DS-px dy-negative offset of
+EQ-4f/EQ-4g/EQ-4j; UNVERIFIED: other consoles/sessions, textured or
+non-axis-aligned geometry, 1-px lines (UNMEASURED on hardware — the resampled
+capture cannot resolve them), and the PICA arm. This note is appended; the §3
+and §6 lines above are unchanged.
