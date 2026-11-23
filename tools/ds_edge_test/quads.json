@@ -1,0 +1,34 @@
+{
+  "id": "ds-edge-test-1",
+  "width": 256,
+  "height": 192,
+  "clear5": [0, 0, 0],
+  "clear_alpha": 31,
+  "margin_ds": 2,
+  "backdrops": [
+    {"name": "black", "x": 0, "y": 0, "w": 256, "h": 192,
+     "colour5": [0, 0, 0], "alpha": 31, "poly_id": 1, "z": 0}
+  ],
+  "quads": [
+    {"name": "top_band", "backdrop": "black", "x": 0, "y": 0, "w": 256, "h": 16,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 2, "z": 64},
+    {"name": "bottom_band", "backdrop": "black", "x": 0, "y": 176, "w": 256, "h": 16,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 3, "z": 64},
+    {"name": "left_band", "backdrop": "black", "x": 0, "y": 80, "w": 16, "h": 32,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 4, "z": 64},
+    {"name": "right_band", "backdrop": "black", "x": 240, "y": 80, "w": 16, "h": 32,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 5, "z": 64},
+    {"name": "sq1", "backdrop": "black", "x": 32, "y": 32, "w": 32, "h": 32,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 6, "z": 64},
+    {"name": "sq2", "backdrop": "black", "x": 160, "y": 32, "w": 32, "h": 32,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 7, "z": 64},
+    {"name": "sq3", "backdrop": "black", "x": 32, "y": 128, "w": 32, "h": 32,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 8, "z": 64},
+    {"name": "sq4", "backdrop": "black", "x": 160, "y": 128, "w": 32, "h": 32,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 9, "z": 64},
+    {"name": "hline", "backdrop": "black", "x": 64, "y": 96, "w": 128, "h": 1,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 10, "z": 64},
+    {"name": "vline", "backdrop": "black", "x": 208, "y": 64, "w": 1, "h": 96,
+     "colour5": [31, 31, 31], "alpha": 31, "poly_id": 11, "z": 64}
+  ]
+}

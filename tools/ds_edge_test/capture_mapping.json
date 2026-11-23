@@ -1,0 +1,7 @@
+{
+  "scale_x": 1.25,
+  "scale_y": 1.25,
+  "offset_x": 40,
+  "offset_y": 0,
+  "source": "copy of tools/ds_alpha_test/capture_mapping.json (EQ-4c measured DS->capture mapping; reused here, not re-measured)"
+}
