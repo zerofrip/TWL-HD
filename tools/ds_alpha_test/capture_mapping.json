@@ -1,0 +1,7 @@
+{
+  "scale_x": 1.25,
+  "scale_y": 1.25,
+  "offset_x": 40,
+  "offset_y": 0,
+  "source": "tools/ds_vtxcolor_test/capture_mapping.json (EQ-4c/EQ-4d measured DS->capture mapping; reused here, not re-measured)"
+}

@@ -218,3 +218,35 @@ DeSmuME-harness arm of that cross-check is UNVERIFIED (its commands and output
 are not quoted in the report). The default mapping,
 the tolerances and this tool are deliberately unchanged; the report recommends
 no mapping change.
+
+## 11. Polygon-alpha convention test (2026-11-23)
+
+Append-only pointer. `docs/reports/eq4h-alpha-convention-test.md` builds
+`tools/ds_alpha_test/`: a static DS ROM with opaque black/grey backdrop halves
+and 14 translucent white quads (polygon alpha 4..28, distinct polygon ids), a
+shared `quads.json`, `expected.py` (A1 = a/31 vs A2 = (a+1)/32, both the
+5-bit-then-expand and the expand-then-8-bit families, round and floor), and a
+deterministic `measure_alpha.py` (400×240 capture or `--native`, mean in a
+4-DS-px margin, per-quad and overall A1/A2/UNDECIDED, NOT-COMPARABLE when the
+geometry is not located). SOURCE-READ: DeSmuME's rasteriser uses `alpha = a+1`,
+`invAlpha = 32-alpha`, `>>5` (`rasterize.cpp:490-494`), i.e. A2; our v2/GX
+interp path also uses `(a+1)/32` (`common/twlhd_gx_interp.c:395-397`, `:1074`)
+while the v1 frame path forces vertex alpha 1.0
+(`common/twlhd_vertex_convert.c:44`) and implements no polygon alpha. The
+DeSmuME render arm is UNVERIFIED (no `desmume-cli` on the host; the repo's
+`desmume_capture.sh` needs an arm9v2 autodump file this ROM never writes). The
+real-hardware verdict is **NOT YET MEASURED**; the owner procedure is in the
+report.
+
+**Update (2026-11-23):** a built `desmume-cli` and the out-of-tree harness exist, but `ds-alpha-test.nds` faults in DeSmuME (`ARM OP_BKPT`) in its `iprintf` console path before the 3D frame.
+A control with that call removed shows the translucent quads are depth-rejected (quad z `0x41000000` vs backdrop `0x40000000`); the render arm stays UNVERIFIED.
+Full commands: `docs/reports/eq4h-alpha-convention-test.md` §5.
+
+**Update (2026-11-23):** both ROM-side blockers are fixed; built unmodified from the repo, `ds-alpha-test.nds` now renders in DeSmuME (`harness_exit=0`, frame 1 captured, 16 polygons / 64 vertices) with the quads at z=+64 in front of the backdrops (post-transform z `0x3f000000` vs `0x40000000`).
+`measure_alpha.py --native` gives overall verdict **A1** (`5bit_round` decides A1, `8bit_round` UNDECIDED; floor variants A2 sensitivity only) — EMULATOR (DeSmuME) only, real hardware **NOT YET MEASURED**.
+Full commands and complete output: report §5.
+
+**Update (2026-11-23):** the repair-2 "overall **A1**" reading was a classifier-model artefact: the tool's 5-bit/8-bit families do not model DeSmuME's internal 6-bit BGR666 pipeline, and every quad happened to fall inside `TOL=8`. A DeSmuME-style `6bit_round` variant (5→6 `(v<<1)|(v>>4)`, A2 blend `((a+1)*S6+(31-a)*B6)>>5`, output `round(v6*255/63)`) added to `expected.py`/`measure_alpha.py` is the best fit on the same harness frame: `best_variant=6bit_round`, `best_convention=A2`, `best_total_dev=9` (L24/R16/R20 +1 per channel; every other quad exact), so the EMULATOR verdict is **A2**, not A1. The 6-bit model is derived from DeSmuME's source (`utils/colorspacehandler/colorspacehandler.cpp:98-134`, `rasterize.cpp:490-496`) and is a HYPOTHESIS for real hardware: real hardware remains **NOT YET MEASURED**.
+Full corrected output: report §5.2; the suite is 43 tests.
+
+**Update (2026-11-23):** repair 4 trimmed duplicated report text (no code or test change) and relabelled the §5.2/README §11 output-stage sentence HYPOTHESIS/UNVERIFIED; the total diff vs `main` is now below the 117,760-byte limit (report §10).
