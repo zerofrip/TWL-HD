@@ -37,7 +37,7 @@ RTC_READ_113 = 0x6F
 
 # Reference-pinning table.  These opcode/status VALUES are hardware facts
 # cited from the reference implementation at
-#   /home/one/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
+#   $HOME/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
 # (GPLv3).  Only the numeric values are reused here; the names and this test
 # are original to TWL-HD.
 EXPECTED_DEFINES = {
@@ -323,7 +323,7 @@ class ReferencePinningTest(unittest.TestCase):
     """Pin the opcode/status constants to the values observed in the reference.
 
     The expected values are literal facts from
-        /home/one/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
+        $HOME/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
     If arm7/include/rtcom_driver.h drifts from these values the protocol will
     not match the real TwlBg RTCom service and this test fails.
     """
