@@ -6,7 +6,7 @@ can run without the external GPL harness or an emulator.
 ## `harness_cube_f240.txt`
 
 - origin: verbatim copy of `samples/cube_f240.txt` from the out-of-tree GPL
-  harness `/home/one/3ds/twlhd-desmume-harness`, produced by a DeSmuME
+  harness `$HOME/3ds/twlhd-desmume-harness`, produced by a DeSmuME
   `fc504ee0` run of the default-cube demo ROM (`AUTODUMP_FRAME=240`, harness
   frame 242 = ROM frame 240). See that repository's `README.md` for the
   `geometry-dump 1` format.

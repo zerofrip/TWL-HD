@@ -7,7 +7,7 @@ harness, DeSmuME or an Azahar run. All numbers are **EMULATOR** (DeSmuME
 `docs/EQ_SCENES.md`.
 
 The harness dumps are verbatim program output of the out-of-tree GPL-2.0-or-later
-harness `/home/one/3ds/twlhd-desmume-harness` (`format geometry-dump 1`,
+harness `$HOME/3ds/twlhd-desmume-harness` (`format geometry-dump 1`,
 harness frame 242 = ROM frame 240). The our-side files are the output of
 `tests/host/build/gx_interp_cli --eq2` on the DeSmuME `twlhd_frame_v2.bin`
 capture of the same frame. No harness or DeSmuME source is present in this
@@ -62,7 +62,7 @@ The driver reports both cases as NOT-COMPARABLE, never as a pass.
 Regenerate the harness dump with:
 
 ```sh
-/home/one/3ds/twlhd-desmume-harness/harness <rom.nds> 242 --out harness.txt --ppm harness.ppm
+$HOME/3ds/twlhd-desmume-harness/harness <rom.nds> 242 --out harness.txt --ppm harness.ppm
 ```
 
 Regenerate our-side with the capture flow of `docs/EQ_SCENES.md` and:

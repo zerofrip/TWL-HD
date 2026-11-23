@@ -72,7 +72,7 @@ old entry point in `gx_interp/tex-out-null-matches-old`.
 ## Unverified source details
 
 The DeSmuME checkout cited by the research document was not present in this
-implementation sandbox (`/home/one/3ds/desmume` does not exist). The mode-1
+implementation sandbox (`$HOME/3ds/desmume` does not exist). The mode-1
 integer steps and the one-entry texture stack follow the task contract and the
 research document and are marked READ/UNVERIFIED against the checkout in
 `docs/DS_GX_RESEARCH.md`; the oracle, C literals and golden streams share that
@@ -312,7 +312,7 @@ Two defects and one owner decision, all host-side:
 1. **Shared slot.** The oracle kept PUSH/POP in `self.stack` and STORE/RESTORE
    in a separate `self.slots[0]`, while DeSmuME uses ONE storage slot
    `_mtxStackTexture[0]` for all four commands. Verified in the checkout
-   (`/home/one/3ds/desmume/desmume/src/gfx3d.cpp`): PUSH copies into it at
+   (`$HOME/3ds/desmume/desmume/src/gfx3d.cpp`): PUSH copies into it at
    `:861`, POP copies out at `:928` (the review's `:927` is the blank line
    before the copy), STORE copies into it at `:965`, RESTORE copies out at
    `:996`. The C code already shared `tex_stack.stack[0]`; the oracle now does

@@ -2,8 +2,8 @@
 
 **Status: DESIGN STUDY ONLY.** No source, test, tool or Makefile change accompanies this
 file. Nothing here was produced by running an emulator, the console or the DeSmuME CLI.
-Every DeSmuME statement below was read in the checkout at `/home/one/3ds/desmume`,
-revision `fc504ee0` (verified with `git -C /home/one/3ds/desmume rev-parse --short=8 HEAD`
+Every DeSmuME statement below was read in the checkout at `$HOME/3ds/desmume`,
+revision `fc504ee0` (verified with `git -C $HOME/3ds/desmume rev-parse --short=8 HEAD`
 → `fc504ee0`). Line numbers are from that checkout; where a repository document quotes an
 older line number, this file re-checks the line and says so.
 
@@ -819,7 +819,7 @@ Repository (TWL-HD, current `HEAD`):
 - ROM video mode / bank remap: `arm9v2/source/main.cpp:171`;
   `arm9v2/source/demo_frame.cpp:176-188`.
 
-DeSmuME (`/home/one/3ds/desmume/desmume/src`, revision `fc504ee0`):
+DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 
 - GPL header: `gfx3d.cpp:1-8`.
 - Command funnel: `gfx3d.cpp:117`, `:158`, `:175`; `commandline.cpp:586-596`.

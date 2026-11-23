@@ -4,7 +4,7 @@
 **Scope:** DIAGNOSIS + EMULATOR only. No product code, ROM source, test,
 interpreter, renderer, harness or DeSmuME tree was modified; the only file this
 task adds to the repository is this report. A scratch copy of DeSmuME was used
-outside the repository (`/home/one/3ds/hwtest-staging/desmume-dbg-build`), built
+outside the repository (`$HOME/3ds/hwtest-staging/desmume-dbg-build`), built
 from the scratch tree documented in `docs/reports/bkpt-diagnosis.md` section 1.
 No console, SD-card or network action was performed.
 
@@ -181,7 +181,7 @@ or was overwritten later.
 All runs used:
 
 ```
-DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli
+DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli
 DESMUME_TIMEOUT=30
 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds <outdir>
 ```
@@ -855,8 +855,8 @@ repository or in the external logs.
 Searches:
 
 ```
-/home/one/3ds/hwtest-staging/RUN2_RESULTS.md
-/home/one/3ds/hwtest-staging/CONSOLE_ACTION_LOG.txt
+$HOME/3ds/hwtest-staging/RUN2_RESULTS.md
+$HOME/3ds/hwtest-staging/CONSOLE_ACTION_LOG.txt
 docs/ (repo-wide grep)
 ```
 
@@ -1139,7 +1139,7 @@ values above (`twlhd_tex_capture_plan` at `0x020025d0`, epilogue `pop {r4, r5,
 r6, r7, pc}` at `0x0200269A`).
 
 The original Nov-17 23:25 runs with the existing scratch CLI
-(`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) reproduced
+(`$HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) reproduced
 the frame-129 register dump (`pc=01FF853C sp=02FF43A8 lr=02002767`). Fresh
 Nov-18 runs with the same binary and ROM produced no `TWLHD_BKPT`
 line. The autodump
@@ -1152,7 +1152,7 @@ apart from path differences at lines 2, 7 and 25 (cflash image paths) until line
 instead continues with `TWLHD_SWAP n=180 frame=188`.
 
 A new instrumented scratch CLI
-(`/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`) with an
+(`$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`) with an
 RTC-epoch override: with a fresh cflash image, reproduced the reference dump at
 `TWLHD_RTC_EPOCH=1794921881`, `1794925481` and `1794925511` (2026-11-17
 22:24:41, 23:24:41, 23:25:11 +0900); produced no `TWLHD_BKPT` line at

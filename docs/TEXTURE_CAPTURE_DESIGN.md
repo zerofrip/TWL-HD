@@ -14,7 +14,7 @@ Sources read for this document:
 
 - Repository: `arm9v2/`, `common/`, `tests/host/`, `tools/`, `docs/` at the
   working tree of 2026-11-14.
-- DeSmuME checkout `/home/one/3ds/desmume`, `desmume/` subdirectory, commit
+- DeSmuME checkout `$HOME/3ds/desmume`, `desmume/` subdirectory, commit
   `fc504ee0` (2026-10-25), `git describe` `release_0_9_13-429-gfc504ee0`. Line
   numbers below are from that checkout.
 - devkitPro under `/opt/devkitpro`: libnds **2.0.0**

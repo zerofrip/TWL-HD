@@ -7,7 +7,7 @@ can run without the external GPL harness or an emulator. All numbers here are
 ## `harness_cube_f240.ppm`
 
 - origin: verbatim byte-for-byte copy of `samples/cube_f240.ppm` from the
-  out-of-tree GPL harness `/home/one/3ds/twlhd-desmume-harness` (DeSmuME
+  out-of-tree GPL harness `$HOME/3ds/twlhd-desmume-harness` (DeSmuME
   `fc504ee0` software rasteriser, harness frame 242 = ROM frame 240). See that
   repository's `samples/README.md`: 256x192 binary P6, 15-byte header
   `P6\n256 192\n255\n` plus 147456 raster bytes, RGB666 buffer expanded by
@@ -23,7 +23,7 @@ can run without the external GPL harness or an emulator. All numbers here are
 
 - origin: the upper 400x240 rows of the 400x480 top+bottom screenshot from the
   headless Azahar libretro host (`tools/azahar_host`, software renderer,
-  core `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`)
+  core `$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`)
   running `arm11/twlhd-arm11.3dsx` with
   `tests/host/fixtures/demo_frame_desmume_v2.bin` as `sdmc:/twlhd_frame.bin`
   and `--press A:60-63 --shot 199`. The frame is the same default-cube frame

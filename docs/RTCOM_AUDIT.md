@@ -50,7 +50,7 @@ The Phase 3 architecture is therefore split in two:
 
 Two public projects were studied for protocol facts and hardware addresses:
 
-1. **RtcPwalker** — located locally at `/home/one/3ds/RtcPwalker`.
+1. **RtcPwalker** — located locally at `$HOME/3ds/RtcPwalker`.
    - License: **GPLv3**.
    - Used for: confirmation that RTCom traffic uses the RTC registers at
      `0x4000138`, the opcode values, and the shape of the handshake.

@@ -26,7 +26,7 @@ To compile against the real, external `libretro.h` instead (preferred when you
 have the Azahar tree):
 
 ```sh
-make azahar-host LIBRETRO_INCLUDE=/home/one/3ds/azahar/externals/libretro-common/libretro-common/include
+make azahar-host LIBRETRO_INCLUDE=$HOME/3ds/azahar/externals/libretro-common/libretro-common/include
 ```
 
 Nothing under `tools/azahar_host/build/` is tracked; `make clean` removes it.
@@ -128,7 +128,7 @@ AZAHAR_LIBRETRO=/path/to/azahar_libretro.so tools/azahar_host/smoke.sh [outdir]
 
 The script is opt-in and is **not** run by `make test`. It exits 2 with
 `AZAHAR_LIBRETRO not set` when the variable is unset. Otherwise it runs the
-staging demo `/home/one/3ds/hwtest-staging/twlhd-arm11-blend.3dsx` for 200
+staging demo `$HOME/3ds/hwtest-staging/twlhd-arm11-blend.3dsx` for 200
 frames with `--press A:60-63`, staging
 `frames/twlhd_frame_v2_scene4_alpha.bin` as `sdmc:/twlhd_frame.bin` in a temp
 SD root under `<outdir>/sd`. It then checks the PPM exists, that its pixel
@@ -186,7 +186,7 @@ Baseline (unmutated header): `8 test(s) passed`, exit 0.
 ## Reference run (EMULATOR)
 
 Machine-local run, 2026-11-07, with the external core
-`/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+`$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
 (`Azahar 9c38437`) and the staging inputs listed above.
 
 - `make azahar-host`: clean build, no warnings.

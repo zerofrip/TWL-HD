@@ -151,7 +151,7 @@ wrap to `y1-255`), exactly as `common/twlhd_clipfix.c`.
 2. **Run 17 clear colour.** The predictor emits (16,16,24), matching Run 17
    (`docs/HARDWARE_TEST_PROCEDURE_3DS.md:775-787`) and `RENDER_CLEAR_COLOR`.
 3. **Azahar (2026-11-12, headless, host-only, external core
-   `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`).**
+   `$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`).**
    - `tools/azahar_host/smoke.sh` rendered the staged `scene4_alpha` frame.
      Sampling the top 400x240 rows at the predicted centres gave
      `(255,0,0)`, `(7,142,11)`, `(13,13,60)`, `(16,16,24)` for the

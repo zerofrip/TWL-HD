@@ -1,8 +1,8 @@
 # Emulator GX Tracer — Feasibility Audit and Implementation Plan
 
 **Status: AUDIT AND PLAN ONLY. No emulator source was modified. No tracer exists.**
-The DeSmuME tree at `/home/one/3ds/desmume` is untouched (`git status` empty,
-revision `fc504ee0`); the melonDS tree at `/home/one/3ds/melonDS` was only read.
+The DeSmuME tree at `$HOME/3ds/desmume` is untouched (`git status` empty,
+revision `fc504ee0`); the melonDS tree at `$HOME/3ds/melonDS` was only read.
 
 This answers the "backend E" question from `docs/PHASE4D_CAPTURE_EXPANSION_PROPOSAL.md`:
 can an instrumented open-source DS emulator emit TWL-HD v2 traces
@@ -11,7 +11,7 @@ that the homebrew register-proxy shim (backend B) cannot see?
 
 Evidence labels: **SOURCE-READ** = read in the emulator source in this session
 (file:line given; paths are relative to the emulator checkout root, e.g.
-`/home/one/3ds/desmume`); **MECHANICAL** = compared by an ad-hoc script at the time; the scripts were **not kept**, so on re-check treat these results as SOURCE-READ until re-run;
+`$HOME/3ds/desmume`); **MECHANICAL** = compared by an ad-hoc script at the time; the scripts were **not kept**, so on re-check treat these results as SOURCE-READ until re-run;
 **BUILD VERIFIED** = a build or command actually ran here and its output was observed;
 **EMULATOR VERIFIED** = observed by running our ROM in DeSmuME (never hardware);
 **UNVERIFIED** = reasoning or recollection, not checked here.

@@ -6,7 +6,7 @@ and section 5.2 (lines 601-630). Owner approved 2026-11-17.
 `tools/eq2_compare.py` compares, per polygon and per vertex, the DS screen-space
 geometry our GX interpreter produces for one frame with the geometry the
 DeSmuME-based, out-of-tree GPL harness
-(`/home/one/3ds/twlhd-desmume-harness`) dumped for the same frame.
+(`$HOME/3ds/twlhd-desmume-harness`) dumped for the same frame.
 
 - **Harness numbers: EMULATOR** (DeSmuME `fc504ee0`). Nothing here is
   hardware-verified.

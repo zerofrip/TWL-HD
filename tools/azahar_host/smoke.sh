@@ -4,7 +4,7 @@
 # Opt-in smoke test for the headless Azahar libretro host.
 #
 # NOT part of `make test` and never run by `make all`. Needs an external Azahar
-# libretro core (AZAHAR_LIBRETRO) and the staging inputs under /home/one/3ds.
+# libretro core (AZAHAR_LIBRETRO) and the staging inputs under $HOME/3ds.
 #
 # Usage: tools/azahar_host/smoke.sh [outdir]
 # Exit codes: 2 when AZAHAR_LIBRETRO is unset, 1 on any other failure.
@@ -33,8 +33,8 @@ if [ ! -x "$host" ]; then
     exit 1
 fi
 
-game=/home/one/3ds/hwtest-staging/twlhd-arm11-blend.3dsx
-frame=/home/one/3ds/hwtest-staging/frames/twlhd_frame_v2_scene4_alpha.bin
+game=$HOME/3ds/hwtest-staging/twlhd-arm11-blend.3dsx
+frame=$HOME/3ds/hwtest-staging/frames/twlhd_frame_v2_scene4_alpha.bin
 if [ ! -f "$game" ]; then
     echo "error: game not found: $game" >&2
     exit 1

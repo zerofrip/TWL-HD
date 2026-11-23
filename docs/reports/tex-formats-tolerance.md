@@ -20,21 +20,21 @@ sha256; it never fails on deviations.
 
 | file | sha256 | bytes | role |
 |---|---|---|---|
-| `/home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm` | `4a2451a3b760afac828888e881465834e532872524cb3968b9a9745bd2547988` | 288015 | Run 20 New 3DS NTR live capture of the formats frame (the only real capture of this frame) |
+| `$HOME/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm` | `4a2451a3b760afac828888e881465834e532872524cb3968b9a9745bd2547988` | 288015 | Run 20 New 3DS NTR live capture of the formats frame (the only real capture of this frame) |
 | `tools/fixtures/formats_top_0_run20.ppm` | `4a2451a3b760afac828888e881465834e532872524cb3968b9a9745bd2547988` | 288015 | byte-identical copy of the capture, committed as the regression fixture (under the 300 KB cap) |
 
 Other files checked and **excluded**:
 
-- `/home/one/3ds/hwtest-staging/ntr_live/run20/formats_pre_top_0.ppm`
+- `$HOME/3ds/hwtest-staging/ntr_live/run20/formats_pre_top_0.ppm`
   (sha256 `5a5c62c0d045c4e60c69ba1cbaab3e4676b79090e9cdcc4ae0af563c7364c4b4`)
   is a different (pre-run) screen, not the formats frame: measured with the
   same tool, 3 of 8 quads are MISSING and the other 5 have misplaced bboxes
   with deviations 245-250 (0/64 .. 5/256 cells match).
-- `/home/one/3ds/hwtest-staging/ntr_live/run20/formats_bottom_0.ppm` (and the
+- `$HOME/3ds/hwtest-staging/ntr_live/run20/formats_bottom_0.ppm` (and the
   other `*_bottom_0.ppm` files) are 320x240 bottom-screen captures; the checker
   only accepts a 400x240/480 top screen (`got 320x240`, exit 2), so they are not
   inputs.
-- `/home/one/3ds/hwtest-staging/ntr_live/run21/*_top_0.ppm` are captures of
+- `$HOME/3ds/hwtest-staging/ntr_live/run21/*_top_0.ppm` are captures of
   other frames (`ctl/tex/over/base/final/beh`, no formats frame in run 21).
 - The Azahar emulator shot `/tmp/fmt_shot_199.ppm` documented in
   `docs/EMULATOR_VALIDATION.md` (sha256 `27948117...`) no longer exists in this
@@ -46,7 +46,7 @@ No external file was modified (the fixture is a copy).
 ## Per-quad measurement (Run 20 `formats_top_0.ppm`)
 
 `python3 tools/measure_tex_formats_deviation.py
-/home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm`
+$HOME/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm`
 sampled 704 cells (8 quads: seven 8x8 and one 16x16).
 
 | quad | format | texels | sampled cells | worst deviation | cells > 24 | cells > 26 |
@@ -168,11 +168,11 @@ What the new tolerance does NOT catch (documented limits):
 ## Verification commands
 
     python3 tools/measure_tex_formats_deviation.py \
-        /home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm
+        $HOME/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm
     python3 tools/check_tex_formats.py \
-        /home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm
+        $HOME/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm
     python3 tools/check_tex_formats.py \
-        /home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm --tolerance 24
+        $HOME/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm --tolerance 24
     python3 -B -I -m unittest discover -s tools -p test_tex_formats.py
 
 Results: measurement prints overall worst 26/704 cells with the histogram

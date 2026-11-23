@@ -9,7 +9,7 @@ for the same frame. It is a **structural** comparison, not a per-pixel one:
 region bounding boxes, centroids and interior colours after edge erosion.
 
 - **Everything here is EMULATOR.** The reference is the out-of-tree GPL
-  harness (`/home/one/3ds/twlhd-desmume-harness`, DeSmuME `fc504ee0`); our side
+  harness (`$HOME/3ds/twlhd-desmume-harness`, DeSmuME `fc504ee0`); our side
   is the headless Azahar libretro host (`tools/azahar_host`, software
   renderer). Nothing is hardware-verified.
 - **Licence posture:** this repository is Apache-2.0. No harness or DeSmuME
@@ -30,7 +30,7 @@ make azahar-host
 make -C arm11                     # needs devkitPro; writes arm11/twlhd-arm11.3dsx
 mkdir -p /tmp/eq3_sd
 cp tests/host/fixtures/demo_frame_desmume_v2.bin /tmp/eq3_sd/twlhd_frame.bin
-AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+AZAHAR_LIBRETRO=$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
   tools/azahar_host/build/azahar_host \
     --game arm11/twlhd-arm11.3dsx --frames 200 --press A:60-63 --shot 199 \
     --out /tmp/eq3_shot --sd-root /tmp/eq3_sd

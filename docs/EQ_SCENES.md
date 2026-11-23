@@ -8,7 +8,7 @@ variant. `SCENE=5` is the textured scene.
 
 - **Everything here is EMULATOR.** The geometry reference is DeSmuME
   `fc504ee0` through the out-of-tree GPL harness
-  `/home/one/3ds/twlhd-desmume-harness` (`format geometry-dump 1`). Our side is
+  `$HOME/3ds/twlhd-desmume-harness` (`format geometry-dump 1`). Our side is
   the recorder's v2 stream interpreted on the host (`gx_interp_cli --eq2`) and,
   for EQ-3, the headless Azahar libretro host (`tools/azahar_host`). Nothing is
   hardware-verified.
@@ -49,7 +49,7 @@ flow, applied per ROM:
 1. `make -C arm9v2 <build variables>` (worker step; ROMs and PPMs stay in a
    scratch directory and are not committed);
 2. harness geometry and picture for harness frame 242:
-   `/home/one/3ds/twlhd-desmume-harness/harness <rom.nds> 242 --out harness.txt
+   `$HOME/3ds/twlhd-desmume-harness/harness <rom.nds> 242 --out harness.txt
    --ppm harness.ppm`;
 3. DeSmuME v2 capture:
    `DESMUME_CLI=<cli> tools/emulator/desmume_capture.sh <rom.nds> <capdir>`
@@ -118,11 +118,11 @@ Command (worker, one run):
 
 ```sh
 python3 tools/eq_scenes.py \
-  --harness-bin /home/one/3ds/twlhd-desmume-harness/harness \
-  --desmume-cli /home/one/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
+  --harness-bin $HOME/3ds/twlhd-desmume-harness/harness \
+  --desmume-cli $HOME/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
   --rom-dir arm9v2 --work-dir <scratch> \
   --azahar-host tools/azahar_host/build/azahar_host \
-  --azahar-core /home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+  --azahar-core $HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
   --arm11-3dsx arm11/twlhd-arm11.3dsx \
   --desmume-timeout 30 --capture-retries 4
 ```
@@ -171,7 +171,7 @@ the documented DeSmuME v2 capture produced no `twlhd_frame_v2.bin`. Reproduced
 `make -C arm9v2 SCENE=2 AUTODUMP_FRAME=240` (sha256 `d84f210b…`,
 `tools/fixtures/eq_scenes/README.md`): the documented script
 
-    DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
+    DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
       tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-s2.nds <dir>
 
 exits 1, `<dir>/desmume.log` ends with `ARM OP_BKPT triggered` (the same run

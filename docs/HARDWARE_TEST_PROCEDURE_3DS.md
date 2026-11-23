@@ -6,7 +6,7 @@
 > The owner ran this and later builds on the console themselves; results are recorded in section 12 and in
 > `docs/PHASE4_HARDWARE_FINDINGS.md`. The assistant never connected to or executed anything on the console.
 > Sections 6, 9 and the "HARDWARE UNVERIFIED" wording below describe the situation BEFORE those runs. Also historical: the staged copy
-> `/home/one/3ds/hwtest-staging/twlhd-arm11.3dsx` and the `SHA256SUMS` statements in sections 2 and 8 (the file was later moved to
+> `$HOME/3ds/hwtest-staging/twlhd-arm11.3dsx` and the `SHA256SUMS` statements in sections 2 and 8 (the file was later moved to
 > `run2_artifacts/twlhd-arm11-run1-HUNG.3dsx`, and `SHA256SUMS` now lists only the newest artifacts), and the "staged copy remains" text in section 8.
 
 **Status: PREPARED, NOT APPROVED. Nothing has been connected to, uploaded to, or executed on
@@ -38,10 +38,10 @@ no hardware (BUILD, `nm`). The artifact contains no `ucode`, `TwlBg`, `.cxi` or 
 | Item | Value |
 |---|---|
 | File | `twlhd-arm11.3dsx` |
-| Staged copy (outside the repository) | `/home/one/3ds/hwtest-staging/twlhd-arm11.3dsx` |
+| Staged copy (outside the repository) | `$HOME/3ds/hwtest-staging/twlhd-arm11.3dsx` |
 | Size | 165,640 bytes |
 | SHA-256 | `3198426913e9bc38c2e011ff299f596e2b517ba739b843e3ce304506f10dcb33` |
-| Checksum file | `/home/one/3ds/hwtest-staging/SHA256SUMS` (verified with `sha256sum -c`) |
+| Checksum file | `$HOME/3ds/hwtest-staging/SHA256SUMS` (verified with `sha256sum -c`) |
 | Built from | `main` at merge commit `c540fe2`; `arm11/` is unchanged by every branch pending merge |
 | Reproducibility | three consecutive clean builds produced the identical hash; 0 warnings |
 
@@ -148,7 +148,7 @@ Treat as a hang if the screen is frozen or black **and** `START` does nothing fo
    exception handler), **photograph it and do not dismiss repeatedly**. Any dump file the
    system writes is the system's, not this app's; keep it and report it.
 4. Optionally remove `/3ds/twlhd-arm11.3dsx` from the SD card (card reader) and the staged
-   copy remains in `/home/one/3ds/hwtest-staging/`.
+   copy remains in `$HOME/3ds/hwtest-staging/`.
 5. **Stop and report.** Do not retry until the result has been reviewed: a hang is itself an
    important result about the renderer's GPU synchronisation (audit, risk 1).
 
@@ -194,7 +194,7 @@ connect to or run anything on the console myself.
 
 ### Run 1 — owner-run, photograph of the bottom screen (2026-10-29)
 
-Evidence file (kept outside the repository): `/home/one/3ds/hwtest-staging/evidence/run1_bottom_screen.jpg`
+Evidence file (kept outside the repository): `$HOME/3ds/hwtest-staging/evidence/run1_bottom_screen.jpg`
 (3,671,283 bytes, SHA-256 `1f38283bac29e470810f1bc4916dd093eb2b9bdb5dff91da31d4b1ff65fcfcc7`).
 
 **Observed (HARDWARE OBSERVED, photograph):** the bottom-screen console text is identical,
@@ -229,7 +229,7 @@ This answers the open points above for that build: the triangle was **not** disp
 
 The evidence table, root cause and labels are in `docs/PHASE4_HARDWARE_FINDINGS.md`. Run 2 also re-showed the original symptom (the original build and a
 build with a vertex-buffer cache flush both hung). Artifact hashes (of the files the assistant staged for each run, run by file name) and photographs are
-kept **outside** the repository in the owner's staging area (`/home/one/3ds/hwtest-staging/`: `RUN2_RESULTS.md`, `evidence/`, `run*_artifacts/`). Hashes:
+kept **outside** the repository in the owner's staging area (`$HOME/3ds/hwtest-staging/`: `RUN2_RESULTS.md`, `evidence/`, `run*_artifacts/`). Hashes:
 
 | Run | Artifact (SHA-256 prefix) |
 |---|---|

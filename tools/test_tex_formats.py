@@ -36,7 +36,7 @@ SCRIPT = os.path.join(TOOLS_DIR, "check_tex_formats.py")
 VALIDATE = os.path.join(TOOLS_DIR, "twlhd_v2_dump.py")
 FIXTURE = os.path.join(TOOLS_DIR, "fixtures", "formats_top_0_run20.ppm")
 # Run 20 hardware capture, copied verbatim from
-# /home/one/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm.
+# $HOME/3ds/hwtest-staging/ntr_live/run20/formats_top_0.ppm.
 FIXTURE_SHA256 = \
     "4a2451a3b760afac828888e881465834e532872524cb3968b9a9745bd2547988"
 

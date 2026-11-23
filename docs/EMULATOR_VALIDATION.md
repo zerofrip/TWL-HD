@@ -343,7 +343,7 @@ copy the chosen frame under that name inside `--sd-root`:
 
     mkdir -p /tmp/tex_sd
     cp /tmp/tex_frames/twlhd_frame_v2_tex.bin /tmp/tex_sd/twlhd_frame.bin
-    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+    AZAHAR_LIBRETRO=$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
       tools/azahar_host/build/azahar_host \
         --game arm11/twlhd-arm11.3dsx \
         --frames 200 --press A:60-63 --shot 199 \
@@ -352,7 +352,7 @@ copy the chosen frame under that name inside `--sd-root`:
 Repeat with the control frame:
 
     cp /tmp/tex_frames/twlhd_frame_v2_tex_ctl.bin /tmp/tex_sd/twlhd_frame.bin
-    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+    AZAHAR_LIBRETRO=$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
       tools/azahar_host/build/azahar_host \
         --game arm11/twlhd-arm11.3dsx \
         --frames 200 --press A:60-63 --shot 199 \
@@ -451,7 +451,7 @@ the checker passes. This is EMULATOR evidence only; it is not HARDWARE VERIFIED.
 ### Reference run (EMULATOR)
 
 Reproduced in this sandbox, 2026-11-14, with the external core
-`/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+`$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
 (Azahar `9c38437`) and the commands above.
 
 - `make azahar-host`: clean build, no warnings.
@@ -564,7 +564,7 @@ current normal build):
     python3 tools/gen_tex_format_frames.py /tmp/fmt_frames
     mkdir -p /tmp/fmt_sd
     cp /tmp/fmt_frames/twlhd_frame_v2_formats.bin /tmp/fmt_sd/twlhd_frame.bin
-    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+    AZAHAR_LIBRETRO=$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
       tools/azahar_host/build/azahar_host \
         --game arm11/twlhd-arm11.3dsx \
         --frames 200 --press A:60-63 --shot 199 \
@@ -701,7 +701,7 @@ is the current normal build):
     python3 tools/gen_tex_behaviour_frames.py /tmp/beh_frames
     mkdir -p /tmp/beh_sd
     cp /tmp/beh_frames/twlhd_frame_v2_behaviour.bin /tmp/beh_sd/twlhd_frame.bin
-    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+    AZAHAR_LIBRETRO=$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
       tools/azahar_host/build/azahar_host \
         --game arm11/twlhd-arm11.3dsx \
         --frames 200 --press A:60-63 --shot 199 \
@@ -812,7 +812,7 @@ earlier entry). The UR==LL reuse check now samples texel cell centres with a
 Control frame:
 
     $ python3 tools/check_tex_shot.py \
-        /home/one/3ds/hwtest-staging/ntr_live/run19/ctl_top_0.ppm --frame ctl --snap
+        $HOME/3ds/hwtest-staging/ntr_live/run19/ctl_top_0.ppm --frame ctl --snap
     UL colour OK: 1 distinct colours: (0, 255, 0)
     UR colour OK: 1 distinct colours: (132, 132, 132)
     LL colour OK: 1 distinct colours: (255, 0, 0)
@@ -822,7 +822,7 @@ Control frame:
 Textured frame:
 
     $ python3 tools/check_tex_shot.py \
-        /home/one/3ds/hwtest-staging/ntr_live/run19/tex_top_0.ppm --frame tex --snap
+        $HOME/3ds/hwtest-staging/ntr_live/run19/tex_top_0.ppm --frame tex --snap
     UL colour OK: 2 distinct colours: (0, 255, 0) (255, 255, 255)
     UR colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
     LL colour OK: 2 distinct colours: (255, 0, 0) (255, 255, 255)
@@ -864,7 +864,7 @@ reproducible, stdlib only, no repository fixture:
     sys.path.insert(0, "tools")
     import check_tex_shot as c
     w, h, data = c.parse_ppm(
-        "/home/one/3ds/hwtest-staging/ntr_live/run19/tex_top_0.ppm")
+        "$HOME/3ds/hwtest-staging/ntr_live/run19/tex_top_0.ppm")
     src = bytes(data)
     for _name, x0, x1, y0, y1, *_rest in c.REGIONS:
         qx0, qx1, qy0, qy1 = c.find_quad_bounds(
@@ -906,7 +906,7 @@ compared separately against the emulator fallback as recorded in
 the record it fails the tex check as expected:
 
     $ python3 tools/check_tex_shot.py \
-        /home/one/3ds/hwtest-staging/ntr_live/run19/over_top_0.ppm --frame tex --snap
+        $HOME/3ds/hwtest-staging/ntr_live/run19/over_top_0.ppm --frame tex --snap
     UL colour FAIL: 1 distinct colours: (16, 16, 24)
     UR colour FAIL: 1 distinct colours: (16, 16, 24)
     LL colour FAIL: 2 distinct colours: (16, 16, 24) (255, 255, 255)
@@ -920,7 +920,7 @@ Emulator regeneration with the current (fixed) build was possible:
     python3 tools/gen_tex_frames.py /tmp/tex_frames
     mkdir -p /tmp/tex_sd
     cp /tmp/tex_frames/twlhd_frame_v2_tex.bin /tmp/tex_sd/twlhd_frame.bin
-    AZAHAR_LIBRETRO=/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
+    AZAHAR_LIBRETRO=$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so \
       tools/azahar_host/build/azahar_host \
         --game arm11/twlhd-arm11.3dsx \
         --frames 200 --press A:60-63 --shot 199 \

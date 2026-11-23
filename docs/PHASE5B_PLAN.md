@@ -444,7 +444,7 @@ Status labels:
 - **EMULATOR:** generator script `tools/gen_tex_frames.py` and checker
   `tools/check_tex_shot.py` committed with a documented procedure; see
   `docs/EMULATOR_VALIDATION.md` for the exact commands. Reproduced in this
-  sandbox with `/home/one/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
+  sandbox with `$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`
   (Azahar `9c38437`). The regenerated screenshots differ:
   `tex_shot_199.ppm` sha256
   `58003d653e8d8c18b08af47ffcf3f6316460735e57a440fdeb9bc1f4a22f896a`,

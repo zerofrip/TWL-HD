@@ -13,12 +13,12 @@ run. UNVERIFIED = no local source exists / it was not run. Emulator facts are
 facts about the *model*, never about hardware.
 
 **Evidence paths.** DeSmuME line numbers are from the pinned checkout
-`/home/one/3ds/desmume` at `release_0_9_13-429-gfc504ee0`; that checkout stores
+`$HOME/3ds/desmume` at `release_0_9_13-429-gfc504ee0`; that checkout stores
 the geometry engine at `desmume/src/gfx3d.cpp` (there is no `src/3D/`
 subdirectory), so the contract's `3D/gfx3d.cpp` citations resolve to
-`src/gfx3d.cpp`. libnds 2.0.0: `/home/one/3ds/libnds/source/arm9/videoGL_base.c`
+`src/gfx3d.cpp`. libnds 2.0.0: `$HOME/3ds/libnds/source/arm9/videoGL_base.c`
 (identical to `/opt/devkitpro/libnds/...`). No GBATEK text exists locally
-(`find /home/one/3ds /opt/devkitpro -iname '*gbatek*'` returns nothing; the repo
+(`find $HOME/3ds /opt/devkitpro -iname '*gbatek*'` returns nothing; the repo
 says so at `docs/DS_GX_RESEARCH.md:12`, `docs/TEXTURE_CAPTURE_DESIGN.md:22`).
 
 ---
@@ -105,7 +105,7 @@ Commands (EMULATOR + host tooling):
 
 ```sh
 make -C arm9v2 SCENE=5 AUTODUMP_FRAME=240          # ROM sha256 35a50aad… (matches README)
-DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
+DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-build/cli/desmume-cli \
   tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-s5.nds /tmp/opencode/s5cap
 python3 tools/twlhd_v2_dump.py validate <cap>/twlhd_frame_v2.bin   # result=OK, 78 GXCM, 5 RSTA
 python3 tools/twlhd_v2_dump.py stats    <cap>/twlhd_frame_v2.bin
@@ -189,7 +189,7 @@ that could explain either.
 
 **UNVERIFIED.** There is no local authoritative source:
 
-- No GBATEK text exists under `/home/one/3ds` or `/opt/devkitpro` (find output
+- No GBATEK text exists under `$HOME/3ds` or `/opt/devkitpro` (find output
   empty); the repo documents that GBATEK was never read locally
   (`docs/DS_GX_RESEARCH.md:12`, `docs/TEXTURE_CAPTURE_DESIGN.md:22`) and exists
   only as web URLs (e.g. `docs/GEOMETRY_FIFO.md:4-5`).

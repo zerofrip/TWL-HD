@@ -531,7 +531,7 @@ tools/azahar_host/build:
 # the system libjpeg-turbo headers instead; it fails loudly if they are missing.
 # Nothing from the viewer is vendored into this repository.
 # ---------------------------------------------------------------------------
-NTRVIEWER_DIR ?= /home/one/3ds/ntrviewer-hr
+NTRVIEWER_DIR ?= $(HOME)/3ds/ntrviewer-hr
 NTR_CAPTURE_JPEG_CFLAGS := $(shell pkg-config --cflags libjpeg 2>/dev/null)
 NTR_CAPTURE_JPEG_LIBS := $(shell pkg-config --libs libjpeg 2>/dev/null)
 

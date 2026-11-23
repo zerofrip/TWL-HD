@@ -4,7 +4,7 @@ Status: research only. No source, test or Makefile change accompanies this file.
 Answers item (b) of `docs/PHASE5B_PLAN.md` section 8 (`PHASE5B_PLAN.md:220`);
 it does not implement 5B-0.
 
-Sources: DeSmuME checkout `/home/one/3ds/desmume`, commit `fc504ee0` (2026-10-25),
+Sources: DeSmuME checkout `$HOME/3ds/desmume`, commit `fc504ee0` (2026-10-25),
 whose line numbers are used below; devkitPro libctru headers under
 `/opt/devkitpro/libctru/include/3ds/gpu/`. Labels follow
 `docs/PHASE5A_V2_RENDERER_DESIGN.md:30`: **VERIFIED** = read at the cited line,
@@ -590,8 +590,8 @@ lookup tables are built in `rasterize.cpp:2074-2085` as
 Status: host-side RGBA8 preparation implemented in `common/twlhd_pica_tex.[ch]`
 and `tests/host/pica_tex_cli.c` (**BUILD/UNIT only**; nothing EMULATOR or
 HARDWARE verified). Sources read for this section: the Azahar checkout in
-`/home/one/3ds/azahar` (preferred where sources disagree), Panda3DS in
-`/home/one/3ds/Panda3DS`, libctru in `/opt/devkitpro/libctru/include`, and
+`$HOME/3ds/azahar` (preferred where sources disagree), Panda3DS in
+`$HOME/3ds/Panda3DS`, libctru in `/opt/devkitpro/libctru/include`, and
 3DBrew "GPU/Internal_Registers" (reachable online on 2026-11-12; only its wrap
 table is used below, it does not document the texture memory layout).
 

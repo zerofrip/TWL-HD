@@ -14,8 +14,8 @@ about the *model*, never about hardware.
 
 **Evidence paths.**
 - DeSmuME source citations are the **pristine** checkout
-  `/home/one/3ds/desmume` (`release_0_9_13-429-gfc504ee0`).
-- Scratch derivative: `/home/one/3ds/hwtest-staging/desmume-dbg` (rsync of the
+  `$HOME/3ds/desmume` (`release_0_9_13-429-gfc504ee0`).
+- Scratch derivative: `$HOME/3ds/hwtest-staging/desmume-dbg` (rsync of the
   pristine tree), patch `hwtest-staging/desmume-dbg-patch/bkpt-register-dump.patch`,
   build directory `hwtest-staging/desmume-dbg-build` (new; the existing
   `desmume-build` was not touched).
@@ -57,18 +57,18 @@ is fact and what is not.
 **Scratch tree (not this repository).**
 
 ```
-rsync -a /home/one/3ds/desmume/ /home/one/3ds/hwtest-staging/desmume-dbg/
+rsync -a $HOME/3ds/desmume/ $HOME/3ds/hwtest-staging/desmume-dbg/
 ```
 
 **Build**, same recipe as `hwtest-staging/build_desmume.sh`, new build
 directory:
 
 ```
-meson setup /home/one/3ds/hwtest-staging/desmume-dbg-build \
-  /home/one/3ds/hwtest-staging/desmume-dbg/desmume/src/frontend/posix \
+meson setup $HOME/3ds/hwtest-staging/desmume-dbg-build \
+  $HOME/3ds/hwtest-staging/desmume-dbg/desmume/src/frontend/posix \
   -Dfrontend-gtk=false -Dfrontend-cli=true -Dopengl=false -Dwifi=false \
   --buildtype=release
-ninja -C /home/one/3ds/hwtest-staging/desmume-dbg-build
+ninja -C $HOME/3ds/hwtest-staging/desmume-dbg-build
 ```
 
 Result (FACT, real output):
@@ -392,7 +392,7 @@ file I/O at all) → `arm9v2/twlhd-arm9v2-s2.nds`, SHA-256
 `479792983437417d8e95fb97e5c872ddef0c97cf3dd2839917c977cceb0564ba`:
 
 ```
-$ /home/one/3ds/twlhd-desmume-harness/harness arm9v2/twlhd-arm9v2-s2.nds 242 --out … --ppm …
+$ $HOME/3ds/twlhd-desmume-harness/harness arm9v2/twlhd-arm9v2-s2.nds 242 --out … --ppm …
 rc=0
 format geometry-dump 1
 emulator desmume fc504ee0

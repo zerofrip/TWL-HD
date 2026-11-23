@@ -17,7 +17,7 @@
  *
  * The opcode and status values below are hardware/protocol facts cited from
  * the reference implementation at
- *   /home/one/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
+ *   $HOME/3ds/RtcPwalker/arm7_rtcom_patch/arm7/source/rtcom.h
  * (GPLv3).  Only the numeric values are reused; the names, comments, and
  * control flow are original to TWL-HD.
  */

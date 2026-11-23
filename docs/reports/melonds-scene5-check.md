@@ -4,7 +4,7 @@
 **Scope:** INVESTIGATION ONLY. No product code, test, interpreter, renderer, ROM,
 harness, melonDS or DeSmuME change; the only file added to this repository is
 this report. The melonDS checkout was built **out of tree** under
-`/home/one/3ds/hwtest-staging/melonds-build/` (scratch, not committed) and a
+`$HOME/3ds/hwtest-staging/melonds-build/` (scratch, not committed) and a
 small GPL-labelled driver was written **there**, not in this repo. No console,
 SD-card or network action was performed, and no system package was installed.
 Every statement about the real DS remains a **HYPOTHESIS** or **UNVERIFIED**
@@ -17,13 +17,13 @@ run. UNVERIFIED = no local source exists / it was not run. Emulator facts are
 facts about the *model*, never about hardware.
 
 **Evidence paths.** melonDS line numbers are from the pinned checkout
-`/home/one/3ds/melonDS` at HEAD `1e654443e4c0a54b40709c0208aa0eeba41e6142`
+`$HOME/3ds/melonDS` at HEAD `1e654443e4c0a54b40709c0208aa0eeba41e6142`
 (`git status --porcelain` empty before and after; a scratch **copy** was used for
 the one control in section 2.5, never the checkout). DeSmuME line numbers are
-from the pinned checkout `/home/one/3ds/desmume` at
+from the pinned checkout `$HOME/3ds/desmume` at
 `release_0_9_13-429-gfc504ee0`, which stores the geometry engine at
 `desmume/src/gfx3d.cpp` (no `src/3D/`). The ROM run is
-`/home/one/3ds/hwtest-staging/run23/s5cull-plain.nds`, sha256
+`$HOME/3ds/hwtest-staging/run23/s5cull-plain.nds`, sha256
 `1bde37007ab36c05b0457874dce56e633670aedf2c66e840b0c5e219fe8afd01`
 (verified in this session, matching the prefix the owner supplied).
 
@@ -148,10 +148,10 @@ them by zero (picture = black).
 **FACT (commands run in this session).**
 
 ```sh
-cmake -S /home/one/3ds/melonDS -B /home/one/3ds/hwtest-staging/melonds-build \
+cmake -S $HOME/3ds/melonDS -B $HOME/3ds/hwtest-staging/melonds-build \
       -DBUILD_QT_SDL=OFF -DENABLE_OGLRENDERER=OFF -DENABLE_GDBSTUB=OFF \
       -DCMAKE_BUILD_TYPE=Release
-cmake --build /home/one/3ds/hwtest-staging/melonds-build --target core -j16
+cmake --build $HOME/3ds/hwtest-staging/melonds-build --target core -j16
 ```
 
 - `BUILD_QT_SDL=OFF` (`CMakeLists.txt:106-111`) builds only the `core` static
@@ -161,7 +161,7 @@ cmake --build /home/one/3ds/hwtest-staging/melonds-build --target core -j16
   and `zstd` is not, but it is not needed by `core` (it linked without
   `-lzstd`).
 - Driver (scratch, GPL-3.0-or-later labelled, **not** in this repo and **not**
-  in the checkout): `/home/one/3ds/hwtest-staging/melonds-build/scene5_driver.cpp`
+  in the checkout): `$HOME/3ds/hwtest-staging/melonds-build/scene5_driver.cpp`
   plus `platform_stubs.cpp` (the `melonDS::Platform` functions the core expects
   from a frontend), linked against
   `melonds-build/src/libcore.a` and `.../teakra/src/libteakra.a` with the
@@ -210,7 +210,7 @@ boot, not a BIOS boot; it is not byte-identical to a console boot.
 ### 2.3 Result: the quad is BLACK
 
 **FACT (emulator run, artefact
-`/home/one/3ds/hwtest-staging/melonds-build/s5_f240.ppm`, sha256
+`$HOME/3ds/hwtest-staging/melonds-build/s5_f240.ppm`, sha256
 `1fd9d9655964fcd78aad61404b948ac0efed627174e950dfb385989ce6f07560`, 147471
 bytes, 256×192 P6; byte-identical across two repeat runs).**
 

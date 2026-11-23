@@ -32,7 +32,7 @@ Requirements: a C11 compiler, POSIX sockets, and libjpeg headers/library
 one clear line if missing.
 
 The viewer's bundled `jpeg_turbo` is referenced through
-`NTRVIEWER_DIR ?= /home/one/3ds/ntrviewer-hr`, but it cannot be built standalone
+`NTRVIEWER_DIR ?= $(HOME)/3ds/ntrviewer-hr`, but it cannot be built standalone
 on this host: it hard-codes `WITH_SIMD 1` (`jpeg_turbo/jconfig.h:22`) and needs
 `nasm` for `jpeg_turbo/simd/x86_64/*.asm`; `nasm` is absent. The target
 therefore falls back to the system libjpeg-turbo headers, as allowed by the
@@ -67,7 +67,7 @@ runtime error is one timestamped stderr line.
 
 ## Protocol summary (viewer citations)
 
-All facts below were read from `/home/one/3ds/ntrviewer-hr` (MIT). The viewer's
+All facts below were read from `$HOME/3ds/ntrviewer-hr` (MIT). The viewer's
 menu thread connects TCP to the console on port **8000**
 (`main.c:823-829`), and the UDP stream listens on port **8001**
 (`ntr_common.c:22`).
@@ -248,7 +248,7 @@ This tool performs only the actions the owner already allowed on 2026-11-07:
 NTR-HR streaming from TCP 8000 / UDP 8001. Brick-risk operations (NAND, system
 titles, boot chain, TWL/DS-mode path, formatting) still require owner approval.
 Every console action must be logged and reported. See
-`/home/one/3ds/hwtest-staging/CONSOLE_ACCESS_POLICY.md`.
+`$HOME/3ds/hwtest-staging/CONSOLE_ACCESS_POLICY.md`.
 
 ## License
 

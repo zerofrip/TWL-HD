@@ -8,11 +8,11 @@ interpreter, renderer, harness or pristine DeSmuME tree was modified. The only
 files this task adds to the repository are this report and an append-only
 `Update` section in `docs/reports/cubes64-branch0-diagnosis.md`. A scratch copy
 of DeSmuME outside the repository
-(`/home/one/3ds/hwtest-staging/desmume-dbg`, originally documented in
+(`$HOME/3ds/hwtest-staging/desmume-dbg`, originally documented in
 `docs/reports/bkpt-diagnosis.md` section 1) was extended with a new diagnostic
-patch (`/home/one/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch`)
+patch (`$HOME/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch`)
 and built into a new scratch CLI
-(`/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`). No console,
+(`$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`). No console,
 SD-card or network action was performed.
 
 **Labels.** FACT = read at the cited `file:line` or a command output quoted
@@ -159,13 +159,13 @@ Both logged `ROM crc: 1B79DB9D` (§1).
 ### 2.2 Fresh runs the next morning did not reproduce with the same binary
 
 **FACT:** five fresh runs on 2026-11-18 with the unchanged existing scratch CLI
-(`/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) produced no
+(`$HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli`) produced no
 `TWLHD_BKPT` line.
 
 Run command (capture output omitted):
 
 ```
-$ for i in 1 2 3 4 5; do mkdir -p /tmp/opencode/c64-nov18-rerun-$i; DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-nov18-rerun-$i; done
+$ for i in 1 2 3 4 5; do mkdir -p /tmp/opencode/c64-nov18-rerun-$i; DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-nov18-rerun-$i; done
 ```
 
 Raw `grep -c` results:
@@ -187,9 +187,9 @@ continues with `TWLHD_SWAP n=180 frame=188`. A side-by-side diff was produced by
 ```
 $ diff <(grep -v '^TWLHD_FRAME' /tmp/opencode/c64-run1/desmume.log) <(grep -v '^TWLHD_FRAME' /tmp/opencode/c64-nov18-rerun-1/desmume.log)
 2c2
-< + exec env -u DISPLAY -u WAYLAND_DISPLAY SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy python3 -I -c 'import signal,os,sys; [signal.signal(getattr(signal,n),signal.SIG_DFL) for n in ("SIGINT","SIGQUIT","SIGXFSZ","SIGPIPE") if hasattr(signal,n)]; os.execvp(sys.argv[1], sys.argv[1:])' stdbuf -oL -eL /home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli --cflash-image /tmp/opencode/c64-run1/cflash.img --disable-sound --disable-limiter arm9v2/twlhd-arm9v2-autodump-c64.nds
+< + exec env -u DISPLAY -u WAYLAND_DISPLAY SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy python3 -I -c 'import signal,os,sys; [signal.signal(getattr(signal,n),signal.SIG_DFL) for n in ("SIGINT","SIGQUIT","SIGXFSZ","SIGPIPE") if hasattr(signal,n)]; os.execvp(sys.argv[1], sys.argv[1:])' stdbuf -oL -eL $HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli --cflash-image /tmp/opencode/c64-run1/cflash.img --disable-sound --disable-limiter arm9v2/twlhd-arm9v2-autodump-c64.nds
 ---
-> + exec env -u DISPLAY -u WAYLAND_DISPLAY SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy python3 -I -c 'import signal,os,sys; [signal.signal(getattr(signal,n),signal.SIG_DFL) for n in ("SIGINT","SIGQUIT","SIGXFSZ","SIGPIPE") if hasattr(signal,n)]; os.execvp(sys.argv[1], sys.argv[1:])' stdbuf -oL -eL /home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli --cflash-image /tmp/opencode/c64-nov18-rerun-1/cflash.img --disable-sound --disable-limiter arm9v2/twlhd-arm9v2-autodump-c64.nds
+> + exec env -u DISPLAY -u WAYLAND_DISPLAY SDL_VIDEODRIVER=offscreen SDL_AUDIODRIVER=dummy python3 -I -c 'import signal,os,sys; [signal.signal(getattr(signal,n),signal.SIG_DFL) for n in ("SIGINT","SIGQUIT","SIGXFSZ","SIGPIPE") if hasattr(signal,n)]; os.execvp(sys.argv[1], sys.argv[1:])' stdbuf -oL -eL $HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli --cflash-image /tmp/opencode/c64-nov18-rerun-1/cflash.img --disable-sound --disable-limiter arm9v2/twlhd-arm9v2-autodump-c64.nds
 7c7
 < Using CFlash disk image file /tmp/opencode/c64-run1/cflash.img
 ---
@@ -241,13 +241,13 @@ $ file /tmp/opencode/c64-run1/cflash.img /tmp/opencode/c64-ref1/cflash.img
 
 ### 2.4 RTC + cflash sweep
 
-A new scratch CLI was built in `/home/one/3ds/hwtest-staging/desmume-dbg-build2`
+A new scratch CLI was built in `$HOME/3ds/hwtest-staging/desmume-dbg-build2`
 with an RTC-epoch override (`TWLHD_RTC_EPOCH`) added to `src/rtc.cpp`.
 **FACT:** with no override the build2 CLI runs past `TWLHD_SWAP n=120 frame=122`
 and produces no `TWLHD_BKPT` line:
 
 ```
-$ mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1
+$ mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1
 capture: /tmp/opencode/c64-noepoch-rerun-1/twlhd_frame_v2.bin
 ```
 
@@ -277,7 +277,7 @@ $ for e in 1794921881 1794925481 1794925511 1794927600 1794929081 1794961800; do
 >   for r in 1 2; do
 >     dir=/tmp/opencode/c64-epoch-${e}-${r}
 >     mkdir -p $dir
->     TWLHD_RTC_EPOCH=$e DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds $dir
+>     TWLHD_RTC_EPOCH=$e DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds $dir
 >   done
 > done
 ```
@@ -349,7 +349,7 @@ RTC epoch produced no BKPT:
 
 ```
 $ mkdir -p /tmp/opencode/c64-oldimg-currenttime
-$ timeout 35 stdbuf -oL -eL /home/one/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli --cflash-image /tmp/opencode/c64-run1/cflash.img --disable-sound --disable-limiter arm9v2/twlhd-arm9v2-autodump-c64.nds > /tmp/opencode/c64-oldimg-currenttime/desmume.log 2>&1
+$ timeout 35 stdbuf -oL -eL $HOME/3ds/hwtest-staging/desmume-dbg-build/cli/desmume-cli --cflash-image /tmp/opencode/c64-run1/cflash.img --disable-sound --disable-limiter arm9v2/twlhd-arm9v2-autodump-c64.nds > /tmp/opencode/c64-oldimg-currenttime/desmume.log 2>&1
 $ grep -c TWLHD_BKPT /tmp/opencode/c64-oldimg-currenttime/desmume.log
 0
 ```
@@ -377,11 +377,11 @@ The updated patch (`desmume-dbg-patch/cubes64-entry-trace.patch`) adds:
 The build command was:
 
 ```
-meson setup --wipe /home/one/3ds/hwtest-staging/desmume-dbg-build2 \
-  /home/one/3ds/hwtest-staging/desmume-dbg/desmume/src/frontend/posix \
+meson setup --wipe $HOME/3ds/hwtest-staging/desmume-dbg-build2 \
+  $HOME/3ds/hwtest-staging/desmume-dbg/desmume/src/frontend/posix \
   -Dfrontend-gtk=false -Dfrontend-cli=true -Dopengl=false -Dwifi=false \
   --buildtype=release
-ninja -C /home/one/3ds/hwtest-staging/desmume-dbg-build2
+ninja -C $HOME/3ds/hwtest-staging/desmume-dbg-build2
 ```
 
 Build result:
@@ -397,7 +397,7 @@ Two final runs used:
 ```
 TWLHD_RTC_EPOCH=1794925481 \
 TWLHD_PCLOG2=/tmp/opencode/c64-final1/pclog2.bin \
-DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli \
+DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli \
 DESMUME_TIMEOUT=30 \
 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-final1
 ```
@@ -559,7 +559,7 @@ TWLHD_DTCM_WRITE pc=02004850 value=02FF0000
 guest CP15 value masked to `val & 0x0FFFF000`:
 
 ```
-$ grep -n -A 8 "MMU.DTCMRegion = armcp15->DTCMRegion = val & 0x0FFFF000" /home/one/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch
+$ grep -n -A 8 "MMU.DTCMRegion = armcp15->DTCMRegion = val & 0x0FFFF000" $HOME/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch
 @@ -483,7 +484,17 @@
  				{
  				case 0:
@@ -799,7 +799,7 @@ hardware could ever take the same path.
   step. Fixed the `epilogue'sn` markdown typo. Evidence:
   `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf` (BL encoding
   `f000 fab1` and branch target arithmetic); the patch snippet from
-  `/home/one/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch`
+  `$HOME/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch`
   showing `TWLHD_DTCM_WRITE` logs `val & 0x0FFFF000`; `make test` passes.
 
 - **REQ-12 (round 2 repair of entry-trace report, 2026-11-18).** Removed the
@@ -817,7 +817,7 @@ hardware could ever take the same path.
   `bl twlhd_gx_rec_hook` call site in §1, replacing the earlier abbreviated
   disassembly block. `make test` passes.
 
-- **REQ-13 (round 3 repair of entry-trace report, 2026-11-18).** Corrected the BL/LR arithmetic in §4 Open item 1, CAUSE, and `cubes64-branch0-diagnosis.md` Update item 1: the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52` (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 = 0x02001D53`; the observed `lr=02001D53` is the suffix's own LR result, not evidence against the clobbered-LR hypothesis. Removed the "Tension" sentence in all three places. Evidence: `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E '^ 2001d4e:|^ 2001d52:'` (`f000 fab1`). Relabelled the §3.4 hook-invocation inference as **HYPOTHESIS**, stated plainly that the ring does not show the BL prefix at `0x02001D4E` right before the IRQ, noted that `0x020020DE` (the LR value the hypothesis needs) also appears in the ring, and added Open item 4 naming the conflict with a hook-body PC (`0x020022CC`) immediately before the IRQ vector. Evidence: `grep TWLHD_PLAN_RANGE_ENTRY_RING /tmp/opencode/c64-final1/desmume.log`. Labelled `0x02FF43A4` in §4 Open item 2 and CAUSE as derived from the §3.6 trace (`SP = 0x02FF4394` before the final `pop {pc}`, PCLOG2 entry 1282299), +16. Evidence: `python3 /tmp/opencode/decode_pclog2.py /tmp/opencode/c64-final1/pclog2.bin 1282287 1282302`. Replaced the hand-added PCLOG2 index marker with the full scratch-decoder command and its raw, unannotated output. Quoted the full commands and raw outputs for the §1 `arm-none-eabi-nm`/`readelf` evidence, the §3.3 `TWLHD_BKPT` grep, the §3.4 `TWLHD_PLAN_RANGE_ENTRY`/`RING`/`SUMMARY` greps, the §3.6 `TWLHD_SP_ALERT` grep, and the §3.7 `TWLHD_DTCM_WRITE`/`TWLHD_DTCM_REGION` greps. Rewrote §2.4 to quote a no-override run and limit the non-old-epoch claim to "no `TWLHD_BKPT` line". Evidence: `mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1` (output `capture: /tmp/opencode/c64-noepoch-rerun-1/twlhd_frame_v2.bin`) and `grep -c TWLHD_BKPT /tmp/opencode/c64-noepoch-rerun-1/desmume.log` (`0`). Rewrote `cubes64-branch0-diagnosis.md` Update section diff sentence to state the diff was filtered with `grep -v '^TWLHD_FRAME'` and diverges at line 55 after path differences at lines 2, 7 and 25. Replaced the abbreviated objdump command reference in REQ-12 with the two full commands quoted in §1. `make test` passes.
+- **REQ-13 (round 3 repair of entry-trace report, 2026-11-18).** Corrected the BL/LR arithmetic in §4 Open item 1, CAUSE, and `cubes64-branch0-diagnosis.md` Update item 1: the prefix `f000` at `0x02001D4E` sets `LR = 0x02001D4E + 4 = 0x02001D52` (no Thumb bit); the suffix `fab1` at `0x02001D50` branches to `LR_before_suffix + 0x562` and sets `LR = (address of next instruction) | 1 = 0x02001D53`; the observed `lr=02001D53` is the suffix's own LR result, not evidence against the clobbered-LR hypothesis. Removed the "Tension" sentence in all three places. Evidence: `arm-none-eabi-objdump -d arm9v2/twlhd-arm9v2-autodump-c64.elf | grep -E '^ 2001d4e:|^ 2001d52:'` (`f000 fab1`). Relabelled the §3.4 hook-invocation inference as **HYPOTHESIS**, stated plainly that the ring does not show the BL prefix at `0x02001D4E` right before the IRQ, noted that `0x020020DE` (the LR value the hypothesis needs) also appears in the ring, and added Open item 4 naming the conflict with a hook-body PC (`0x020022CC`) immediately before the IRQ vector. Evidence: `grep TWLHD_PLAN_RANGE_ENTRY_RING /tmp/opencode/c64-final1/desmume.log`. Labelled `0x02FF43A4` in §4 Open item 2 and CAUSE as derived from the §3.6 trace (`SP = 0x02FF4394` before the final `pop {pc}`, PCLOG2 entry 1282299), +16. Evidence: `python3 /tmp/opencode/decode_pclog2.py /tmp/opencode/c64-final1/pclog2.bin 1282287 1282302`. Replaced the hand-added PCLOG2 index marker with the full scratch-decoder command and its raw, unannotated output. Quoted the full commands and raw outputs for the §1 `arm-none-eabi-nm`/`readelf` evidence, the §3.3 `TWLHD_BKPT` grep, the §3.4 `TWLHD_PLAN_RANGE_ENTRY`/`RING`/`SUMMARY` greps, the §3.6 `TWLHD_SP_ALERT` grep, and the §3.7 `TWLHD_DTCM_WRITE`/`TWLHD_DTCM_REGION` greps. Rewrote §2.4 to quote a no-override run and limit the non-old-epoch claim to "no `TWLHD_BKPT` line". Evidence: `mkdir -p /tmp/opencode/c64-noepoch-rerun-1 && DESMUME_CLI=$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli DESMUME_TIMEOUT=30 tools/emulator/desmume_capture.sh arm9v2/twlhd-arm9v2-autodump-c64.nds /tmp/opencode/c64-noepoch-rerun-1` (output `capture: /tmp/opencode/c64-noepoch-rerun-1/twlhd_frame_v2.bin`) and `grep -c TWLHD_BKPT /tmp/opencode/c64-noepoch-rerun-1/desmume.log` (`0`). Rewrote `cubes64-branch0-diagnosis.md` Update section diff sentence to state the diff was filtered with `grep -v '^TWLHD_FRAME'` and diverges at line 55 after path differences at lines 2, 7 and 25. Replaced the abbreviated objdump command reference in REQ-12 with the two full commands quoted in §1. `make test` passes.
 - **REQ-14 (round 4 repair of entry-trace report, 2026-11-18).** Fixed six evidence-discipline defects in `docs/reports/cubes64-entry-trace.md` and the Update section of `docs/reports/cubes64-branch0-diagnosis.md`: (1) deleted the stale "tension" clause in REQ-11 (consistent with REQ-13); (2) reworded §2.2 to state that, with `TWLHD_FRAME` lines filtered out, the old and new logs differ only in cflash image paths at lines 2, 7 and 25 until line 55, where the old log has the `ARM OP_BKPT`/BKPT dump block and the new log continues with `TWLHD_SWAP n=180 frame=188`; (3) limited the §2.2 non-reproduction claim to "produced no `TWLHD_BKPT` line" (matching the §2.4/REQ-13 precedent); (4) reworded the Update section epoch claim as **HYPOTHESIS** restricted to the six sampled epochs with exact `TWLHD_RTC_EPOCH` values (reproduced at `1794921881`, `1794925481`, `1794925511`; not at `1794927600`, `1794929081`, `1794961800`) and limited the Nov-18 epochs to "produced no `TWLHD_BKPT` line"; (5) scoped §2.3 autodump sha256sum and cflash `file` comparisons to the two directories actually compared (`c64-run1` and `c64-ref1`) and removed the unevidenced "fresh morning image" wording; (6) replaced the command-less §1/§2.3 `ROM crc: 1B79DB9D` FACTs with a quoted `grep -H 'ROM crc' ...` command and its raw output covering every run quoted below. Evidence: the `grep -H 'ROM crc' ...` command quoted in §1 and its raw output. No new scratch DeSmuME runs were required; existing `/tmp/opencode/c64-*` logs were used. `make test` passes.
 
 - **REQ-15 (round 4 docs-only repair of entry-trace report and branch0 Update, 2026-11-18).** Removed the unlabeled general epoch claim in `docs/reports/cubes64-branch0-diagnosis.md` Update section and replaced it with a scoped observation: with a fresh cflash image, reproduced the reference dump at `TWLHD_RTC_EPOCH=1794921881`, `1794925481` and `1794925511` (2026-11-17 22:24:41, 23:24:41, 23:25:11 +0900) and produced no `TWLHD_BKPT` line at `TWLHD_RTC_EPOCH=1794927600`, `1794929081` and `1794961800`. Reworded the Update section **HYPOTHESIS** to state that the observation covers only the six sampled epochs. Aligned the branch0 Update non-reproduction sentence with the REQ-13/REQ-14 precedent ("produced no `TWLHD_BKPT` line"). Made the same wording change in the `cubes64-entry-trace.md` CAUSE hypothesis. For the §1 ROM-CRC FACT, chose option (a): added `/tmp/opencode/c64-oldimg-currenttime/desmume.log` to the quoted `grep -H 'ROM crc' ...` command and verified the real 24-line raw output, so the FACT now covers every run quoted in the report including the §2.4 old-image/current-epoch run. Verified that the `cubes64-entry-trace.md` §2.3 FACT and the branch0 Update sentence ("the ROM CRC was identical across every run quoted in ... §1") remain consistent with the expanded §1 scope. Evidence: the corrected Update paragraph and the six `TWLHD_RTC_EPOCH` values for defect 1; the exact `grep -H 'ROM crc' /tmp/opencode/c64-run1/desmume.log ... /tmp/opencode/c64-oldimg-currenttime/desmume.log` command quoted in §1 and its raw 24-line output for defect 2. No new scratch DeSmuME runs were required; existing `/tmp/opencode/c64-*` logs were used. TESTS: `make test` — no regression.
@@ -832,8 +832,8 @@ hardware could ever take the same path.
   `TWLHD_RTC_EPOCH=1794925481` and a fresh cflash image reproduced it in two
   independent runs.
 - **Instrumentation:** new/updated patch
-  `/home/one/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch`,
-  new build `/home/one/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`;
+  `$HOME/3ds/hwtest-staging/desmume-dbg-patch/cubes64-entry-trace.patch`,
+  new build `$HOME/3ds/hwtest-staging/desmume-dbg-build2/cli/desmume-cli`;
   raw logs quoted above.
 - **No repo files modified** other than the two documentation files.
 - **`make test`** passes.
