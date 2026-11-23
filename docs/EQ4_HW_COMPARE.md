@@ -167,3 +167,36 @@ existing rotating-capture result is overridden by this plan.
 | (c) synthetic identity/shift/colour/empty tests and the real rotating-fixture regression | `tools/test_eq4_hw_compare.py`, section 6 |
 | Plan block for the owner's hardware procedure and outcome meanings | section 7 |
 | Hardware comparison not done, no equality claim | sections 1, 7 |
+
+## 9. Real hardware run (2026-11-23)
+
+Sections 1, 7 and the section 8 row "Hardware comparison not done" above are
+kept as historical text; this section records the first real run and supersedes
+them. Every item of the section 7 plan that this run needed is now done: the
+plain `SCENE=5 STATIC_ANGLE=<0|30>` ROMs were built (section 7 item
+1), uploaded to `/roms/nds/` (item 2, OWNER-REPORTED), started from TWiLight
+Menu++ in DS mode, and captured passively with the cc3dsfs board using
+`--enabled_both 0 --enabled_top 1 --scaling_top 1` (item 3, OWNER-REPORTED);
+the captures were decoded with the fixed 24-bpp decoder and cropped to the top
+400x240 region (item 4); and
+`python3 tools/eq4_hw_compare.py --capture <png> --reference <ppm>` was run
+against both the DeSmuME harness reference and the PICA render (item 5, items
+quoted with complete raw output in the report).
+
+Results, each `basis=one console, one capture`:
+
+| Pair | Verdict | ds.frac_within_flat | bbox_dev l/t/r/b |
+|---|---|---|---|
+| st0 hardware vs harness | PASS | 0.9997 | 2/2/1/1 |
+| st30 hardware vs harness | PASS | 0.9998 | 1/2/1/1 |
+| st0 hardware vs PICA render | PASS | 0.9999 | 1/2/0/1 |
+| st30 hardware vs PICA render | PASS | 0.9986 | 0/2/0/1 |
+| st0 hardware vs st30 harness (control) | FAIL | 0.8611 | 41/9/13/1 |
+| st30 hardware vs st0 harness (control) | FAIL | 0.8546 | 44/13/15/3 |
+
+Tests: `tools/test_eq4_hw_compare.py` (`RealScene5StaticCompareTest`) asserts
+these four PASSes and both non-PASS controls; fixtures live in
+`tools/fixtures/eq4_hw/`. Limits: one console, one capture per angle, one ROM
+per angle; not bit-exactness, not other scenes/consoles, and the alpha
+convention (`a/31` vs `(a+1)/32`) stays UNVERIFIED (all alpha 31). Report:
+`docs/reports/eq4f-scene5-static-hw-compare.md`.

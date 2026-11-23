@@ -738,6 +738,8 @@ Report: `docs/reports/eq4c-ds-scale-measurement.md`.
 
 **Update (2026-11-23):** EQ-4e recorded a scene5 hardware capture through the fixed decoder: the top 400×240 crop shows the rotating textured quad in five colour cells (black background, white, yellow (255,255,24), green (0,255,8), blue (0,0,247), red (255,0,0)), consistent with the white initial vertex colour (EQ-4d; two ROM variants); no cyan (24,255,255) or magenta (255,24,255) at count ≥ 20 in the histogram. A pixel comparison with the PICA render still needs a static, non-rotating build to align phase. Report: `docs/reports/eq4e-scene5-hw-capture.md`.
 
+**Result EQ-4f (2026-11-23):** **EQ-4f: the first real hardware comparison of the static textured scene5 passes against both references on one console.** The cc3dsfs hardware captures of the plain `STATIC_ANGLE=0` and `=30` ROMs (fixtures `tools/fixtures/eq4_hw/st{0,30}_3_top400x240.png`) compared with the DeSmuME harness frame 240 and with the PICA render each give `verdict=PASS` (`basis=one console, one capture`; `ds.frac_within_flat` 0.9986-0.9999; bbox deviations <= 2 DS px); the swapped-angle controls FAIL. This supersedes the "neither was run on a console" sentence in `docs/EQ_SCENES.md` 6.8 for these two static ROMs only. UNVERIFIED: bit-exactness, other scenes/consoles, the alpha convention (all alpha 31). Report: `docs/reports/eq4f-scene5-static-hw-compare.md`.
+
 **D3 — Is pixel equality a goal at all?**
 **Recommend: only for the "must be equal" rows of section 2.3.** Fidelity to the DS
 rasteriser is a non-goal (`docs/PHASE5A_V2_RENDERER_DESIGN.md:41-42`), and fog/edge/AA/toon/

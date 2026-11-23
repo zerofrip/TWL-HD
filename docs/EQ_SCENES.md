@@ -572,6 +572,19 @@ and no claim is made that it reproduces that file.
   (`docs/EQ4_HW_COMPARE.md`) exists, but the real hardware capture is a later
   owner step and is UNVERIFIED here.
 
+### 6.9 Hardware run of the static scene5 ROMs (2026-11-23, supersedes 6.8)
+
+The plain `SCENE=5 STATIC_ANGLE=0` and `=30` ROMs of 6.7 were run on one New
+3DS in DS mode and captured passively with the cc3dsfs board (owner-reported
+procedure; fixtures `tools/fixtures/eq4_hw/`). Compared with both the DeSmuME
+harness frame 240 and the PICA render, each capture gives `verdict=PASS` under
+the EQ-4 tool tolerances (`ds.frac_within_flat` 0.9986-0.9999, bbox deviations
+<= 2 DS px); swapped-angle controls FAIL. This supersedes the "neither was run
+on a console" sentence in 6.8 for these two static ROMs only; bit-exactness,
+other scenes/consoles and the alpha convention (all alpha 31) remain
+UNVERIFIED. Tests: `tools/test_eq4_hw_compare.py`. Report:
+`docs/reports/eq4f-scene5-static-hw-compare.md`.
+
 
 ## 7. Tests
 

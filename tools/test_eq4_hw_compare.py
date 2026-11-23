@@ -193,5 +193,97 @@ class Eq4HwCompareTest(unittest.TestCase):
         self.assertEqual(result.returncode, expected_exit, result.stdout)
 
 
+HARNESS_DIR = os.path.join(TOOLS_DIR, "fixtures", "eq_scenes")
+HW_DIR = os.path.join(TOOLS_DIR, "fixtures", "eq4_hw")
+HARNESS_REFS = {
+    "st0": os.path.join(HARNESS_DIR, "harness_s5_st0_f240.png"),
+    "st30": os.path.join(HARNESS_DIR, "harness_s5_st30_f240.png"),
+}
+HW_CAPTURES = {
+    "st0": os.path.join(HW_DIR, "st0_3_top400x240.png"),
+    "st30": os.path.join(HW_DIR, "st30_3_top400x240.png"),
+}
+OURS_REFS = {
+    "st0": os.path.join(HW_DIR, "ours_s5_st0_top400x240.png"),
+    "st30": os.path.join(HW_DIR, "ours_s5_st30_top400x240.png"),
+}
+REAL_FIXTURES = tuple(HARNESS_REFS.values()) + tuple(HW_CAPTURES.values()) \
+    + tuple(OURS_REFS.values())
+
+
+@unittest.skipIf(DISCOVER_SKIP,
+                 "run once via the test-eq4-hw-compare make target; discover "
+                 "skips it to avoid a double run")
+@unittest.skipUnless(HAVE_PIL, "PIL is not installed, so PNG references "
+                               "cannot be converted to PPM (labelled skip)")
+@unittest.skipUnless(all(os.path.isfile(path) for path in REAL_FIXTURES),
+                     "the committed real scene5 fixtures are not present")
+class RealScene5StaticCompareTest(unittest.TestCase):
+    """The first real hardware-vs-reference comparison (2026-11-23).
+
+    Hardware = cc3dsfs top-screen captures of the static scene5 ROMs
+    (`tools/fixtures/eq4_hw/st{0,30}_3_top400x240.png`).  References: the
+    DeSmuME harness PPM and our Pica render (both committed as PNG and
+    converted to PPM here).  Every assertion is on what the tool prints.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="eq4-hw-real-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _ppm(self, png, name):
+        path = os.path.join(self.tmp, name + ".ppm")
+        Image.open(png).convert("RGB").save(path)
+        return path
+
+    def _assert_pass(self, capture, reference):
+        result = run_tool(capture, reference)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertEqual(report["verdict"], "PASS", result.stdout)
+        self.assertEqual(report["basis"], "one console, one capture")
+        for edge in ("left", "top", "right", "bottom"):
+            self.assertLessEqual(int(report["bbox_dev_" + edge]), 3,
+                                 result.stdout)
+        self.assertGreaterEqual(float(report["ds.frac_within_flat"]), 0.95,
+                                result.stdout)
+        return report
+
+    def _assert_not_pass(self, capture, reference):
+        result = run_tool(capture, reference)
+        report = parse_report(result.stdout)
+        self.assertIn(report["verdict"], ("FAIL", "NOT-COMPARABLE"),
+                      result.stdout)
+        expected_exit = 1 if report["verdict"] == "FAIL" else 0
+        self.assertEqual(result.returncode, expected_exit, result.stdout)
+        return report
+
+    def test_st0_capture_matches_harness_reference(self):
+        self._assert_pass(HW_CAPTURES["st0"],
+                          self._ppm(HARNESS_REFS["st0"], "harness_st0"))
+
+    def test_st30_capture_matches_harness_reference(self):
+        self._assert_pass(HW_CAPTURES["st30"],
+                          self._ppm(HARNESS_REFS["st30"], "harness_st30"))
+
+    def test_st0_capture_matches_ours_reference(self):
+        self._assert_pass(HW_CAPTURES["st0"],
+                          self._ppm(OURS_REFS["st0"], "ours_st0"))
+
+    def test_st30_capture_matches_ours_reference(self):
+        self._assert_pass(HW_CAPTURES["st30"],
+                          self._ppm(OURS_REFS["st30"], "ours_st30"))
+
+    def test_st0_capture_never_matches_st30_reference(self):
+        self._assert_not_pass(HW_CAPTURES["st0"],
+                              self._ppm(HARNESS_REFS["st30"], "harness_st30"))
+
+    def test_st30_capture_never_matches_st0_reference(self):
+        self._assert_not_pass(HW_CAPTURES["st30"],
+                              self._ppm(HARNESS_REFS["st0"], "harness_st0"))
+
+
 if __name__ == "__main__":
     unittest.main()
