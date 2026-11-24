@@ -350,6 +350,10 @@ void twlhd_demo_draw_frame(unsigned angle) {
 #if TWLHD_DEMO_SCENE != 0
     /* Re-issue all state needed to replay this frame independently. */
     glEnable(GL_ANTIALIAS);
+#ifdef TWLHD_DEMO_BLEND
+    /* Falsification build (EQ-4u §6.3): enable DS alpha blending. */
+    glEnable(GL_BLEND);
+#endif
     glClearColor(0, 0, 0, 31);
     glClearPolyID(63);
     glClearDepth(GL_MAX_DEPTH);

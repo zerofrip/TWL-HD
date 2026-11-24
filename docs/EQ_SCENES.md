@@ -674,3 +674,10 @@ chain records `DISP3DCNT` but never consumes it and always blends; `alpha 0`
 selects wireframe, which no reference draws as an outline. Proposed carriers,
 the sized-not-implemented outline work and a not-applied `BLEND=1` hardware
 falsification plan are in `docs/reports/eq4u-scene4-alpha-why.md`.
+
+## 13. Update (2026-11-25): EQ-4v — blend-enabled falsification ROM
+
+EQ-4v implemented the opt-in `BLEND=1` arm9v2 ROM variant from EQ-4u §6.3
+(`arm9v2/Makefile`, `arm9v2/source/demo_frame.cpp`, `tools/test_arm9v2_blend.py`)
+and documented the (not-run) hardware capture plan in
+`docs/reports/eq4v-blend-rom.md`.

@@ -745,6 +745,10 @@ Not covered by this test: whether our chain *consumes* the new flag (this is a
 DS-side falsification only), other consoles, other angles, textured polygons, the
 A2-vs-A1 red/blue origin.
 
+Implemented as EQ-4v: `BLEND=1` Makefile switch, guarded `glEnable(GL_BLEND)`,
+tests in `tools/test_arm9v2_blend.py`, and the capture plan in
+`docs/reports/eq4v-blend-rom.md`.
+
 ## 7. Tests
 
 Report-only round: no production code changed, so **no test was added, modified

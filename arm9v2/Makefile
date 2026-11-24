@@ -152,6 +152,27 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
+# Optional blend-enable build: BLEND=1 adds glEnable(GL_BLEND) to the scene
+# draw path so a ROM can be compared with the blend bit set (EQ-4u §6.3
+# falsification ROM). Unset/empty leaves TARGET, BUILD and CFLAGS untouched so
+# default ROMs stay byte-identical. This block runs after AUTODUMP/VP/CUBES/SCENE
+# and before STATIC_ANGLE/DIAGSCREEN, so suffixes compose as
+# -autodump...-cN-sN-bl-stN-diagN (e.g. twlhd-arm9v2-autodump-s4-bl-st30).
+#---------------------------------------------------------------------------------
+BLEND_STRIPPED	:=	$(strip $(BLEND))
+ifneq ($(BLEND_STRIPPED),)
+BLEND_OK := $(shell echo '$(BLEND_STRIPPED)' | grep -Eq '^1$$' && echo ok)
+ifeq ($(BLEND_OK),)
+$(error BLEND must be empty or 1 (got: $(BLEND)))
+endif
+TARGET		:=	$(TARGET)-bl
+BUILD		:=	$(BUILD)-bl
+CFLAGS		+=	-DTWLHD_DEMO_BLEND=1
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_BLEND=1
+endif
+
+#---------------------------------------------------------------------------------
 # Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the frame-counter
 # modelview rotation with a fixed angle (degrees) in every draw path, so every
 # frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS untouched so
@@ -223,7 +244,7 @@ $(shell mkdir -p $(BUILD))
 
 # make cannot see -D changes in the object prerequisites, so record the define
 # set in the variant BUILD directory and drop stale objects when it changes.
-TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_STATIC_ANGLE=$(STATIC_ANGLE_STRIPPED) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
+TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_BLEND=$(BLEND_STRIPPED) TWLHD_DEMO_STATIC_ANGLE=$(STATIC_ANGLE_STRIPPED) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
 ifneq ($(strip $(TWLHD_FLAGS_STAMP)),$(strip $(shell cat $(BUILD)/flags.stamp 2>/dev/null)))
 $(shell rm -f $(BUILD)/*.o $(BUILD)/*.d)
 endif
@@ -288,6 +309,8 @@ clean:
 	@rm -f twlhd-arm9v2*-diag*.elf twlhd-arm9v2*-diag*.nds twlhd-arm9v2*-diag*.arm9 twlhd-arm9v2*-diag*.guard twlhd-arm9v2*-diag*.guard.nm twlhd-arm9v2*-diag*.map
 	@rm -fr build-*st[0-9]*
 	@rm -f twlhd-arm9v2*st[0-9]*.elf twlhd-arm9v2*st[0-9]*.nds twlhd-arm9v2*st[0-9]*.arm9 twlhd-arm9v2*st[0-9]*.guard twlhd-arm9v2*st[0-9]*.guard.nm twlhd-arm9v2*st[0-9]*.map
+	@rm -fr build-bl build-*bl*
+	@rm -f twlhd-arm9v2*-bl*.elf twlhd-arm9v2*-bl*.nds twlhd-arm9v2*-bl*.arm9 twlhd-arm9v2*-bl*.guard twlhd-arm9v2*-bl*.guard.nm twlhd-arm9v2*-bl*.map
 
 #---------------------------------------------------------------------------------
 else
