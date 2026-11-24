@@ -435,6 +435,8 @@ exit=0
 `ARM OP_BKPT triggered`, and wrote no PPM. The pair is NOT-COMPARABLE (§5.11),
 never a pass.
 
+EQ-4s rebisected this failure (one harness run per ROM variant): the non-static `CUBES=2 AUTODUMP_FRAME=240` ROM (`703dcad6…`) passes at HEAD and at `d21d189`, the plain static `c2` ROM passes, and only the new static+autodump layout fails (zero 3D flushes, `PC=0x02017310` in `TAN_LUT`, independent of autodump frame 60/240 and angle 30/31). FACT: the fault appears only in the EQ-4q-introduced static+autodump `CUBES=2` build; HYPOTHESIS: a pre-existing binary-layout-sensitive wild jump before the first 3D flush (boot, early main or the first draw call; location UNVERIFIED), not the macro's semantics; mechanism UNVERIFIED. These runs cannot exclude that EQ-4q merely exposed a latent fault. Report `docs/reports/eq4s-c2-harness-bkpt.md`.
+
 ## 4. Ours: DeSmuME v2 capture then the Azahar/PICA render (EMULATOR, FACT)
 
 ### 4.1 DeSmuME v2 capture of the same autodump ROM

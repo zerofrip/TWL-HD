@@ -640,3 +640,7 @@ against our render; its DeSmuME v2 capture did succeed this round (unlike the
 non-static ROM in §3). UNVERIFIED: other consoles/sessions, capture-noise
 origin, textured geometry, the scene-4 alpha/blend mechanisms. Report:
 `docs/reports/eq4r-static-scenes-hw-compare.md`.
+
+## 10. Update (2026-11-24): EQ-4s — the `CUBES=2` static autodump harness BKPT
+
+EQ-4s rebisected the `ARM OP_BKPT` with one harness run per variant: the non-static `CUBES=2 AUTODUMP_FRAME=240` ROM (`703dcad6…`, the EQ-3b fixture ROM) passes at HEAD and at base `d21d189`, the plain static `twlhd-arm9v2-c2-st30.nds` passes at frame 242, and only the new static+autodump `CUBES=2` ROM fails (zero 3D flushes, same undefined-instruction PC `0x02017310`, independent of autodump frame 60/240 and angle 30/31). FACT: the fault appears only in the EQ-4q-introduced static+autodump `CUBES=2` build, not caused by the angle value (30/31) or the autodump frame (60/240). HYPOTHESIS: a pre-existing binary-layout-sensitive wild jump before the first 3D flush (boot, early main or the first draw call; location UNVERIFIED), not the EQ-4q macro's semantics and not the frame/run length; mechanism UNVERIFIED. These runs cannot exclude that EQ-4q merely exposed a latent fault. Proposed (not implemented) compare workaround: use the plain static `c2` ROM for the harness reference. Report: `docs/reports/eq4s-c2-harness-bkpt.md`.
