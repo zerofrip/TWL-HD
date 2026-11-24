@@ -164,13 +164,29 @@ def _classify_cache(data, width):
     return at
 
 
-def load_picture(path, side):
+def load_picture(path, side, correction="off"):
     """Load a PPM and return the DS-grid colour classes plus sampling helpers.
 
     side is "harness" (256x192, read directly) or "ours" (400x240, or 400x480
-    whose upper 400x240 rows are the top screen).
+    whose upper 400x240 rows are the top screen).  correction is the EQ-4p
+    presentation-row mode for an "ours" picture; the default "off" keeps the
+    historical numbers for direct callers, while the CLI defaults to auto.
     """
     width, height, data = parse_ppm(path)
+    correction_line = None
+    if side == "ours":
+        import azahar_presentation
+        if correction == "off":
+            correction_line = azahar_presentation.format_line(
+                False, "--azahar-correction off")
+        else:
+            pixels = [(data[i], data[i + 1], data[i + 2])
+                      for i in range(0, len(data), 3)]
+            pixels, applied, reason = azahar_presentation.apply_correction(
+                correction, pixels, width, height)
+            correction_line = azahar_presentation.format_line(applied, reason)
+            if applied:
+                data = bytearray(channel for rgb in pixels for channel in rgb)
     if side == "harness":
         if (width, height) != (DS_W, DS_H):
             raise FormatError(
@@ -206,6 +222,7 @@ def load_picture(path, side):
         "data": data,
         "grid": grid,
         "at": at,
+        "correction_line": correction_line,
     }
 
 
@@ -446,22 +463,29 @@ def compare(harness, ours):
 
 
 def main(argv=None):
+    import azahar_presentation
     parser = argparse.ArgumentParser(
         description="Structural EQ-3b picture comparison: DeSmuME software "
                     "rasteriser picture vs our Azahar host picture.")
     parser.add_argument("harness", help="DeSmuME harness P6 PPM (256x192)")
     parser.add_argument("ours", help="our top-screen P6 PPM (400x240 or 400x480)")
+    parser.add_argument("--azahar-correction", choices=azahar_presentation.MODES,
+                        default="auto",
+                        help="EQ-4p presentation-row correction for our "
+                             "Azahar picture: auto (row-0 wrap guard, default), "
+                             "on (forced), off (never)")
     args = parser.parse_args(argv)
 
     try:
         harness = load_picture(args.harness, "harness")
-        ours = load_picture(args.ours, "ours")
+        ours = load_picture(args.ours, "ours", args.azahar_correction)
         code, report = compare(harness, ours)
     except (FormatError, OSError) as exc:
         print("eq3: format error: %s" % exc, file=sys.stderr)
         return 2
 
     print("EQ-3b structural picture comparison (EMULATOR)")
+    print(ours["correction_line"])
     for line in report:
         print(line)
     return code

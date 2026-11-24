@@ -249,6 +249,22 @@ class Eq3CompareCliTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("none of the expected face classes", result.stderr)
 
+    def test_presentation_correction_off_reproduces_legacy_numbers(self):
+        result = run_tool("--azahar-correction", "off", HARNESS, OURS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("presentation-row correction: not applied "
+                      "(--azahar-correction off)", result.stdout)
+        self.assertIn("ours bbox=(78,43)-(124,112) "
+                      "centroid=(104.69,76.97)", result.stdout)
+
+    def test_presentation_correction_on_shifts_the_azahar_fixture(self):
+        result = run_tool("--azahar-correction", "on", HARNESS, OURS)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("presentation-row correction: applied "
+                      "(--azahar-correction on (forced))", result.stdout)
+        self.assertIn("ours bbox=(77,42)-(124,112) "
+                      "centroid=(104.68,76.22)", result.stdout)
+
 
 @unittest.skipIf(EQ3_DISCOVER_SKIP,
                  "run once via the test-eq3 make target; discover skips it to "

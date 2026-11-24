@@ -643,15 +643,22 @@ test-ds-edge-test:
 test-eq4o-hw-rows:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4o_hw_rows -p 'test_*.py'
 
+# EQ-4p presentation-row correction module (tools/azahar_presentation.py). Run
+# explicitly; the discover pass in `test` sets AZAHAR_PRESENTATION_DISCOVER_SKIP
+# so it is not executed twice.
+test-azahar-presentation:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools -p 'test_azahar_presentation.py'
+
 test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	tests/host/build/pica_tex_cli tests/host/build/pica_frame_cli \
 	tests/host/build/tex_capture_cli \
 	test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-eq4-hw-compare \
 	test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test \
-	test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows
+	test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows \
+	test-azahar-presentation
 	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 \
 	ARM9V2_STATIC_DISCOVER_SKIP=1 EQ4_HW_COMPARE_DISCOVER_SKIP=1 \
-	FIT_MAPPING_DISCOVER_SKIP=1 \
+	FIT_MAPPING_DISCOVER_SKIP=1 AZAHAR_PRESENTATION_DISCOVER_SKIP=1 \
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 
 clean:

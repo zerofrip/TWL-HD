@@ -395,6 +395,7 @@ def prepare_full_row(args, scene):
         "expected_verts": scene.verts,
         "eq3": scene.eq3,
         "eq3_reason": scene.eq3_reason,
+        "azahar_correction": args.azahar_correction,
     }
 
     harness, harness_ppm, problem = _prepare_harness(args, scene, outdir)
@@ -590,7 +591,9 @@ def compare_eq3(row, result):
         return
     try:
         hpic = eq3_compare.load_picture(harness, "harness")
-        opic = eq3_compare.load_picture(ours, "ours")
+        opic = eq3_compare.load_picture(ours, "ours",
+                                        row.get("azahar_correction", "auto"))
+        print(opic["correction_line"])
         code, report = eq3_compare.compare(hpic, opic)
     except (eq3_compare.FormatError, OSError) as exc:
         result.eq3 = "NOT-COMPARABLE"
@@ -782,11 +785,18 @@ def build_parser():
                         help="arm11/twlhd-arm11.3dsx for EQ-3 pictures")
     parser.add_argument("--scenes",
                         help="comma-separated subset, e.g. cube,scene5")
+    parser.add_argument("--azahar-correction",
+                        choices=("auto", "on", "off"), default="auto",
+                        help="EQ-4p presentation-row correction for the "
+                             "Azahar 'ours' picture: auto (row-0 wrap guard, "
+                             "default), on (forced), off (never)")
     return parser
 
 
-def run_manifest(path):
+def run_manifest(path, correction="auto"):
     rows = load_manifest(path)
+    for row in rows:
+        row.setdefault("azahar_correction", correction)
     check_manifest_prerequisites(rows)
     return process_rows(rows)
 
@@ -807,7 +817,7 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         if args.manifest:
-            results = run_manifest(args.manifest)
+            results = run_manifest(args.manifest, args.azahar_correction)
         else:
             results = run_full(args)
     except (PrerequisiteError, ManifestError) as exc:

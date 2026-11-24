@@ -105,6 +105,13 @@ def run_tool(capture, reference, mapping=MAPPING):
         capture_output=True, text=True)
 
 
+def run_tool_correction(capture, reference, mode):
+    return subprocess.run(
+        [sys.executable, CLI, "--capture", capture,
+         "--reference", reference, "--azahar-correction", mode],
+        capture_output=True, text=True)
+
+
 def parse_report(stdout):
     return dict(line.split("=", 1) for line in stdout.splitlines() if "=" in line)
 
@@ -283,6 +290,29 @@ class RealScene5StaticCompareTest(unittest.TestCase):
     def test_st30_capture_never_matches_st0_reference(self):
         self._assert_not_pass(HW_CAPTURES["st30"],
                               self._ppm(HARNESS_REFS["st0"], "harness_st0"))
+
+    def test_presentation_correction_off_reproduces_legacy_numbers(self):
+        reference = self._ppm(OURS_REFS["st0"], "ours_st0")
+        result = run_tool_correction(HW_CAPTURES["st0"], reference, "off")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertIn("presentation-row correction: not applied "
+                      "(--azahar-correction off)", result.stdout)
+        self.assertEqual(report["verdict"], "PASS", result.stdout)
+        self.assertEqual(report["ref_bbox_top"], "28", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "2", result.stdout)
+
+    def test_presentation_correction_auto_shifts_the_azahar_reference(self):
+        reference = self._ppm(OURS_REFS["st0"], "ours_st0")
+        result = run_tool_correction(HW_CAPTURES["st0"], reference, "auto")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertIn("presentation-row correction: applied "
+                      "(row-0 wrap signature detected)", result.stdout)
+        self.assertEqual(report["verdict"], "PASS", result.stdout)
+        self.assertEqual(report["ref_bbox_top"], "27", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "1", result.stdout)
+        self.assertEqual(report["bbox_dev_bottom"], "0", result.stdout)
 
 
 if __name__ == "__main__":

@@ -228,6 +228,16 @@ No generalisation is made beyond this console and these two capture sessions.
   core readback (the transposed `pixel_stride - x` access) upstream or to
   teach the host tool to drop the extra presentation row. No code was changed
   in this task.
+- **Update (2026-11-24): EQ-4p implemented the host-tool half.** A shared
+  `tools/azahar_presentation.py` now carries the EQ-4n/EQ-4o basis constants,
+  the exact row-0 wrap guard (`row0[x] == row239[x+1]` for x=0..398 and
+  `row0 != row239` at some x) and the one-row correction (row 0 dropped, last
+  row a documented duplicate of true row 238; 400x480 bottom screen
+  untouched). The comparison tools take `--azahar-correction auto|on|off`
+  (default auto; `off` reproduces the legacy numbers; hardware/DeSmuME images
+  are never corrected silently) and print
+  `presentation-row correction: applied|not applied (reason)`. No core change
+  was made. Report: `docs/reports/eq4p-presentation-row-correction.md`.
 
 ## 8. Tests (FACT)
 

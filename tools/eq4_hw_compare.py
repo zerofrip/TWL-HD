@@ -50,6 +50,7 @@ DEFAULT_MAPPING = os.path.join(TOOLS_DIR, "ds_vtxcolor_test",
 
 sys.path.insert(0, TOOLS_DIR)
 
+import azahar_presentation  # noqa: E402
 import eq3_compare  # noqa: E402
 
 # --- Tolerances -----------------------------------------------------------
@@ -174,9 +175,8 @@ def _sample_centre(dx, dy, mapping):
     return x, y
 
 
-def load_reference(path, mapping):
-    """Return a 256x192 RGB list from a harness or 'ours' PPM."""
-    width, height, pixels = parse_ppm(path)
+def load_reference_pixels(pixels, width, height, mapping, path):
+    """Return a 256x192 RGB list from parsed reference PPM pixels."""
     if (width, height) == (DS_W, DS_H):
         return pixels
     if (width, height) in ((CAPTURE_W, CAPTURE_H), (CAPTURE_W, CAPTURE_H * 2)):
@@ -192,6 +192,18 @@ def load_reference(path, mapping):
                      "%dx%d 'ours' PPM"
                      % (path, width, height, DS_W, DS_H, CAPTURE_W,
                         CAPTURE_H, CAPTURE_W, CAPTURE_H * 2))
+
+
+def load_reference(path, mapping, correction="off"):
+    """Return a 256x192 RGB list from a harness or 'ours' PPM.
+
+    correction is forwarded to azahar_presentation; the default "off" keeps
+    the historical numbers for callers that do not opt in.
+    """
+    width, height, pixels = parse_ppm(path)
+    pixels, _applied, _reason = azahar_presentation.apply_correction(
+        correction, pixels, width, height)
+    return load_reference_pixels(pixels, width, height, mapping, path)
 
 
 # --------------------------------------------------------------------------
@@ -543,6 +555,11 @@ def build_parser():
     parser.add_argument("--mapping", default=DEFAULT_MAPPING,
                         help="shared capture mapping JSON (default: "
                              "tools/ds_vtxcolor_test/capture_mapping.json)")
+    parser.add_argument("--azahar-correction", choices=azahar_presentation.MODES,
+                        default="auto",
+                        help="EQ-4p presentation-row correction for an Azahar "
+                             "400x240/400x480 'ours' reference: auto (row-0 "
+                             "wrap guard, default), on (forced), off (never)")
     return parser
 
 
@@ -551,7 +568,12 @@ def main(argv=None):
     try:
         mapping = load_mapping(args.mapping)
         capture = load_capture(args.capture)
-        reference = load_reference(args.reference, mapping)
+        width, height, pixels = parse_ppm(args.reference)
+        pixels, applied, reason = azahar_presentation.apply_correction(
+            args.azahar_correction, pixels, width, height)
+        print(azahar_presentation.format_line(applied, reason))
+        reference = load_reference_pixels(pixels, width, height, mapping,
+                                          args.reference)
     except InputError as exc:
         print("eq4_hw_compare: error: %s" % exc, file=sys.stderr)
         return 2

@@ -82,6 +82,20 @@ def render_capture(shifts=None, default_shift=0):
     return canvas
 
 
+def render_azahar_capture(shifts=None, default_shift=0):
+    """render_capture shifted down one row with the EQ-4n row-0 wrap."""
+    source = render_capture(shifts, default_shift).load()
+    out = Image.new("RGB", (400, 240), (0, 0, 0))
+    target = out.load()
+    for x in range(399):
+        target[x, 0] = source[x + 1, 238]
+    target[399, 0] = (0, 0, 0)
+    for y in range(1, 240):
+        for x in range(400):
+            target[x, y] = source[x, y - 1]
+    return out
+
+
 def row_offsets(stdout):
     """item name -> row_offset from the capture-mode output."""
     offsets = {}
@@ -245,6 +259,14 @@ class CaptureCliTest(unittest.TestCase):
                 [sys.executable, MEASURE, path],
                 capture_output=True, text=True)
 
+    def run_capture_mode(self, image, mode):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "capture.png")
+            image.save(path)
+            return subprocess.run(
+                [sys.executable, MEASURE, "--azahar-correction", mode, path],
+                capture_output=True, text=True)
+
     def test_capture_nominal_classified_none(self):
         completed = self.run_capture(render_capture())
         self.assertEqual(completed.returncode, 0, completed.stderr)
@@ -265,6 +287,29 @@ class CaptureCliTest(unittest.TestCase):
             self.assertIn(name, offsets, name)
             self.assertLess(abs(offsets[name] - 0.8), 0.3, name)
             self.assertEqual(int(round(offsets[name])), 1, name)
+
+    def test_capture_nominal_prints_not_applied_line(self):
+        completed = self.run_capture(render_capture())
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("presentation-row correction: not applied "
+                      "(no row-0 wrap signature)", completed.stdout)
+
+    def test_capture_azahar_correction_off_keeps_the_extra_row(self):
+        completed = self.run_capture_mode(render_azahar_capture(), "off")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("presentation-row correction: not applied "
+                      "(--azahar-correction off)", completed.stdout)
+        offsets = row_offsets(completed.stdout)
+        self.assertLess(abs(offsets["top_band"] - 0.8), 0.3, completed.stdout)
+
+    def test_capture_azahar_auto_removes_the_presentation_row(self):
+        completed = self.run_capture_mode(render_azahar_capture(), "auto")
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("presentation-row correction: applied "
+                      "(row-0 wrap signature detected)", completed.stdout)
+        offsets = row_offsets(completed.stdout)
+        self.assertLess(abs(offsets["top_band"]), 0.3, completed.stdout)
+        self.assertLess(abs(offsets["sq1"]), 0.3, completed.stdout)
 
 
 if __name__ == "__main__":

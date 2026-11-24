@@ -49,12 +49,16 @@ import os
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ALPHA_DIR = os.path.join(os.path.dirname(HERE), "ds_alpha_test")
+TOOLS_DIR = os.path.dirname(HERE)
+ALPHA_DIR = os.path.join(TOOLS_DIR, "ds_alpha_test")
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
 if ALPHA_DIR not in sys.path:
     # Append, not insert: the sibling directory also holds a test_quads.py, and
     # putting it ahead of this directory would shadow this suite's own module.
     sys.path.append(ALPHA_DIR)
 
+import azahar_presentation  # noqa: E402
 import measure_edges  # noqa: E402
 
 QUADS_JSON = os.path.join(HERE, "quads.json")
@@ -309,6 +313,7 @@ def usage():
 def main(argv):
     native = False
     mapping_path = MAPPING_JSON
+    correction = "auto"
     positional = []
     args = list(argv[1:])
     while args:
@@ -320,6 +325,16 @@ def main(argv):
                 sys.stderr.write("measure_rows: --mapping needs a path\n")
                 return 2
             mapping_path = args.pop(0)
+        elif arg == "--azahar-correction":
+            if not args:
+                sys.stderr.write("measure_rows: --azahar-correction needs "
+                                 "auto|on|off\n")
+                return 2
+            correction = args.pop(0)
+            if correction not in azahar_presentation.MODES:
+                sys.stderr.write("measure_rows: bad --azahar-correction %s\n"
+                                 % correction)
+                return 2
         elif arg.startswith("--"):
             sys.stderr.write("measure_rows: unknown option %s\n" % arg)
             return 2
@@ -352,6 +367,9 @@ def main(argv):
         return 0
 
     try:
+        pixels, applied, reason = azahar_presentation.apply_correction(
+            correction, pixels, width, height)
+        print(azahar_presentation.format_line(applied, reason))
         observations, levels = measure_edges.measure_image(
             pixels, width, height, mapping, data)
     except ValueError as exc:

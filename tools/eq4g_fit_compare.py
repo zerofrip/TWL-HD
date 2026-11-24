@@ -34,6 +34,7 @@ if TOOLS_DIR not in sys.path:
 if DS_DIR not in sys.path:
     sys.path.insert(0, DS_DIR)
 
+import azahar_presentation  # noqa: E402
 import eq4_hw_compare as eq4  # noqa: E402
 import fit_mapping  # noqa: E402
 
@@ -68,9 +69,13 @@ def fitted_mapping(capture_path):
     }
 
 
-def report(capture, reference, mapping):
+def report(capture, reference, mapping, correction="auto"):
     ds = eq4.capture_to_ds(capture, mapping)
-    ref = eq4.load_reference(reference, mapping)
+    width, height, pixels = eq4.parse_ppm(reference)
+    pixels, applied, reason = azahar_presentation.apply_correction(
+        correction, pixels, width, height)
+    print(azahar_presentation.format_line(applied, reason))
+    ref = eq4.load_reference_pixels(pixels, width, height, mapping, reference)
     metrics = eq4.compare_pixels(ref, ds, eq4.DS_W, eq4.DS_H)
     ref_bbox, ref_n = eq4.nonbg_bbox(ref, eq4.DS_W, eq4.DS_H)
     cap_bbox, cap_n = eq4.nonbg_bbox(ds, eq4.DS_W, eq4.DS_H)
@@ -164,6 +169,11 @@ def build_parser():
                         help="ds-scale-test capture to fit when --mapping fit "
                              "(default: tools/ds_scale_test/fixtures/"
                              "sc4_3_top400x240.png)")
+    parser.add_argument("--azahar-correction", choices=azahar_presentation.MODES,
+                        default="auto",
+                        help="EQ-4p presentation-row correction for an Azahar "
+                             "'ours' reference: auto (guard, default), on "
+                             "(forced), off (never)")
     return parser
 
 
@@ -175,7 +185,8 @@ def main(argv=None):
         else:
             mapping = eq4.load_mapping(eq4.DEFAULT_MAPPING)
         capture = eq4.load_capture(args.capture)
-        lines = report(capture, args.reference, mapping)
+        lines = report(capture, args.reference, mapping,
+                       args.azahar_correction)
     except (InputError, eq4.InputError) as exc:
         print("eq4g_fit_compare: error: %s" % exc, file=sys.stderr)
         return 2
