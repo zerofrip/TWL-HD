@@ -331,6 +331,8 @@ SCENE_FIXTURE_SHA256 = {
         "488a184d8c916fe34824b34adf1789aa01bbf467f012534fd9cdb23509b58de6",
     "cube_a_top400x240.png":
         "0f9e7aee19cec41fc00909e894f053717a3cca4088aa18efc5789527d2f6e9c0",
+    "harness_c2_st30_f240.png":
+        "28979f4ece54f165176dff586e1e0ef673a4f16fc8b5dc494caddae20043852b",
     "harness_cube_st30_f240.png":
         "373701e21dde8593a2cffe10e3afe4e6c622a853adc8bb9ed8b823da2b8f6d74",
     "harness_s1_st30_f240.png":
@@ -362,10 +364,11 @@ SCENE_FIXTURE_SHA256 = {
     "s4_a_top400x240.png":
         "ecb998b2032ac77ab1be5ed298aeb51b2e4b63e8630cf27731ebcfa09fcc5ed9",
 }
-# c2 has no harness reference (that harness run exited 1 with `ARM OP_BKPT
-# triggered`), so its reference path is not part of the fixture set.
+# c2's harness reference is `harness_c2_st30_f240.png` (EQ-4t, produced from
+# the plain static ROM `twlhd-arm9v2-c2-st30.nds`, which passes where the
+# static autodump ROM exits 1 with `ARM OP_BKPT triggered`).
 SCENE_FIXTURES = tuple(SCENE_HW.values()) + tuple(SCENE_OURS.values()) \
-    + tuple(SCENE_HARNESS[scene] for scene in SCENE_IDS if scene != "c2")
+    + tuple(SCENE_HARNESS.values())
 
 
 def shift_capture_up(path, rows, out_path):
@@ -420,7 +423,7 @@ class RealStaticScenesCompareTest(unittest.TestCase):
         return result, report
 
     def test_fixture_hashes_and_sizes(self):
-        self.assertEqual(len(SCENE_FIXTURE_SHA256), 17)
+        self.assertEqual(len(SCENE_FIXTURE_SHA256), 18)
         for name, digest in sorted(SCENE_FIXTURE_SHA256.items()):
             path = os.path.join(SCENES_DIR, name)
             with open(path, "rb") as handle:
@@ -470,12 +473,43 @@ class RealStaticScenesCompareTest(unittest.TestCase):
         self.assertEqual(report["reason"], "bbox-top deviates 10 DS px "
                                            "(tol 3)")
 
-    def test_c2_has_no_harness_reference(self):
-        """c2's harness run exited 1 (`ARM OP_BKPT triggered`), so the pair is
-        NOT-COMPARABLE: the reference file does not exist and the tool exits 2
-        instead of inventing a verdict."""
-        self.assertFalse(os.path.isfile(SCENE_HARNESS["c2"]))
-        result = run_tool(SCENE_HW["c2"], SCENE_HARNESS["c2"])
+    def test_c2_capture_matches_harness_reference(self):
+        """EQ-4t supersedes EQ-4r's NOT-COMPARABLE c2 harness pair: the
+        reference is produced from the plain static ROM (not the autodump ROM
+        that exits 1 with `ARM OP_BKPT triggered`); see
+        `docs/reports/eq4t-c2-reference.md`."""
+        result, report = self._assert_pass(
+            SCENE_HW["c2"], self._ppm(SCENE_HARNESS["c2"], "harness_c2"))
+        self.assertIn("presentation-row correction: not applied "
+                      "(no row-0 wrap signature)", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "2", report)
+        self.assertEqual(report["ds.mean_abs_r"], "0.4777", report)
+        self.assertEqual(report["ds.frac_within_flat"], "1.0000", report)
+
+    def test_c2_shifted_capture_changes_the_number(self):
+        """c2's top `bbox_dev` is 2 (one DS px under tol 3), so a 2-capture-row
+        shift (1.6 DS px) moves it to 3: the number changes, but the verdict
+        stays PASS (the shift stays within tolerance — unlike s1 whose 3 goes
+        to 4 and flips FAIL)."""
+        reference = self._ppm(SCENE_HARNESS["c2"], "harness_c2")
+        self.assertEqual(
+            self._assert_pass(SCENE_HW["c2"], reference)[1]["bbox_dev_top"],
+            "2")
+        shifted = shift_capture_up(
+            SCENE_HW["c2"], 2, os.path.join(self.tmp, "c2_shift2.png"))
+        result = run_tool(shifted, reference)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertEqual(report["verdict"], "PASS", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "3", report)
+
+    def test_c2_autodump_pair_not_comparable(self):
+        """The static autodump c2 ROM still exits 1 in the harness
+        (`ARM OP_BKPT triggered`), so that pair stays NOT-COMPARABLE: a
+        missing reference makes the tool exit 2 instead of inventing a
+        verdict."""
+        missing = os.path.join(self.tmp, "harness_c2_autodump_st30_f240.png")
+        result = run_tool(SCENE_HW["c2"], missing)
         self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
         self.assertIn("cannot read", result.stderr)
         self.assertNotIn("verdict=", result.stdout)

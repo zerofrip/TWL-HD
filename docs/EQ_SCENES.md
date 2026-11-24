@@ -644,3 +644,23 @@ origin, textured geometry, the scene-4 alpha/blend mechanisms. Report:
 ## 10. Update (2026-11-24): EQ-4s — the `CUBES=2` static autodump harness BKPT
 
 EQ-4s rebisected the `ARM OP_BKPT` with one harness run per variant: the non-static `CUBES=2 AUTODUMP_FRAME=240` ROM (`703dcad6…`, the EQ-3b fixture ROM) passes at HEAD and at base `d21d189`, the plain static `twlhd-arm9v2-c2-st30.nds` passes at frame 242, and only the new static+autodump `CUBES=2` ROM fails (zero 3D flushes, same undefined-instruction PC `0x02017310`, independent of autodump frame 60/240 and angle 30/31). FACT: the fault appears only in the EQ-4q-introduced static+autodump `CUBES=2` build, not caused by the angle value (30/31) or the autodump frame (60/240). HYPOTHESIS: a pre-existing binary-layout-sensitive wild jump before the first 3D flush (boot, early main or the first draw call; location UNVERIFIED), not the EQ-4q macro's semantics and not the frame/run length; mechanism UNVERIFIED. These runs cannot exclude that EQ-4q merely exposed a latent fault. Proposed (not implemented) compare workaround: use the plain static `c2` ROM for the harness reference. Report: `docs/reports/eq4s-c2-harness-bkpt.md`.
+
+## 11. Update (2026-11-24): EQ-4t — the c2 harness reference from the plain static ROM
+
+EQ-4t implemented the EQ-4s §6 workaround: the c2 DeSmuME-harness reference is
+now `tools/fixtures/eq4_hw_scenes/harness_c2_st30_f240.png`, produced from the
+plain static ROM `twlhd-arm9v2-c2-st30.nds` (sha `43e39eb8…`, the ROM uploaded
+to the console — hash in eq4t §2; the static autodump c2 ROM still crashes in
+the harness). FACT: harness frame 242 = 12 polygons / 48 vertices, exit 0; a
+second run at frame 300 is
+byte-identical (frame independence). The c2 hardware capture `a` vs this
+reference is PASS (mean_abs 0.4777/0.3136/0.4495, `ds.frac_within_flat=1.0000`,
+`bbox_dev` 2/2/0/0), so c2 is MATCHED under the EQ-4r §7 thresholds. Tests:
+the "no harness reference" test is kept (renamed
+`test_c2_autodump_pair_not_comparable`; its file-absence assertion is dropped)
+and a positive c2-harness test is added, and the c2 2-row-shift negative test
+asserts `bbox_dev_top` 2 -> 3 (the verdict
+stays PASS; c2's margin is one DS px larger than s1's). UNVERIFIED: the
+autodump-vs-non-autodump reference binary identity beyond the Makefile define,
+other consoles/sessions, capture-noise origin. Report:
+`docs/reports/eq4t-c2-reference.md`.

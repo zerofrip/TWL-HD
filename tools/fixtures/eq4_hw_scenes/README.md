@@ -31,6 +31,7 @@ CUBES=2; all `STATIC_ANGLE=30`.
 | `harness_s2_st30_f240.png` | `dfc44116d0e354b60a0451bd48ba3f78671def7034ae1a5b1cbe7d44e4cfe965` | 984 |
 | `harness_s3_st30_f240.png` | `9cf18f061ebf3990939827af3815e91d9564de271f735aefc033064b28702b1c` | 972 |
 | `harness_s4_st30_f240.png` | `6538dd758346eed149fe1f72ea3d7c8aa4f655a7b3dfed169a13bedb46e6b99b` | 667 |
+| `harness_c2_st30_f240.png` | `28979f4ece54f165176dff586e1e0ef673a4f16fc8b5dc494caddae20043852b` | 409 |
 | `ours_cube_st30_top400x240.png` | `c4a8b5d851c7b8b08adce25cc5617479194ad1c89e733a21fba2a9dbf693bcfe` | 1548 |
 | `ours_s1_st30_top400x240.png` | `f2f806e308ea696c2f42a430889cb08aaf7d5b527365df23dfc070f5612f9a87` | 2011 |
 | `ours_s2_st30_top400x240.png` | `cb73eed07345caae5712a7b79213f9d2ef334400b1ef8b17adb244fb522221fc` | 2021 |
@@ -38,10 +39,14 @@ CUBES=2; all `STATIC_ANGLE=30`.
 | `ours_s4_st30_top400x240.png` | `23302ce8371c74ac52822d46d7637f0df06e18616f1698a287b1bb42ae5c0185` | 1183 |
 | `ours_c2_st30_top400x240.png` | `b97df11cbae37fe9dc25edaffc22219508a99e607a97ceb4a0a14049aeb92162` | 1051 |
 
-There is **no `harness_c2_st30_f240.png`**: the harness exited 1 with
-`ARM OP_BKPT triggered` for CUBES=2, so that pair is NOT-COMPARABLE (never a
-pass). The six hardware hashes equal the `hw/hw_<scene>_a.png` lines of the
-run's `SHA256SUMS`.
+`harness_c2_st30_f240.png` is the EQ-4t c2 reference, produced from the **plain
+static** ROM `twlhd-arm9v2-c2-st30.nds` (the ROM uploaded to the console, hash
+in eq4t §2), which passes the harness at frame 242 with 12 polygons / 48
+vertices — the static **autodump** c2 ROM still exits 1 with `ARM OP_BKPT
+triggered` (NOT-COMPARABLE), so that pair is never a pass; the plain-static
+reference is the substitute harness pair. See
+`docs/reports/eq4t-c2-reference.md`. The six hardware hashes equal the
+`hw/hw_<scene>_a.png` lines of the run's `SHA256SUMS`.
 
 ## ROMs (EMULATOR inputs; not committed)
 

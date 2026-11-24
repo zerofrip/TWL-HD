@@ -1914,6 +1914,10 @@ exit=0
 both pairs) and `bbox_dev_right` 4 vs 3 (s4 vs ours). Bounding boxes are in each
 §5 block (s4 harness 84/72/158/130 vs capture 82/62/161/130).
 
+EQ-4t produced the c2 harness reference from the **plain static** ROM, so c2
+hw-vs-harness is now PASS (0.4777/0.3136/0.4495, 1.0000, 2/2/0/0) — see
+`docs/reports/eq4t-c2-reference.md` (the autodump-ROM pair stays NOT-COMPARABLE).
+
 ## 7. What is MATCHED and what is DIFFERENT
 
 **MATCHED (cube, s1, s2, s3).** Every `bbox_dev` <= 3 DS px,
