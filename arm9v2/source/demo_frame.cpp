@@ -309,6 +309,12 @@ static void draw_scene_alpha_quads(void) {
 #endif
 #endif
 
+#ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
+/* Fixed modelview angle for every draw path (STATIC_ANGLE=0..359). */
+#define TWLHD_DEMO_STATIC_ANGLE_BIN \
+    ((int)((unsigned)TWLHD_DEMO_STATIC_ANGLE_DEG * 32768u / 360u))
+#endif
+
 void twlhd_demo_draw_frame(unsigned angle) {
 #if TWLHD_DEMO_DIAGSCREEN == 6
     /* Exact Simple_Tri example draw logic, including the quirk that
@@ -357,15 +363,14 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
-#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG) && TWLHD_DEMO_SCENE == 5
-    /* Fixed modelview angle (STATIC_ANGLE=0..359 in the Makefile): the
-     * animated build rotates by the frame counter, in binary angle units
-     * (32768 == 360 degrees, main.cpp:262-263). Degrees -> binary units with
-     * integer truncation, exactly as the animated value would be at that
-     * angle. Only SCENE=5 uses the fixed value; the define is accepted but
-     * unused for the other scenes. */
-    glRotateXi((int)((unsigned)TWLHD_DEMO_STATIC_ANGLE_DEG * 32768u / 360u));
-    glRotateYi((int)((unsigned)TWLHD_DEMO_STATIC_ANGLE_DEG * 32768u / 360u));
+#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG)
+    /* Fixed modelview angle for every draw path (STATIC_ANGLE=0..359 in the
+     * Makefile): the animated build rotates by the frame counter, in binary
+     * angle units (32768 == 360 degrees, main.cpp:262-263). Degrees -> binary
+     * units with integer truncation, exactly as the animated value would be at
+     * that angle. */
+    glRotateXi(TWLHD_DEMO_STATIC_ANGLE_BIN);
+    glRotateYi(TWLHD_DEMO_STATIC_ANGLE_BIN);
 #else
     glRotateXi((int)angle);
     glRotateYi((int)angle);
@@ -418,8 +423,14 @@ void twlhd_demo_draw_frame(unsigned angle) {
     glMatrixMode(GL_MODELVIEW);
     glLoadIdentity();
     gluLookAtf32(0, 0, inttof32(4), 0, 0, 0, 0, inttof32(1), 0);
+#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG)
+    /* Fixed modelview angle for every draw path. */
+    glRotateXi(TWLHD_DEMO_STATIC_ANGLE_BIN);
+    glRotateYi(TWLHD_DEMO_STATIC_ANGLE_BIN);
+#else
     glRotateXi((int)angle);
     glRotateYi((int)angle);
+#endif
     glTranslatef32(0, 0, 0);
     glScalef32(inttof32(1), inttof32(1), inttof32(1));
 
@@ -471,8 +482,14 @@ void twlhd_demo_draw_frame(unsigned angle) {
         y = mulf32(inttof32(2 * row - (rows - 1)), half_spacing);
         glPushMatrix();
         glTranslatef32(x, y, 0);
+#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG)
+        /* Fixed modelview angle for every draw path. */
+        glRotateXi(TWLHD_DEMO_STATIC_ANGLE_BIN);
+        glRotateYi(TWLHD_DEMO_STATIC_ANGLE_BIN);
+#else
         glRotateXi((int)angle);
         glRotateYi((int)angle);
+#endif
         glScalef32(floattof32(0.12), floattof32(0.12), floattof32(0.12));
         glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE); /* mirrors the single-cube path */
         draw_cube();

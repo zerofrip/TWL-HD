@@ -27,6 +27,31 @@ DISCOVER_SKIP = os.environ.get("ARM9V2_STATIC_DISCOVER_SKIP") is not None
 ERROR_TEXT = "STATIC_ANGLE must be empty or a decimal integer in 0..359"
 
 
+def scan_unguarded_rotate_sites(lines):
+    """Return every (int)angle rotate site and the subset outside a static #else.
+
+    `sites` is a list of (lineno, line) for every glRotateXi/glRotateYi call
+    using (int)angle.  `violations` is the subset that is not inside the #else
+    arm of a #if defined(TWLHD_DEMO_STATIC_ANGLE_DEG) guard.
+    """
+    guard = None  # None, 'if', or 'else' for the static-angle guard
+    sites = []
+    violations = []
+    for lineno, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if stripped.startswith("#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG)"):
+            guard = "if"
+        elif stripped.startswith("#else") and guard is not None:
+            guard = "else"
+        elif stripped.startswith("#endif") and guard is not None:
+            guard = None
+        if "glRotateXi((int)angle)" in line or "glRotateYi((int)angle)" in line:
+            sites.append((lineno, line))
+            if guard != "else":
+                violations.append((lineno, line))
+    return sites, violations
+
+
 def dry_run(*variables, cwd=ROOT):
     return subprocess.run(
         ["make", "-C", "arm9v2", "-n"] + list(variables),
@@ -110,6 +135,96 @@ class StaticAngleMakefileTest(unittest.TestCase):
                 result = dry_run("STATIC_ANGLE=" + value)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
                 self.assertIn(ERROR_TEXT, result.stderr)
+
+    def test_invalid_static_angle_combined_with_scene_and_cubes(self):
+        for value in ("-1", "360", "abc"):
+            for combo in ((), ("SCENE=1",), ("SCENE=2",), ("SCENE=3",),
+                          ("SCENE=4",), ("CUBES=2",)):
+                with self.subTest(value=value, variables=combo):
+                    result = dry_run(*combo, "STATIC_ANGLE=" + value)
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(ERROR_TEXT, result.stderr)
+
+    def test_cube_static_angle_30_rom_name(self):
+        result = dry_run("STATIC_ANGLE=30")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("twlhd-arm9v2-st30.nds", result.stdout + result.stderr)
+
+    def test_scenes_1_to_4_static_angle_30_rom_names(self):
+        for scene in ("1", "2", "3", "4"):
+            with self.subTest(scene=scene):
+                result = dry_run("SCENE=" + scene, "STATIC_ANGLE=30")
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("twlhd-arm9v2-s" + scene + "-st30.nds",
+                              result.stdout + result.stderr)
+
+    def test_cubes_2_static_angle_30_rom_name(self):
+        result = dry_run("CUBES=2", "STATIC_ANGLE=30")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("twlhd-arm9v2-c2-st30.nds", result.stdout + result.stderr)
+
+    def test_scene5_only_condition_removed(self):
+        src = os.path.join(ROOT, "arm9v2/source/demo_frame.cpp")
+        with open(src, "r", encoding="utf-8") as f:
+            text = f.read()
+        self.assertNotIn(
+            "#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG) && TWLHD_DEMO_SCENE == 5",
+            text)
+
+    def test_angle_rotate_sites_are_guarded_by_static_define(self):
+        """Every glRotateXi/glRotateYi((int)angle) site is in a static #else."""
+        src = os.path.join(ROOT, "arm9v2/source/demo_frame.cpp")
+        with open(src, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+        sites, violations = scan_unguarded_rotate_sites(lines)
+        self.assertEqual(
+            violations, [],
+            "found (int)angle rotate sites outside a static #else")
+        self.assertEqual(len(sites), 6,
+                         "expected exactly six (int)angle rotate sites")
+
+    def test_scanner_catches_unguarded_rotate_site(self):
+        """Negative self-check: the scanner flags an unguarded rotate block."""
+        src = os.path.join(ROOT, "arm9v2/source/demo_frame.cpp")
+        with open(src, "r", encoding="utf-8") as f:
+            lines = f.read().splitlines()
+
+        # Find the first flat #if/#else/#endif static-guard block and remove
+        # its #if and matching #else.  The two (int)angle sites in that block
+        # then become unguarded violations.
+        if_idx = None
+        else_idx = None
+        endif_idx = None
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if (if_idx is None and
+                    stripped.startswith("#if defined(TWLHD_DEMO_STATIC_ANGLE_DEG)")):
+                if_idx = i
+            elif (if_idx is not None and else_idx is None and
+                  stripped.startswith("#else")):
+                else_idx = i
+            elif (if_idx is not None and stripped.startswith("#endif")):
+                endif_idx = i
+                break
+        self.assertIsNotNone(if_idx)
+        self.assertIsNotNone(else_idx)
+        self.assertIsNotNone(endif_idx)
+        original_block_sites = [
+            line for line in lines[else_idx:endif_idx]
+            if "glRotateXi((int)angle)" in line or
+            "glRotateYi((int)angle)" in line
+        ]
+        self.assertEqual(len(original_block_sites), 2)
+
+        mutated = [line for i, line in enumerate(lines)
+                   if i not in (if_idx, else_idx)]
+        sites, violations = scan_unguarded_rotate_sites(mutated)
+        self.assertEqual(len(sites), 6)
+        self.assertEqual(len(violations), 2,
+                         "mutated block should produce exactly two violations")
+        violation_set = {line.strip() for _, line in violations}
+        for line in original_block_sites:
+            self.assertIn(line.strip(), violation_set)
 
 
 if __name__ == "__main__":

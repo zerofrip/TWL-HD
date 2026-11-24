@@ -615,3 +615,14 @@ DeSmuME or Azahar needed):
   `eq_scenes.py` that forces the two-dump count mismatch to NOT-COMPARABLE makes
   the CLI exit 0 instead of 1. Each mutant test first asserts the unmodified
   driver's exit code, so the mutation is what flips it.
+
+## 8. Update (2026-11-24): STATIC_ANGLE now covers every scene
+
+The `STATIC_ANGLE=0..359` build option described in §6.1 has been extended from
+the textured SCENE=5 to the cube baseline, SCENE=1..4 and the `CUBES=2` variant.
+The sentence in §6.1 stating that the define is "accepted but unused when
+`SCENE != 5`" is superseded by this update: the define now applies to every draw
+path that rotates with the frame counter (`demo_frame.cpp:366-379`, `:426-433`,
+`:485-492`). The default ROMs remain byte-identical, the new static ROMs have
+been built and hashed, and the owner console-run plan is documented in
+`docs/reports/eq4q-static-scenes.md`.

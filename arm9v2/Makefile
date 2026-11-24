@@ -152,12 +152,12 @@ endif
 endif
 
 #---------------------------------------------------------------------------------
-# Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the textured scene 5
-# modelview rotation with a fixed angle (degrees) instead of the frame counter,
-# so every frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS
-# untouched so the default ROM is byte-identical. This block runs after the
-# AUTODUMP, VP, CUBES and SCENE blocks, so the suffixes compose; the define is
-# accepted but unused when SCENE != 5 (the same acceptance rule as VP).
+# Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the frame-counter
+# modelview rotation with a fixed angle (degrees) in every draw path, so every
+# frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS untouched so
+# the default ROM is byte-identical. This block runs after the AUTODUMP, VP,
+# CUBES and SCENE blocks, so the suffixes compose; the define applies to the
+# cube baseline, SCENE=1..4, CUBES>1 and the textured SCENE=5.
 # The DS binary angle convention is 32768 == 360 degrees (main.cpp:262-263),
 # so the source converts degrees to binary units with truncation:
 # angle = degrees * 32768 / 360 (30 -> 2730, 315 -> 28672).
