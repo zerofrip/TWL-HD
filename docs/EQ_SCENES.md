@@ -664,3 +664,13 @@ stays PASS; c2's margin is one DS px larger than s1's). UNVERIFIED: the
 autodump-vs-non-autodump reference binary identity beyond the Makefile define,
 other consoles/sessions, capture-noise origin. Report:
 `docs/reports/eq4t-c2-reference.md`.
+
+## 12. Update (2026-11-25): EQ-4u — why scene 4's alpha differs (source read, no code change)
+
+The EQ-4r scene-4 difference is separated by source read: the ROM never sets
+`GL_BLEND` (`DISP3DCNT` bit 3 clear), so the DS draws `alpha 16`/`4` opaque
+(HYPOTHESIS, supported by the capture and by DeSmuME's gated blend), while our
+chain records `DISP3DCNT` but never consumes it and always blends; `alpha 0`
+selects wireframe, which no reference draws as an outline. Proposed carriers,
+the sized-not-implemented outline work and a not-applied `BLEND=1` hardware
+falsification plan are in `docs/reports/eq4u-scene4-alpha-why.md`.

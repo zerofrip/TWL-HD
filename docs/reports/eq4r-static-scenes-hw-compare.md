@@ -1973,6 +1973,8 @@ class checks are vacuous and the verdict rests on the bbox and
 scenes/angles/consoles/settings, texture filtering, the blend convention
 against blending-enabled hardware.
 
+**Follow-up (EQ-4u, 2026-11-25):** the §7 blend-enable and alpha-0-outline hypotheses are separated with source reads and a falsification plan in `docs/reports/eq4u-scene4-alpha-why.md` (no code change; the DS-side opacity stays HYPOTHESIS).
+
 ## 8. Scene 4 alpha: cited from EQ-4i, not re-derived
 
 Measured on a different ROM, in `docs/reports/eq4i-alpha-hw-result.md`
