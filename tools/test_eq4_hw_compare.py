@@ -12,6 +12,7 @@ reference.
     PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools
 """
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -313,6 +314,185 @@ class RealScene5StaticCompareTest(unittest.TestCase):
         self.assertEqual(report["ref_bbox_top"], "27", result.stdout)
         self.assertEqual(report["bbox_dev_top"], "1", result.stdout)
         self.assertEqual(report["bbox_dev_bottom"], "0", result.stdout)
+
+
+SCENES_DIR = os.path.join(TOOLS_DIR, "fixtures", "eq4_hw_scenes")
+SCENE_IDS = ("cube", "s1", "s2", "s3", "s4", "c2")
+SCENE_HW = {scene: os.path.join(SCENES_DIR, "%s_a_top400x240.png" % scene)
+            for scene in SCENE_IDS}
+SCENE_HARNESS = {scene: os.path.join(SCENES_DIR,
+                                     "harness_%s_st30_f240.png" % scene)
+                 for scene in SCENE_IDS}
+SCENE_OURS = {scene: os.path.join(SCENES_DIR,
+                                  "ours_%s_st30_top400x240.png" % scene)
+              for scene in SCENE_IDS}
+SCENE_FIXTURE_SHA256 = {
+    "c2_a_top400x240.png":
+        "488a184d8c916fe34824b34adf1789aa01bbf467f012534fd9cdb23509b58de6",
+    "cube_a_top400x240.png":
+        "0f9e7aee19cec41fc00909e894f053717a3cca4088aa18efc5789527d2f6e9c0",
+    "harness_cube_st30_f240.png":
+        "373701e21dde8593a2cffe10e3afe4e6c622a853adc8bb9ed8b823da2b8f6d74",
+    "harness_s1_st30_f240.png":
+        "d402948dafcff446c0bb53edbec8d6dfe156255a77b03d310ef21d38303edc25",
+    "harness_s2_st30_f240.png":
+        "dfc44116d0e354b60a0451bd48ba3f78671def7034ae1a5b1cbe7d44e4cfe965",
+    "harness_s3_st30_f240.png":
+        "9cf18f061ebf3990939827af3815e91d9564de271f735aefc033064b28702b1c",
+    "harness_s4_st30_f240.png":
+        "6538dd758346eed149fe1f72ea3d7c8aa4f655a7b3dfed169a13bedb46e6b99b",
+    "ours_c2_st30_top400x240.png":
+        "b97df11cbae37fe9dc25edaffc22219508a99e607a97ceb4a0a14049aeb92162",
+    "ours_cube_st30_top400x240.png":
+        "c4a8b5d851c7b8b08adce25cc5617479194ad1c89e733a21fba2a9dbf693bcfe",
+    "ours_s1_st30_top400x240.png":
+        "f2f806e308ea696c2f42a430889cb08aaf7d5b527365df23dfc070f5612f9a87",
+    "ours_s2_st30_top400x240.png":
+        "cb73eed07345caae5712a7b79213f9d2ef334400b1ef8b17adb244fb522221fc",
+    "ours_s3_st30_top400x240.png":
+        "915bdf7cc4f3e969455cc2e9b68508cdbe1b73944d2e5621a03c143f73a7ed9a",
+    "ours_s4_st30_top400x240.png":
+        "23302ce8371c74ac52822d46d7637f0df06e18616f1698a287b1bb42ae5c0185",
+    "s1_a_top400x240.png":
+        "8af538df08a00169f9f50785974f8d20388e969fda525151be468db65cfee75a",
+    "s2_a_top400x240.png":
+        "c01dc0ea69eb2a715af29743ac7e7d48407354bb4a56fff1d3f1a85287f338b9",
+    "s3_a_top400x240.png":
+        "bb83ba0fef9514d896e659f21f5ad57edf507e92e6e55e8768f0ab71202d9399",
+    "s4_a_top400x240.png":
+        "ecb998b2032ac77ab1be5ed298aeb51b2e4b63e8630cf27731ebcfa09fcc5ed9",
+}
+# c2 has no harness reference (that harness run exited 1 with `ARM OP_BKPT
+# triggered`), so its reference path is not part of the fixture set.
+SCENE_FIXTURES = tuple(SCENE_HW.values()) + tuple(SCENE_OURS.values()) \
+    + tuple(SCENE_HARNESS[scene] for scene in SCENE_IDS if scene != "c2")
+
+
+def shift_capture_up(path, rows, out_path):
+    """Move the capture content `rows` capture rows up (2 rows ~ 1.6 DS px)."""
+    image = Image.open(path).convert("RGB")
+    canvas = Image.new("RGB", image.size, BLACK)
+    canvas.paste(image.crop((0, rows, image.width, image.height)), (0, 0))
+    canvas.save(out_path)
+    return out_path
+
+
+@unittest.skipIf(DISCOVER_SKIP,
+                 "run once via the test-eq4-hw-compare make target; discover "
+                 "skips it to avoid a double run")
+@unittest.skipUnless(HAVE_PIL, "PIL is not installed, so PNG references "
+                               "cannot be converted to PPM (labelled skip)")
+@unittest.skipUnless(all(os.path.isfile(path) for path in SCENE_FIXTURES),
+                     "the committed static-scene fixtures are not present")
+class RealStaticScenesCompareTest(unittest.TestCase):
+    """The six EQ-4q static-angle scenes against one hardware capture each.
+
+    Hardware = `tools/fixtures/eq4_hw_scenes/<scene>_a_top400x240.png` (capture
+    `a`, the rule fixed before the comparison).  References: the harness PNG
+    (converted to PPM here) and our Pica render PNG.  Every assertion is on
+    what the tool prints; the numbers are the ones quoted in
+    `docs/reports/eq4r-static-scenes-hw-compare.md`.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix="eq4-hw-scenes-")
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp)
+
+    def _ppm(self, png, name):
+        path = os.path.join(self.tmp, name + ".ppm")
+        Image.open(png).convert("RGB").save(path)
+        return path
+
+    def _assert_pass(self, capture, reference):
+        result = run_tool(capture, reference)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertEqual(report["verdict"], "PASS", result.stdout)
+        self.assertEqual(report["basis"], "one console, one capture")
+        self.assertIn("presentation-row correction: ", result.stdout)
+        for edge in ("left", "top", "right", "bottom"):
+            self.assertLessEqual(int(report["bbox_dev_" + edge]), 3,
+                                 result.stdout)
+        self.assertGreaterEqual(float(report["ds.frac_within_flat"]), 0.95,
+                                result.stdout)
+        return result, report
+
+    def test_fixture_hashes_and_sizes(self):
+        self.assertEqual(len(SCENE_FIXTURE_SHA256), 17)
+        for name, digest in sorted(SCENE_FIXTURE_SHA256.items()):
+            path = os.path.join(SCENES_DIR, name)
+            with open(path, "rb") as handle:
+                self.assertEqual(hashlib.sha256(handle.read()).hexdigest(),
+                                 digest, name)
+            self.assertLess(os.path.getsize(path), 100 * 1024, name)
+
+    def test_cube_capture_matches_harness_reference(self):
+        _, report = self._assert_pass(
+            SCENE_HW["cube"], self._ppm(SCENE_HARNESS["cube"], "harness_cube"))
+        self.assertEqual(report["bbox_dev_top"], "2", report)
+        self.assertEqual(report["ds.mean_abs_r"], "2.2378", report)
+        self.assertEqual(report["ds.frac_within_flat"], "0.9996", report)
+
+    def test_s2_capture_matches_harness_reference(self):
+        _, report = self._assert_pass(
+            SCENE_HW["s2"], self._ppm(SCENE_HARNESS["s2"], "harness_s2"))
+        self.assertEqual(report["bbox_dev_top"], "1", report)
+        self.assertEqual(report["bbox_dev_bottom"], "2", report)
+        self.assertEqual(report["ds.mean_abs_g"], "0.0000", report)
+        self.assertEqual(report["ds.frac_within_flat"], "0.9987", report)
+
+    def test_c2_capture_matches_ours_reference(self):
+        result, report = self._assert_pass(
+            SCENE_HW["c2"], self._ppm(SCENE_OURS["c2"], "ours_c2"))
+        self.assertIn("presentation-row correction: applied "
+                      "(row-0 wrap signature detected)", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "1", report)
+        self.assertEqual(report["ds.frac_within_flat"], "1.0000", report)
+
+    def test_s3_capture_matches_ours_reference(self):
+        _, report = self._assert_pass(
+            SCENE_HW["s3"], self._ppm(SCENE_OURS["s3"], "ours_s3"))
+        self.assertEqual(report["bbox_dev_left"], "1", report)
+        self.assertEqual(report["bbox_dev_top"], "0", report)
+        self.assertEqual(report["ds.frac_within_flat"], "1.0000", report)
+
+    def test_s4_capture_fails_on_the_alpha_zero_quad(self):
+        """The hardware draws the alpha-0 quad's outline; both references do
+        not, so the capture's top edge sits 10 DS px higher."""
+        result = run_tool(SCENE_HW["s4"],
+                          self._ppm(SCENE_HARNESS["s4"], "harness_s4"))
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertEqual(report["verdict"], "FAIL", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "10", report)
+        self.assertEqual(report["reason"], "bbox-top deviates 10 DS px "
+                                           "(tol 3)")
+
+    def test_c2_has_no_harness_reference(self):
+        """c2's harness run exited 1 (`ARM OP_BKPT triggered`), so the pair is
+        NOT-COMPARABLE: the reference file does not exist and the tool exits 2
+        instead of inventing a verdict."""
+        self.assertFalse(os.path.isfile(SCENE_HARNESS["c2"]))
+        result = run_tool(SCENE_HW["c2"], SCENE_HARNESS["c2"])
+        self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+        self.assertIn("cannot read", result.stderr)
+        self.assertNotIn("verdict=", result.stdout)
+
+    def test_shifted_capture_changes_the_verdict(self):
+        """Two capture rows (~1.6 DS px) must be enough to break the PASS."""
+        reference = self._ppm(SCENE_HARNESS["s1"], "harness_s1")
+        self.assertEqual(
+            self._assert_pass(SCENE_HW["s1"], reference)[1]["bbox_dev_top"],
+            "3")
+        shifted = shift_capture_up(
+            SCENE_HW["s1"], 2, os.path.join(self.tmp, "s1_shift2.png"))
+        result = run_tool(shifted, reference)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        report = parse_report(result.stdout)
+        self.assertEqual(report["verdict"], "FAIL", result.stdout)
+        self.assertEqual(report["bbox_dev_top"], "4", report)
 
 
 if __name__ == "__main__":

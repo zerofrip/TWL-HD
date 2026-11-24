@@ -626,3 +626,17 @@ path that rotates with the frame counter (`demo_frame.cpp:366-379`, `:426-433`,
 `:485-492`). The default ROMs remain byte-identical, the new static ROMs have
 been built and hashed, and the owner console-run plan is documented in
 `docs/reports/eq4q-static-scenes.md`.
+
+## 9. Update (2026-11-24): the six static-30 scenes against real hardware (EQ-4r)
+
+Per-scene harness references now exist for cube, s1, s2, s3 and s4 (256x192
+PNGs in `tools/fixtures/eq4_hw_scenes/`, with the hardware capture `a` and the
+Azahar/PICA crop of each scene). FACT (one console, one capture session per
+ROM): cube, s1, s2, s3 PASS against both references; SCENE=4 FAILs both
+(`bbox_dev_top=10`, tol 3, the alpha-0 quad's outline); `CUBES=2` is
+NOT-COMPARABLE against the harness — `harness: ROM never presented a 3D frame
+within 1200 frames` and exit 1 with `ARM OP_BKPT triggered` — but PASSes
+against our render; its DeSmuME v2 capture did succeed this round (unlike the
+non-static ROM in §3). UNVERIFIED: other consoles/sessions, capture-noise
+origin, textured geometry, the scene-4 alpha/blend mechanisms. Report:
+`docs/reports/eq4r-static-scenes-hw-compare.md`.
