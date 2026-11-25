@@ -405,6 +405,9 @@ enable blending: our renderer must not blend when the ROM did not enable it.
 
 **Update (2026-11-25):** EQ-4x implemented this proposal; see
 `docs/reports/eq4x-blend-gate.md`.
+**Update (2026-11-25):** EQ-4y ran the EQ-4x gate on real hardware and measured
+the result (`142`/`57` blend vs the DS `134`/`33` here): see
+`docs/reports/eq4y-gate-hw-result.md`.
 
 ---
 

@@ -1292,6 +1292,9 @@ Expected numbers (measured post-fix on Azahar, one host run; build HEAD
   (`bbox-right` 4 DS pixels); the quad colours are the acceptance signal. The
   same FAIL is observed for OLD(a) and OLD(b), so the offset predates the change.
 
+This PLAN was run on real hardware (one console, one capture session per frame,
+arm11 3dsx built from `main` `2ce38d0`): see `docs/reports/eq4y-gate-hw-result.md`.
+
 ## 8. UNVERIFIED items
 
 - No hardware run of the new 3DSX.

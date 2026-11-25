@@ -709,3 +709,18 @@ set/clear, last-write-wins, after-first-draw ignored, no-entry default, other
 addresses and only-bit-3; `make test` passes. Emulator verification (DeSmuME
 capture + Azahar render + `measure_blend_hw.py` / `eq4_hw_compare.py`) was run
 and is quoted as FACT in `docs/reports/eq4x-blend-gate.md`.
+
+## 16. Update (2026-11-25): EQ-4y — blend gate hardware result
+
+EQ-4y recorded the real-hardware result of the EQ-4x blend gate (one console,
+one capture session per frame, `SCENE=4 STATIC_ANGLE=30`, DS mode; arm11 3dsx
+built from `main` `2ce38d0`, not the 3dsx hashed in EQ-4x §4). FACT: the
+non-blend frame paints the alpha-16 green and alpha-4 blue quads at full `255`
+(`blended=no`, like the DS), the blend frame dims them to green 142 and blue 57
+(`blended=yes`), and the alpha-0 quad region shows the measured 12/1260 bright
+region pixels and 1/992 interior bright pixels in both (HYPOTHESIS: edge spill,
+not a drawn outline). Verdict: the gate works on this console/session; the
+residual arm11-vs-DS blend gap (`142`/`57` vs `134`/`33`) is the pre-existing
+blend-math difference, with text-only next-step proposals (6-bit G / 5-bit R/B
+quantisation; the `(16,16,24)` clear colour; the alpha-0 outline). Tool and
+fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
