@@ -403,6 +403,9 @@ enable blending: our renderer must not blend when the ROM did not enable it.
    ROMs in DS mode, compared with the same tool; other consoles remain
    UNVERIFIED.
 
+**Update (2026-11-25):** EQ-4x implemented this proposal; see
+`docs/reports/eq4x-blend-gate.md`.
+
 ---
 
 ## 9. Tool, tests and audit

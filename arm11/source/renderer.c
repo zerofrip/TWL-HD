@@ -145,6 +145,11 @@ static uint32_t g_debug_flags;
  * and frame loads. Default 0 leaves the normal render path unchanged. */
 static unsigned g_diag_mode;
 
+/* EQ-4x blend gate. Lives outside RendererState so it survives the memset() in
+ * renderer_init(). Default 1 keeps the historical unconditional alpha-blending
+ * behaviour for frames with no RSTA entry for 0x04000060. */
+static int g_blend_enabled = 1;
+
 /* Positions-only buffer used when TWLHD_RDBG_OFFICIAL_ATTR is set, matching
  * the official simple_tri attribute/buffer layout. */
 static void *g_official_buf;
@@ -197,6 +202,16 @@ __attribute__((noinline, used)) void renderer_set_diag_mode(unsigned mode) {
 
 __attribute__((noinline, used)) unsigned renderer_get_diag_mode(void) {
     return g_diag_mode;
+}
+
+__attribute__((noinline, used)) void renderer_set_blend_enabled(int enabled) {
+    g_blend_enabled = enabled ? 1 : 0;
+    /* Reference the getter so the API pair stays together and reachable. */
+    (void)renderer_get_blend_enabled();
+}
+
+__attribute__((noinline, used)) int renderer_get_blend_enabled(void) {
+    return g_blend_enabled;
 }
 
 __attribute__((noinline, used)) void renderer_set_debug_stride(uint32_t bytes) {
@@ -1538,14 +1553,26 @@ static void draw_clip_internal(int committed) {
     {
         const TwlhdDiagConfig *diag = twlhd_diag_config(g_diag_mode);
         TwlhdAlphaTestConfig at = twlhd_alpha_test_disabled();
+        TwlhdBlendConfig blend;
 
-        /* Mode 0: alpha blend + primary colour/alpha (identical to old path).
+        /* Mode 0: alpha blend + primary colour/alpha (identical to old path)
+         * when the frame's RSTA stream enabled blending, otherwise opaque.
          * Mode 1: opaque + grey=fragment-alpha (alpha leak / fragment-vs-vertex
          *         alpha check).
          * Mode 2: alpha blend + constant alpha 0x80 (blend-register check). */
-        C3D_AlphaBlend(diag->blend.colorEq, diag->blend.alphaEq,
-                       diag->blend.srcColor, diag->blend.dstColor,
-                       diag->blend.srcAlpha, diag->blend.dstAlpha);
+        if (diag->mode == 0) {
+            blend = g_blend_enabled ? twlhd_blend_config_alpha()
+                                    : twlhd_blend_config_opaque();
+            if (!g_blend_enabled) {
+                at = twlhd_alpha_test_gt_zero();
+            }
+        } else {
+            blend = diag->blend;
+        }
+
+        C3D_AlphaBlend(blend.colorEq, blend.alphaEq,
+                       blend.srcColor, blend.dstColor,
+                       blend.srcAlpha, blend.dstAlpha);
         C3D_AlphaTest(at.enable, at.func, at.ref);
 
         /* TexEnv slot 0: drive both RGB and Alpha from the selected config.

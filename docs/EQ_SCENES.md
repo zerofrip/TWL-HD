@@ -695,3 +695,17 @@ outline in both. Verdict: the blend-enable hypothesis is supported on this
 console/session, and our arm11 unconditional blending is a real divergence for
 blend-disabled ROMs (next-task proposal, text only, in §8 of the report).
 Report: `docs/reports/eq4w-blend-hw-result.md`.
+
+## 15. Update (2026-11-25): EQ-4x — blend gate implemented
+
+EQ-4x implemented the EQ-4w §8 next-task proposal: `arm11/include/twlhd_blend_gate.h`
+derives `DISP3DCNT` bit 3 from the v2 RSTA stream, `arm11/source/main.c` passes the
+flag to the renderer, and `arm11/source/renderer.c` selects
+`twlhd_blend_config_alpha()` vs `twlhd_blend_config_opaque()` for diagnostic
+mode 0, with an alpha-test override (`GPU_GREATER`, ref 0) on the opaque path
+so alpha-0 fragments stay invisible. The default when no RSTA entry exists is
+blend enabled, preserving existing behaviour. New host unit tests cover bit
+set/clear, last-write-wins, after-first-draw ignored, no-entry default, other
+addresses and only-bit-3; `make test` passes. Emulator verification (DeSmuME
+capture + Azahar render + `measure_blend_hw.py` / `eq4_hw_compare.py`) was run
+and is quoted as FACT in `docs/reports/eq4x-blend-gate.md`.

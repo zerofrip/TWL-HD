@@ -72,6 +72,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_geometry_slots \
 	tests/host/build/test_attr_pad \
 	tests/host/build/test_v2_parse \
+	tests/host/build/test_blend_gate \
 	tests/host/build/test_v2_write \
 	tests/host/build/test_gx_record \
 	tests/host/build/test_v2_compat \
@@ -98,7 +99,8 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_azahar_host_ppm \
 	tests/host/build/test_ntr_capture_util \
 	tests/host/build/test_ntr_input_util \
-	tests/host/build/test_diag_config
+	tests/host/build/test_diag_config \
+	tests/host/build/test_blend_gate_wiring
 
 host-test: $(HOST_TESTS)
 	@set -e; for test in $(HOST_TESTS); do \
@@ -128,6 +130,10 @@ tests/host/build/test_attr_pad: tests/host/test_attr_pad.c \
 tests/host/build/test_v2_parse: tests/host/test_v2_parse.c $(HOST_V2_COMMON) \
 		$(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_blend_gate: tests/host/test_blend_gate.c $(HOST_V2_COMMON) \
+		$(HOST_HEADERS) arm11/include/twlhd_blend_gate.h | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include -o $@ $< $(HOST_V2_COMMON) $(HOST_LDFLAGS)
 
 tests/host/build/test_v2_write: tests/host/test_v2_write.c $(HOST_V2_COMMON) \
 		$(HOST_HEADERS) | tests/host/build
@@ -247,6 +253,11 @@ tests/host/build/test_diag_config: tests/host/test_diag_config.c \
 	fi
 	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include \
 		-I$(DEVKITPRO)/libctru/include -o $@ $< $(HOST_LDFLAGS)
+
+# Blend-gate wiring test: pure text structural check of arm11/source/main.c.
+tests/host/build/test_blend_gate_wiring: tests/host/test_blend_gate_wiring.c \
+		$(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_LDFLAGS)
 
 # The shim test executes real libnds header code on the host with mocked
 # hardware. It is UNIT VERIFIED, not a DS run, and needs devkitPro installed.

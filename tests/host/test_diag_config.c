@@ -239,7 +239,7 @@ static void test_source_files(const char *path) {
         if (clip != NULL) {
             CHECK_EQ_INT(count_substr(clip, "twlhd_diag_config("), 1);
             CHECK_EQ_INT(count_substr(clip, "twlhd_diag_config(g_diag_mode)"), 1);
-            CHECK_EQ_INT(count_substr(clip, "twlhd_blend_config_alpha("), 0);
+            CHECK_EQ_INT(count_substr(clip, "twlhd_blend_config_alpha("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaBlend("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaTest("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_TexEnvColor("), 1);

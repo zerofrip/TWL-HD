@@ -618,6 +618,8 @@ here:
    `C3D_AlphaBlend` call, and the already-written `twlhd_blend_config_opaque()`
    helper. **It does not change the public vertex-alpha stream**, so the
    `gx_interp` goldens and `tools/gx_interp_oracle.py` stay as they are.
+   **Update (2026-11-25):** implemented as EQ-4x; see
+   `docs/reports/eq4x-blend-gate.md`.
 2. **Interpreter-side flag:** derive the same bit inside
    `twlhd_gx_interp.c` from `view->rsta` and add a per-polygon flag to the
    emitted plan. This changes the interpreter's output contract and therefore

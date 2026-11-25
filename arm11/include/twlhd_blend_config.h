@@ -52,3 +52,11 @@ static inline TwlhdAlphaTestConfig twlhd_alpha_test_disabled(void) {
     TwlhdAlphaTestConfig cfg = {false, GPU_ALWAYS, 0};
     return cfg;
 }
+
+/* Alpha test that keeps alpha==0 fragments invisible on the opaque path while
+ * passing every alpha>0 fragment unchanged. PICA passes a fragment when
+ * alpha > ref, so ref 0 with GPU_GREATER discards exactly alpha==0. */
+static inline TwlhdAlphaTestConfig twlhd_alpha_test_gt_zero(void) {
+    TwlhdAlphaTestConfig cfg = {true, GPU_GREATER, 0};
+    return cfg;
+}

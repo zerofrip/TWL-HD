@@ -26,6 +26,7 @@
 #include "twlhd_tex_draw_plan.h"
 #include "twlhd_vertex_convert.h"
 #include "twlhd_seq.h"
+#include "twlhd_blend_gate.h"
 #include "twlhd_diag_config.h"
 
 #ifndef TWLHD_BUILD_ID
@@ -646,6 +647,8 @@ int main(void) {
 
             if (result == TWLHD_RENDER_OK) {
                 set_builtin_scene();
+                renderer_set_blend_enabled(
+                    twlhd_blend_gate_default().enabled);
                 snprintf(g_status, sizeof g_status, "built-in triangle");
             } else {
                 snprintf(g_status, sizeof g_status, "builtin: %s",
@@ -683,11 +686,15 @@ int main(void) {
                     g_scene.gxcm_count = pending_gxcm_count;
                     g_scene.gx_stats = pending_gx_stats;
                     g_scene.triangles = pending_gx_stats.triangles_out;
+                    renderer_set_blend_enabled(
+                        twlhd_blend_gate_from_view(&g_v2view));
                 } else {
                     g_scene.mode = "SD FRAME (DEBUG CAMERA)";
                     g_scene.input_vertices = pending_stats.input_vertices;
                     g_scene.triangles = pending_stats.triangles;
                     g_scene.stats = pending_stats;
+                    renderer_set_blend_enabled(
+                        twlhd_blend_gate_default().enabled);
                 }
                 if (was_seq) {
                     memcpy(g_seq_source, pending_source,

@@ -117,6 +117,11 @@ uint32_t renderer_get_debug_flags(void);
 void renderer_set_diag_mode(unsigned mode);
 unsigned renderer_get_diag_mode(void);
 
+/* EQ-4x blend gate. Set from the v2 RSTA stream; persists across
+ * renderer_init() because it lives outside RendererState. */
+void renderer_set_blend_enabled(int enabled);
+int renderer_get_blend_enabled(void);
+
 /* Parametric stride-layout parameters. Defaults are 48 bytes, 3 vertices and
  * 0 padding. Setters clamp/ignore out-of-range values. The active values are
  * read by renderer_draw() only when TWLHD_RDBG_LAYOUT_STRIDE is set. */
