@@ -681,3 +681,17 @@ EQ-4v implemented the opt-in `BLEND=1` arm9v2 ROM variant from EQ-4u §6.3
 (`arm9v2/Makefile`, `arm9v2/source/demo_frame.cpp`, `tools/test_arm9v2_blend.py`)
 and documented the (not-run) hardware capture plan in
 `docs/reports/eq4v-blend-rom.md`.
+
+## 14. Update (2026-11-25): EQ-4w — blend-ROM hardware result
+
+EQ-4w measured the blend-enabled scene-4 ROM on real hardware and stored the
+tool, fixtures and README in `tools/eq4w_blend_hw/` (one console, one capture
+session, `SCENE=4 STATIC_ANGLE=30`, DS mode). FACT: in the blend capture the
+alpha-16 green quad reads `134` against the 6-bit A2 prediction 134 and the
+alpha-4 blue quad reads `33` against 36 (3 levels low, consistent with EQ-4i's
+R/B 5-bit quantisation as a HYPOTHESIS only); the non-blend fixture still reads
+`255`/`255`; the alpha-31 quad is `255` in both; the alpha-0 outline is an
+outline in both. Verdict: the blend-enable hypothesis is supported on this
+console/session, and our arm11 unconditional blending is a real divergence for
+blend-disabled ROMs (next-task proposal, text only, in §8 of the report).
+Report: `docs/reports/eq4w-blend-hw-result.md`.

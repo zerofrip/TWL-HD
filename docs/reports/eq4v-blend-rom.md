@@ -727,6 +727,12 @@ UNVERIFIED:
 - The red/blue A2-vs-A1 origin and other mechanisms listed in `eq4u` §6.3.
 - End-to-end capture pipeline behaviour for the new ROM.
 
+**Follow-up (EQ-4w, 2026-11-25):** this plan was executed by the owner (one
+console, one capture session) and recorded in
+`docs/reports/eq4w-blend-hw-result.md`: alpha-16 green `134` (prediction 134)
+and alpha-4 blue `33` (prediction 36), with the alpha-0 outline present in both
+captures. Tool and fixtures: `tools/eq4w_blend_hw/`.
+
 ---
 
 ## 6. Test result

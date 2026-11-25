@@ -648,6 +648,12 @@ test-ds-edge-test:
 test-eq4o-hw-rows:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4o_hw_rows -p 'test_*.py'
 
+# EQ-4w blend-enabled scene-4 hardware measurement (tools/eq4w_blend_hw/).
+# Discovered explicitly: the aggregate pass below does not descend into
+# tools/eq4w_blend_hw (no __init__.py).
+test-eq4w-blend-hw:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4w_blend_hw -p 'test_*.py'
+
 # EQ-4p presentation-row correction module (tools/azahar_presentation.py). Run
 # explicitly; the discover pass in `test` sets AZAHAR_PRESENTATION_DISCOVER_SKIP
 # so it is not executed twice.
@@ -660,7 +666,7 @@ test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-arm9v2-blend test-eq4-hw-compare \
 	test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test \
 	test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows \
-	test-azahar-presentation
+	test-eq4w-blend-hw test-azahar-presentation
 	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 \
 	ARM9V2_STATIC_DISCOVER_SKIP=1 ARM9V2_BLEND_DISCOVER_SKIP=1 EQ4_HW_COMPARE_DISCOVER_SKIP=1 \
 	FIT_MAPPING_DISCOVER_SKIP=1 AZAHAR_PRESENTATION_DISCOVER_SKIP=1 \

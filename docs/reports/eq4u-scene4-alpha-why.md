@@ -749,6 +749,13 @@ Implemented as EQ-4v: `BLEND=1` Makefile switch, guarded `glEnable(GL_BLEND)`,
 tests in `tools/test_arm9v2_blend.py`, and the capture plan in
 `docs/reports/eq4v-blend-rom.md`.
 
+**Follow-up (EQ-4w, 2026-11-25):** the ROM was run on hardware (one console, one
+capture session): alpha-16 green `255` -> `134` (prediction 134) and alpha-4
+blue `255` -> `33` (prediction 36; the 3-level difference is consistent with
+EQ-4i's R/B 5-bit quantisation as HYPOTHESIS only), so this falsification test
+supports the blend-enable mechanism on that console/session. Report:
+`docs/reports/eq4w-blend-hw-result.md`; tool: `tools/eq4w_blend_hw/`.
+
 ## 7. Tests
 
 Report-only round: no production code changed, so **no test was added, modified
