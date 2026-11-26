@@ -13,7 +13,9 @@ a labelled reason when PIL is missing.
 """
 
 import os
+import shutil
 import sys
+import tempfile
 import unittest
 
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -64,6 +66,25 @@ def azahar_image(nominal):
     row0 = [row239[x + 1] for x in range(WIDTH - 1)] + [(0, 0, 0)]
     rows[0] = row0
     return [pixel for row in rows for pixel in row]
+
+
+def black_background_azahar_image():
+    """A synthetic Azahar render with uniform black border rows.
+
+    Rows 0 and 239 are solid black, so the wrap signature is content-
+    undeterminable in ``auto`` mode, while ``on`` still restores the nominal
+    content.
+    """
+    rows = [None] * HEIGHT
+    # nominal: black background with a small white square in the middle.
+    for y in range(HEIGHT):
+        rows[y] = [(0, 0, 0)] * WIDTH
+    for y in range(100, 140):
+        for x in range(160, 240):
+            rows[y][x] = (255, 255, 255)
+    rows[HEIGHT - 1] = list(rows[HEIGHT - 2])
+    nominal = [pixel for row in rows for pixel in row]
+    return azahar_image(nominal), nominal
 
 
 def read_png(path):
@@ -132,6 +153,41 @@ class AzaharPresentationTest(unittest.TestCase):
         self.assertTrue(applied)
         self.assertEqual(pixels[:WIDTH * HEIGHT], nominal_image())
         self.assertEqual(pixels[WIDTH * HEIGHT:], bottom)
+
+    def test_black_background_auto_is_undetermined(self):
+        shifted, nominal = black_background_azahar_image()
+        self.assertFalse(az.detect_wrap(shifted, WIDTH, HEIGHT))
+        pixels, applied, reason = az.apply_correction("auto", shifted,
+                                                       WIDTH, HEIGHT)
+        self.assertFalse(applied)
+        self.assertIn("undetermined (uniform border rows)", reason)
+        self.assertEqual(pixels, shifted)
+
+    def test_black_background_on_restores_nominal(self):
+        shifted, nominal = black_background_azahar_image()
+        pixels, applied, reason = az.apply_correction("on", shifted,
+                                                       WIDTH, HEIGHT)
+        self.assertTrue(applied)
+        self.assertEqual(reason, "--azahar-correction on (forced)")
+        self.assertEqual(pixels, nominal)
+
+    def test_marker_prevents_double_correction(self):
+        shifted, nominal = black_background_azahar_image()
+        tmp = os.path.join(tempfile.mkdtemp(prefix="az-pres-"),
+                           "frame.ppm")
+        try:
+            with open(tmp, "wb") as handle:
+                handle.write(b"P6\n400 240\n255\n")
+                handle.write(bytes(channel for rgb in shifted
+                                   for channel in rgb))
+            az.mark_corrected(tmp)
+            pixels, applied, reason = az.apply_correction(
+                "on", shifted, WIDTH, HEIGHT, marker=tmp)
+            self.assertFalse(applied)
+            self.assertIn("already corrected (marker)", reason)
+            self.assertEqual(pixels, shifted)
+        finally:
+            shutil.rmtree(os.path.dirname(tmp))
 
     @unittest.skipUnless(HAVE_PIL, "PIL is not installed, so the hardware PNG "
                                    "crops cannot be read (labelled skip)")

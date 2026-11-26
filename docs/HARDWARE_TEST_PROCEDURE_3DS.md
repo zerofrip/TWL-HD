@@ -80,8 +80,9 @@ screen helps), and report before any second attempt.
 
 ## 6. Expected output (LOCAL, from `arm11/source/main.c` and `renderer.c`)
 
-**Top screen (400×240, 3D disabled):** a dark blue-grey background (clear colour
-`0x101018`) with **one triangle**, static, no animation. The three vertices are red, green
+**Top screen (400×240, 3D disabled):** a black background (clear colour
+`0x000000`; EQ-4z changed the default from the old `0x101018` on 2026-11-25)
+with **one triangle**, static, no animation. The three vertices are red, green
 and blue (red `(-0.8,-0.6)`, green `(0.8,-0.6)`, blue `(0.0,0.8)`, all at z = 0), and the
 colour is blended smoothly across the face. It is drawn through a fixed *debug* camera that
 looks at the triangle from an **oblique** direction (about 36° off the straight-on axis:

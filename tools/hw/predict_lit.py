@@ -45,9 +45,9 @@ SCREEN_HEIGHT = 240
 FB_WIDTH = 240
 FB_HEIGHT = 400
 
-# arm11/source/renderer.c:38 RENDER_CLEAR_COLOR 0x101018FF = (16,16,24,255);
-# Run 17 measured (16,16,24) over the top screen.
-CLEAR_RGBA8 = (16, 16, 24, 255)
+# arm11/include/twlhd_render_config.h TWLHD_RENDER_CLEAR_COLOR 0x000000FF =
+# (0,0,0,255); Run 17 measured the old build as (16,16,24) over the top screen.
+CLEAR_RGBA8 = (0, 0, 0, 255)
 # A corner patch that the generated 2x2 quad layout never covers.
 BACKGROUND_CENTRE = (12.0, 12.0)
 

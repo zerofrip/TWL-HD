@@ -33,12 +33,12 @@
 #include "twlhd_clip_tex_vshader_shbin.h"
 #include "twlhd_clip_vshader_shbin.h"
 #include "twlhd_vshader_shbin.h"
+#include "twlhd_render_config.h"
 
 /* The clip vertex layout is exactly two float4 loaders. */
 _Static_assert(sizeof(TwlhdGxVertex) == 32,
                "TwlhdGxVertex must be 32 bytes for the clip vertex layout");
 
-#define RENDER_CLEAR_COLOR 0x101018FFu
 #define RENDER_FOV_DEGREES  45.0f
 #define RENDER_FIXED_DIR_X   0.6f
 #define RENDER_FIXED_DIR_Y   0.4f
@@ -1192,7 +1192,7 @@ static void draw_debug_internal(void) {
     if (!(g_debug_flags & TWLHD_RDBG_SKIP_CLEAR)) {
         renderer_trace("RenderTargetClear");
         C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
-                              RENDER_CLEAR_COLOR, 0);
+                              TWLHD_RENDER_CLEAR_COLOR, 0);
     }
     renderer_trace("FrameDrawOn");
     C3D_FrameDrawOn(g_renderer.target);
@@ -1540,7 +1540,7 @@ static void draw_clip_internal(int committed) {
 
     renderer_trace("RenderTargetClear");
     C3D_RenderTargetClear(g_renderer.target, C3D_CLEAR_ALL,
-                          RENDER_CLEAR_COLOR, 0);
+                          TWLHD_RENDER_CLEAR_COLOR, 0);
 
     C3D_FrameDrawOn(g_renderer.target);
 

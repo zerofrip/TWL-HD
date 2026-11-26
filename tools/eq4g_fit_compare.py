@@ -69,11 +69,12 @@ def fitted_mapping(capture_path):
     }
 
 
-def report(capture, reference, mapping, correction="auto"):
+def report(capture, reference, mapping, correction="on"):
     ds = eq4.capture_to_ds(capture, mapping)
     width, height, pixels = eq4.parse_ppm(reference)
+    marker = reference if correction == "on" else None
     pixels, applied, reason = azahar_presentation.apply_correction(
-        correction, pixels, width, height)
+        correction, pixels, width, height, marker=marker)
     print(azahar_presentation.format_line(applied, reason))
     ref = eq4.load_reference_pixels(pixels, width, height, mapping, reference)
     metrics = eq4.compare_pixels(ref, ds, eq4.DS_W, eq4.DS_H)
@@ -170,10 +171,12 @@ def build_parser():
                              "(default: tools/ds_scale_test/fixtures/"
                              "sc4_3_top400x240.png)")
     parser.add_argument("--azahar-correction", choices=azahar_presentation.MODES,
-                        default="auto",
+                        default="on",
                         help="EQ-4p presentation-row correction for an Azahar "
-                             "'ours' reference: auto (guard, default), on "
-                             "(forced), off (never)")
+                             "'ours' reference: on (forced, default; skips "
+                             "already-corrected marker), auto (guard; uniform "
+                             "border rows are reported as undetermined), off "
+                             "(never)")
     return parser
 
 

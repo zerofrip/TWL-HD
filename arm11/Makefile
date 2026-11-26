@@ -83,6 +83,13 @@ TWLHD_BUILD_ID_STR := $(TWLHD_GIT_HASH)-diag
 endif
 CFLAGS += -DTWLHD_BUILD_ID=\"$(TWLHD_BUILD_ID_STR)\"
 
+# Append-style hook for compile-time overrides (e.g. EQ-4z diagnostic colour).
+# Command-line variables propagate to the sub-make automatically; do NOT use
+# CFLAGS=... on the command line because devkitPro's 3ds_rules include would be
+# overwritten.  Example:
+#   make -C arm11 -B TWLHD_EXTRA_CFLAGS=-DTWLHD_RENDER_CLEAR_COLOR=0x101018FFu
+CFLAGS += $(TWLHD_EXTRA_CFLAGS)
+
 #---------------------------------------------------------------------------------
 ifneq ($(BUILD),$(notdir $(CURDIR)))
 #---------------------------------------------------------------------------------

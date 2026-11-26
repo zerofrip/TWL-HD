@@ -437,6 +437,8 @@ clear colour or existing goldens touched). Because (b)'s stated blast radius is
 higher than (a)'s, **recommend (a) first**, then (b) as a separate,
 carefully-scoped decision; (c) is expensive and orthogonal.
 
+**Update (2026-11-25):** EQ-4z implemented (b): the default clear colour is now `(0,0,0)` from `arm11/include/twlhd_render_config.h`, with an overridable `TWLHD_RENDER_CLEAR_COLOR` macro for diagnostic builds. Report: `docs/reports/eq4z-clear-black.md`.
+
 ---
 
 ## 11. Tool, tests and audit

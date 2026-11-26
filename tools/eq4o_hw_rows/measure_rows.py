@@ -17,7 +17,9 @@ White test
 ----------
 A pixel is white when its mean ``(R+G+B)/3`` is at least 128 (8-bit levels),
 the same rule as ``tools/ds_edge_test/measure_rows.py``.  The clear colour of
-these captures is ``(16,16,24)``, far below the threshold.
+these captures is ``(16,16,24)``, far below the threshold.  This is the clear
+colour of the OLD build that produced the Run-16/17 captures; a black-clear
+build needs this constant updated only when a new capture is validated.
 
 Edge table
 ----------

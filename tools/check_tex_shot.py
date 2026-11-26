@@ -56,6 +56,8 @@ REGIONS = [
 ]
 
 WHITE = (255, 255, 255)
+# OLD-build clear colour for this synthetic/old-capture validator; kept
+# self-consistent rather than flipped for EQ-4z.
 CLEAR = (16, 16, 24)
 
 # Fixed palette used by --snap. Order matters: nearest-colour ties go to the

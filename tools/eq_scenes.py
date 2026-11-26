@@ -786,10 +786,12 @@ def build_parser():
     parser.add_argument("--scenes",
                         help="comma-separated subset, e.g. cube,scene5")
     parser.add_argument("--azahar-correction",
-                        choices=("auto", "on", "off"), default="auto",
+                        choices=("auto", "on", "off"), default="on",
                         help="EQ-4p presentation-row correction for the "
-                             "Azahar 'ours' picture: auto (row-0 wrap guard, "
-                             "default), on (forced), off (never)")
+                             "Azahar 'ours' picture: on (forced, default; "
+                             "skips already-corrected marker), auto (row-0 "
+                             "wrap guard; uniform border rows are reported as "
+                             "undetermined), off (never)")
     return parser
 
 

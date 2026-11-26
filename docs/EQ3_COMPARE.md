@@ -243,3 +243,5 @@ exactly once under `make test` (the skip is reported, not silent).
   a legitimate exit-1 finding, not something to tolerance away.
 - **Quad-diagonal fill and rasteriser rounding** beyond the ~1 px structural
   shift; two independent models can share a wrong rule.
+
+**Update (2026-11-25):** EQ-4z changed the arm11 top-screen clear colour from `(16,16,24)` to black `(0,0,0)`. `tools/eq3_compare.py` now treats only `(0,0,0)` as the background class and deliberately classifies the old clear colour `(16,16,24)` as "other" (see `BACKGROUND_COLOURS` and `BG_MAX_CHANNEL`). `tools/test_eq3_compare.py` gained `test_old_clear_colour_is_rejected_as_background`. Report: `docs/reports/eq4z-clear-black.md`.

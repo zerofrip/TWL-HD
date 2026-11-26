@@ -70,9 +70,15 @@ FACE_CLASSES = (
     ("cyan", (0, 255, 255)),
 )
 
-# DeSmuME's software buffer is cleared to black; our renderer clears to the
-# RENDER_CLEAR_COLOR 0x101018FF bytes (16, 16, 24). Both are background.
-BACKGROUND_COLOURS = ((0, 0, 0), (16, 16, 24))
+# DeSmuME's software buffer is cleared to black; our renderer now clears to
+# TWLHD_RENDER_CLEAR_COLOR 0x000000FF (opaque black, arm11/include/twlhd_render_config.h).
+# The old dark blue-grey clear (16, 16, 24) is deliberately rejected by the
+# distance cap below, matching the precedent in tools/eq4_hw_compare.py.
+BACKGROUND_COLOURS = ((0, 0, 0),)
+# Squared-distance cap for a pixel to count as background.  (16,16,24) is
+# distance^2 = 16^2 + 16^2 + 24^2 = 1088; BG_MAX_CHANNEL=24 gives 24^2 = 576,
+# so the old clear colour is classified as "other", not background.
+BG_MAX_CHANNEL = 24
 
 # Our top screen: the DS 256x192 viewport is the centred 320x240 region with
 # 40 px pillar bars (common/twlhd_clipfix.c, docs/PHASE5A_V2_RENDERER_DESIGN.md
@@ -132,15 +138,31 @@ def pixel_at(data, width, x, y):
 
 
 def classify(rgb):
-    """Nearest colour class by squared RGB distance (ties to the earlier)."""
+    """Nearest colour class, with the background class distance-capped.
+
+    Face classes keep their original nearest-wins semantics.  A pixel is
+    classified as background only when the nearest background colour is both
+    closer than every face colour and its squared RGB distance (the sum of the
+    squared per-channel differences) is at most BG_MAX_CHANNEL * BG_MAX_CHANNEL
+    (BG_MAX_CHANNEL squared), matching tools/eq4_hw_compare.py.  A nearest face
+    colour stays that face regardless of distance; a background winner beyond
+    the squared-distance cap is "other".
+    """
     best = None
-    candidates = list(FACE_CLASSES) + [
-        ("background", colour) for colour in BACKGROUND_COLOURS]
-    for name, colour in candidates:
+    for name, colour in FACE_CLASSES:
         distance = sum((rgb[i] - colour[i]) ** 2 for i in range(3))
         if best is None or distance < best[0]:
-            best = (distance, name)
-    return best[1]
+            best = (distance, name, "face")
+    for colour in BACKGROUND_COLOURS:
+        distance = sum((rgb[i] - colour[i]) ** 2 for i in range(3))
+        if best is None or distance < best[0]:
+            best = (distance, "background", "background")
+    if best is None:
+        return "other"
+    distance, name, kind = best
+    if kind == "background" and distance > BG_MAX_CHANNEL * BG_MAX_CHANNEL:
+        return "other"
+    return name
 
 
 def _sample_x(dx):
@@ -170,7 +192,9 @@ def load_picture(path, side, correction="off"):
     side is "harness" (256x192, read directly) or "ours" (400x240, or 400x480
     whose upper 400x240 rows are the top screen).  correction is the EQ-4p
     presentation-row mode for an "ours" picture; the default "off" keeps the
-    historical numbers for direct callers, while the CLI defaults to auto.
+    historical numbers for direct callers, while the CLI defaults to auto.  In
+    ``on`` mode an already-corrected sidecar marker ``<ppm>.azahar-corrected``
+    prevents a double correction.
     """
     width, height, data = parse_ppm(path)
     correction_line = None
@@ -183,7 +207,7 @@ def load_picture(path, side, correction="off"):
             pixels = [(data[i], data[i + 1], data[i + 2])
                       for i in range(0, len(data), 3)]
             pixels, applied, reason = azahar_presentation.apply_correction(
-                correction, pixels, width, height)
+                correction, pixels, width, height, marker=path)
             correction_line = azahar_presentation.format_line(applied, reason)
             if applied:
                 data = bytearray(channel for rgb in pixels for channel in rgb)
@@ -472,8 +496,10 @@ def main(argv=None):
     parser.add_argument("--azahar-correction", choices=azahar_presentation.MODES,
                         default="auto",
                         help="EQ-4p presentation-row correction for our "
-                             "Azahar picture: auto (row-0 wrap guard, default), "
-                             "on (forced), off (never)")
+                             "Azahar picture: auto (row-0 wrap guard, default; "
+                             "uniform border rows are reported as undetermined), "
+                             "on (forced; skips already-corrected marker), "
+                             "off (never)")
     args = parser.parse_args(argv)
 
     try:

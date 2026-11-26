@@ -40,7 +40,8 @@ OURS = os.path.join(FIXTURES, "ours_cube_f240_top.ppm")
 CLI = os.path.join(TOOLS_DIR, "eq3_compare.py")
 
 HARNESS_BG = (0, 0, 0)
-OURS_BG = (16, 16, 24)
+OURS_BG = (0, 0, 0)
+OURS_OLD_BG = (16, 16, 24)
 
 # Three visible faces as DS-pixel rectangles with background gaps, enough
 # interior area to survive the 3 px erosion.
@@ -264,6 +265,24 @@ class Eq3CompareCliTest(unittest.TestCase):
                       "(--azahar-correction on (forced))", result.stdout)
         self.assertIn("ours bbox=(77,42)-(124,112) "
                       "centroid=(104.68,76.22)", result.stdout)
+
+    def test_background_colours_are_black_only(self):
+        self.assertEqual(eq3_compare.BACKGROUND_COLOURS, ((0, 0, 0),))
+
+    def test_old_clear_colour_is_rejected_as_background(self):
+        # The old dark blue-grey clear (16,16,24) must not classify as
+        # background after EQ-4z; it is darker than the face colours but
+        # farther than BG_MAX_CHANNEL from black.
+        self.assertNotEqual(eq3_compare.classify(OURS_OLD_BG), "background")
+        # A synthetic "ours" picture filled with the old clear colour must
+        # contain no background-classified cells; they are "other" instead.
+        old_bg_path = os.path.join(self.tmp, "o_oldbg.ppm")
+        write_ppm(old_bg_path, 400, 240, lambda _x, _y: OURS_OLD_BG)
+        picture = eq3_compare.load_picture(old_bg_path, "ours",
+                                           correction="off")
+        grid_classes = set(cell for row in picture["grid"] for cell in row)
+        self.assertNotIn("background", grid_classes)
+        self.assertIn("other", grid_classes)
 
 
 @unittest.skipIf(EQ3_DISCOVER_SKIP,

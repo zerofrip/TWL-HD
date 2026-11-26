@@ -38,6 +38,7 @@ VALIDATE = os.path.join(TOOLS_DIR, "twlhd_v2_dump.py")
 
 WIDTH = 400
 HEIGHT = 480
+# OLD-build clear colour for this synthetic validator; kept self-consistent.
 CLEAR = (16, 16, 24)
 
 SPECS = gen.QUAD_SPECS

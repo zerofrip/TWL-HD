@@ -42,6 +42,8 @@ from check_tex_shot import parse_ppm  # noqa: E402
 import gen_tex_format_frames as gen  # noqa: E402
 
 TOLERANCE = 28
+# Clear colour of the build that produced the Run-20 capture; a black-clear
+# build needs this constant updated when a new capture is validated.
 CLEAR = (16, 16, 24)
 SHIFTS = (-1, 0, 1)
 

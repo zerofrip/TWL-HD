@@ -54,8 +54,9 @@ python3 tools/hw/predict_lit.py \
 
 `gx_interp_cli` is built by `make test` (Makefile:481-482). Without `--out`
 the JSON is printed to stdout. The document contains the frame path, the
-effective viewport, the clear colour `(16,16,24,255)`, a background patch
-centre, and per quad: `rgba8`, `clip_centre`, `ndc_centre`, `pixel_centre`.
+effective viewport, the clear colour `(0,0,0,255)` (EQ-4z default; the old
+build was `(16,16,24,255)` per Run 17 below), a background patch centre, and
+per quad: `rgba8`, `clip_centre`, `ndc_centre`, `pixel_centre`.
 Colour 8-bit values are `round(channel/31*255)`; alpha 31 becomes 255.
 
 ## Compare a capture
@@ -115,7 +116,7 @@ Sources (file:line is the evidence):
 | clipfix matrix rows | `common/twlhd_clipfix.c:12-43` (used at `arm11/source/renderer.c:849-850`) |
 | shader applies it (clip path only) | `arm11/shaders/twlhd_clip_vshader.v.pica:22-28` |
 | render target is 240x400 | `arm11/source/renderer.c:671-672` |
-| clear colour `0x101018FF` = (16,16,24,255) | `arm11/source/renderer.c:38` |
+| clear colour `0x000000FF` = (0,0,0,255) | `arm11/include/twlhd_render_config.h` |
 | portrait framebuffer rotated -90 deg for the 400x240 top screen | `tools/ntr_capture/README.md:151-155` |
 
 For a DS clip coordinate `(x, y)` (default full DS viewport, `hw=hh=1`,
@@ -148,15 +149,21 @@ wrap to `y1-255`), exactly as `common/twlhd_clipfix.c`.
    The Run 8 non-default viewport (32,96)-(159,191) predicted left/top edges
    123/25 land next to the documented 124/22; its right/bottom cannot be
    compared exactly because that capture is not in the repository.
-2. **Run 17 clear colour.** The predictor emits (16,16,24), matching Run 17
-   (`docs/HARDWARE_TEST_PROCEDURE_3DS.md:775-787`) and `RENDER_CLEAR_COLOR`.
+2. **Run 17 clear colour (OLD build, pre-EQ-4z).** The predictor emitted
+   (16,16,24) for that build, matching Run 17
+   (`docs/HARDWARE_TEST_PROCEDURE_3DS.md:775-787`) and the then-current
+   `RENDER_CLEAR_COLOR`.  EQ-4z changed the Python constant `CLEAR_RGBA8` to
+   (0,0,0,255).  To reproduce the old predictor, edit `CLEAR_RGBA8` in
+   `tools/hw/predict_lit.py`; the arm11 C macro has no effect on this host
+   Python tool.
 3. **Azahar (2026-11-12, headless, host-only, external core
    `$HOME/3ds/azahar-build-libretro/bin/Release/azahar_libretro.so`).**
    - `tools/azahar_host/smoke.sh` rendered the staged `scene4_alpha` frame.
      Sampling the top 400x240 rows at the predicted centres gave
      `(255,0,0)`, `(7,142,11)`, `(13,13,60)`, `(16,16,24)` for the
-     alpha 31/16/4/0 quads; those match the standard alpha-blend predictions
-     and the Run 17 values within 1 level.
+     alpha 31/16/4/0 quads on the OLD build; those match the standard
+     alpha-blend predictions and the Run 17 values within 1 level.  EQ-4z
+     changes the alpha-0 quad background to `(0,0,0)`.
    - After building the current ARM11 app (`make arm11`), each generated
      frame was loaded and screenshotted. `compare_ppm.py` reported
      `result=PASS` with **0/0/0 deviation on every quad and the background**

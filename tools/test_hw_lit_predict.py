@@ -73,9 +73,9 @@ class LitPredictTest(unittest.TestCase):
                 self.assertEqual(document["screen"], {"width": 400,
                                                       "height": 240})
                 self.assertEqual(document["clear_colour"],
-                                 [16, 16, 24, 255])
+                                 [0, 0, 0, 255])
                 self.assertEqual(document["background"]["rgba8"],
-                                 [16, 16, 24, 255])
+                                 [0, 0, 0, 255])
                 self.assertEqual(document["background"]["pixel_centre"],
                                  [12.0, 12.0])
                 self.assertIn("fb_y", document["mapping"])

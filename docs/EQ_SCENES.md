@@ -724,3 +724,5 @@ residual arm11-vs-DS blend gap (`142`/`57` vs `134`/`33`) is the pre-existing
 blend-math difference, with text-only next-step proposals (6-bit G / 5-bit R/B
 quantisation; the `(16,16,24)` clear colour; the alpha-0 outline). Tool and
 fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
+
+**Update (2026-11-25):** EQ-4z: top-screen clear colour is now black `(0,0,0)`; see `docs/reports/eq4z-clear-black.md`.

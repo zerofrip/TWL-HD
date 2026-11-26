@@ -49,7 +49,7 @@ RECTS = (
     (64, 96, 128, 1),     # hline
     (208, 64, 1, 96),     # vline
 )
-CLEAR = (16, 16, 24)
+CLEAR = (16, 16, 24)  # OLD-build clear colour; keep for historical captures.
 
 
 def render_capture(dy=0, extra_shift=0):

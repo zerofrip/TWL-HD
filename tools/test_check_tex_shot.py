@@ -46,7 +46,7 @@ CTL_REGIONS = [
     ("LR", 270, 340, 150, 185, (0, 0, 255)),
 ]
 
-BG = (16, 16, 24)
+BG = (16, 16, 24)  # OLD-build clear colour; kept self-consistent.
 WHITE = (255, 255, 255)
 
 

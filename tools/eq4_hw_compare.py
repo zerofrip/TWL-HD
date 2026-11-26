@@ -559,7 +559,9 @@ def build_parser():
                         default="auto",
                         help="EQ-4p presentation-row correction for an Azahar "
                              "400x240/400x480 'ours' reference: auto (row-0 "
-                             "wrap guard, default), on (forced), off (never)")
+                             "wrap guard, default; uniform border rows are "
+                             "reported as undetermined), on (forced; skips "
+                             "already-corrected marker), off (never)")
     return parser
 
 
@@ -569,8 +571,10 @@ def main(argv=None):
         mapping = load_mapping(args.mapping)
         capture = load_capture(args.capture)
         width, height, pixels = parse_ppm(args.reference)
+        marker = (args.reference
+                  if args.azahar_correction == "on" else None)
         pixels, applied, reason = azahar_presentation.apply_correction(
-            args.azahar_correction, pixels, width, height)
+            args.azahar_correction, pixels, width, height, marker=marker)
         print(azahar_presentation.format_line(applied, reason))
         reference = load_reference_pixels(pixels, width, height, mapping,
                                           args.reference)

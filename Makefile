@@ -100,6 +100,8 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_ntr_capture_util \
 	tests/host/build/test_ntr_input_util \
 	tests/host/build/test_diag_config \
+	tests/host/build/test_render_clear \
+	tests/host/build/test_render_clear_override \
 	tests/host/build/test_blend_gate_wiring
 
 host-test: $(HOST_TESTS)
@@ -253,6 +255,21 @@ tests/host/build/test_diag_config: tests/host/test_diag_config.c \
 	fi
 	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include \
 		-I$(DEVKITPRO)/libctru/include -o $@ $< $(HOST_LDFLAGS)
+
+# Render-clear test: the clear colour is defined once in a freestanding header
+# and used at both clear sites in renderer.c.  No libctru headers needed.
+tests/host/build/test_render_clear: tests/host/test_render_clear.c \
+		$(HOST_HEADERS) arm11/include/twlhd_render_config.h \
+		arm11/source/renderer.c | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include -o $@ $< $(HOST_LDFLAGS)
+
+# Render-clear override test: compile-time override restores the old diagnostic
+# colour (EQ-4z).  Same source, different macro definition.
+tests/host/build/test_render_clear_override: tests/host/test_render_clear.c \
+		$(HOST_HEADERS) arm11/include/twlhd_render_config.h | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -Iarm11/include \
+		-DOVERRIDE_TEST -DTWLHD_RENDER_CLEAR_COLOR=0x101018FFu \
+		-o $@ $< $(HOST_LDFLAGS)
 
 # Blend-gate wiring test: pure text structural check of arm11/source/main.c.
 tests/host/build/test_blend_gate_wiring: tests/host/test_blend_gate_wiring.c \

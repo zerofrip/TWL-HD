@@ -42,6 +42,8 @@ FIXTURE_SHA256 = \
 
 WIDTH = 400
 HEIGHT = 480
+# Clear colour of the build that produced the Run-20 capture; a black-clear
+# build needs this constant updated when a new capture is validated.
 CLEAR = (16, 16, 24)
 
 EXPECTED = [gen.expected_pixels(spec) for spec in gen.QUAD_SPECS]

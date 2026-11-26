@@ -55,6 +55,7 @@ from check_tex_shot import parse_ppm  # noqa: E402
 import gen_tex_behaviour_frames as gen  # noqa: E402
 
 TOLERANCE = 28
+# OLD-build clear colour for this synthetic validator; kept self-consistent.
 CLEAR = (16, 16, 24)
 SHIFTS = (-1, 0, 1)
 
