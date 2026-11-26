@@ -425,6 +425,7 @@ Measured numbers only, same derivation as EQ-4y §7/§8:
 - The stray `(16,0,0)` pixel origin (§6, HYPOTHESIS only).
 ## 10. Consequence (text only, NOT applied)
 Next candidates: (a) blend output quantisation, green to 6 bits and red/blue to 5 bits after blending, per eq4y §10(a); (b) the alpha-0 outline (eq4u §6.2), orthogonal and expensive. Recommendation: take (a) first — self-contained in the clip draw path, and the black background has removed the larger term, leaving quantisation as the main measurable blend difference; schedule (b) separately.
+**EQ-4zb (2026-11-26):** offline model of this residual (no production code change): no source-derived candidate reproduces the console 138 / 41, and the quantisation term explains at most 1 of the 4 green / 7 of the 8 blue levels — see `docs/reports/eq4zb-blend-residual.md` and `tools/eq4zb_blend_model/`.
 ## 11. Tool, tests and audit
 Fixtures/test `tools/eq4za_clear_hw/`, wired into `make test`; tests pin both sha256s and §4.1/§4.2 (incl. `(16,0,0) 1`), and the old `(16,16,24)` EQ-4y crop is the negative (not black background).
 
