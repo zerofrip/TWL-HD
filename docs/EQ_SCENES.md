@@ -734,3 +734,5 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 **Update (2026-11-26):** EQ-4zd recorded the real-hardware alpha sweep (one console, one capture session per frame, arm11 3dsx from `main` `dfaf611`): hardware green/blue series pinned in `tools/eq4zd_sweep_hw/`; see `docs/reports/eq4zd-alpha-sweep-hw-result.md`.
 
 **Update (2026-11-26):** EQ-4ze surveyed GX/GPU feature coverage and ranked the next hardware experiments (offline; no console, no code change); report: `docs/reports/eq4ze-hw-coverage.md`.
+
+**Update (2026-11-26):** EQ-4zf measured the 1-px `hline`/`vline` fill rule on the committed hardware capture, DeSmuME and our render (offline; no console, no production source change): `docs/reports/eq4zf-1px-lines.md`.

@@ -391,6 +391,8 @@ Proposal, not applied — row-run probe in `measure_rows.py`:
 * **Why first:** it closes a gap the edge report names explicitly, with no new
   ROM and no console step if the fixture resolves it.
 
+**Result (EQ-4zf):** the row-run probe and the hardware/DeSmuME/our-render comparison are in `docs/reports/eq4zf-1px-lines.md`.
+
 ### 2. DS-mode lighting
 
 * **ROM variant:** new `LIT=1` switch (text-only diff: one Makefile block plus a

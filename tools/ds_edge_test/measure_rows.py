@@ -45,6 +45,7 @@ input errors.
 """
 
 import json
+import math
 import os
 import sys
 
@@ -72,6 +73,9 @@ WHITE_THRESHOLD = 128.0
 # Rows/columns searched around a nominal rectangle when reading back its
 # actual extent.  Two DS pixels absorb a one-row/one-column placement offset.
 SEARCH_MARGIN = 2
+# The opt-in --row-runs probe prints this many capture neighbours on each side
+# of the nominal position: 1.25x capture resampling can smear a 1-px line.
+PROFILE_NEIGHBOURS = 5
 # The two bands that touch the top and bottom framebuffer scanlines anchor the
 # frame origin; a per-primitive offset leaves them at nominal.
 ANCHORS = ("top_band", "bottom_band")
@@ -107,6 +111,14 @@ def white_runs(flags):
 
 def format_runs(runs):
     return ",".join("%d-%d" % run for run in runs) if runs else "none"
+
+
+def _longest_run(runs):
+    """(offset, length) of the longest white run, or (None, 0)."""
+    if not runs:
+        return None, 0
+    first, last = max(runs, key=lambda run: (run[1] - run[0], -run[0]))
+    return first, last - first + 1
 
 
 def _search_box(item, width, height):
@@ -304,9 +316,142 @@ def print_capture(observations, levels, mapping, data):
     print("classification=%s" % classify_offsets(whole))
 
 
+def _probe_item(pixels, width, height, item, mapping):
+    """Run start/length, coverage and profile for one 1-px line item."""
+    horizontal = item["h"] == 1
+    if horizontal:
+        line_axis, axis_name = "row", "rows"
+        nominal_ds = float(item["y"])
+        scan_scale, scan_offset = mapping["scale_y"], mapping["offset_y"]
+        span_scale, span_offset = mapping["scale_x"], mapping["offset_x"]
+        span = measure_edges._capture_span(
+            item["x"], item["x"] + item["w"],
+            span_offset, span_scale, width)
+        limit = height
+    else:
+        line_axis, axis_name = "col", "cols"
+        nominal_ds = float(item["x"])
+        scan_scale, scan_offset = mapping["scale_x"], mapping["offset_x"]
+        span_scale, span_offset = mapping["scale_y"], mapping["offset_y"]
+        span = measure_edges._capture_span(
+            item["y"], item["y"] + item["h"],
+            span_offset, span_scale, height)
+        limit = width
+
+    nominal_capture = scan_offset + scan_scale * nominal_ds
+    pad = int(math.ceil(SEARCH_MARGIN * max(scan_scale, 1.0)))
+    search = (max(0, int(math.floor(nominal_capture)) - pad),
+              min(limit - 1, int(math.ceil(nominal_capture)) + pad))
+
+    positions = []
+    covered = []
+    peak = 0.0
+    for index in range(search[0], search[1] + 1):
+        flags = []
+        row_peak = 0.0
+        for pos in range(span[0], span[1] + 1):
+            x, y = (pos, index) if horizontal else (index, pos)
+            pixel = pixels[y * width + x]
+            flags.append(is_white(pixel))
+            value = luminance(pixel)
+            row_peak = max(row_peak, value)
+        runs = [(run[0] + span[0], run[1] + span[0])
+                for run in white_runs(flags)]
+        offset, length = _longest_run(runs)
+        if offset is not None:
+            covered.append(index)
+        start = offset
+        positions.append({
+            "index": index,
+            "ds": (index - scan_offset) / scan_scale,
+            "runs": runs,
+            "start": start,
+            "length": length,
+            "start_ds": (None if start is None
+                         else (start - span_offset) / span_scale),
+            "length_ds": length / span_scale,
+            "peak": row_peak,
+        })
+        peak = max(peak, row_peak)
+
+    centre = int(round(nominal_capture))
+    profile = (max(0, centre - PROFILE_NEIGHBOURS),
+               min(limit - 1, centre + PROFILE_NEIGHBOURS))
+    profile_values = []
+    for index in range(profile[0], profile[1] + 1):
+        total = 0.0
+        for pos in range(span[0], span[1] + 1):
+            x, y = (pos, index) if horizontal else (index, pos)
+            total += luminance(pixels[y * width + x])
+        profile_values.append(total / (span[1] - span[0] + 1))
+
+    coverage_flags = [index in covered
+                      for index in range(search[0], search[1] + 1)]
+    coverage_runs = [(run[0] + search[0], run[1] + search[0])
+                     for run in white_runs(coverage_flags)]
+    return {
+        "name": item["name"],
+        "axis": line_axis,
+        "axis_name": axis_name,
+        "nominal_ds": nominal_ds,
+        "nominal_capture": nominal_capture,
+        "search": search,
+        "span": span,
+        "positions": positions,
+        "covered": covered,
+        "coverage_runs": coverage_runs,
+        "peak": peak,
+        "profile": profile,
+        "profile_values": profile_values,
+    }
+
+
+def print_row_runs(pixels, width, height, mapping, data):
+    """The opt-in --row-runs report: hline/vline fill, coverage and profile."""
+    print("row-runs=on")
+    print("row-runs mapping_scale_x=%g mapping_scale_y=%g "
+          "mapping_offset_x=%g mapping_offset_y=%g"
+          % (mapping["scale_x"], mapping["scale_y"],
+             mapping["offset_x"], mapping["offset_y"]))
+    print("row-runs note=positions_and_lengths_measured; "
+          "*_ds_values_inferred_by_dividing_by_the_mapping_scale; "
+          "only_rows_or_columns_with_a_white_run_are_listed_individually; "
+          "the_full_neighbourhood_is_in_the_profile_line")
+    for item in data["quads"]:
+        if item["name"] not in ("hline", "vline"):
+            continue
+        probe = _probe_item(pixels, width, height, item, mapping)
+        print("row-runs item=%s axis=%s nominal_ds=%.4f "
+              "nominal_capture=%.4f search_capture=%d-%d "
+              "extent_capture=%d-%d"
+              % (probe["name"], probe["axis"], probe["nominal_ds"],
+                 probe["nominal_capture"], probe["search"][0],
+                 probe["search"][1], probe["span"][0], probe["span"][1]))
+        for entry in probe["positions"]:
+            if entry["start"] is None:
+                continue
+            print("row-runs item=%s capture_%s=%d ds=%.4f white_runs=%s "
+                  "run_start=%s run_length=%d run_start_ds=%s "
+                  "run_length_ds=%.4f peak_luminance=%.1f"
+                  % (probe["name"], probe["axis"], entry["index"],
+                     entry["ds"], format_runs(entry["runs"]),
+                     _cell(entry["start"]), entry["length"],
+                     "%.4f" % entry["start_ds"],
+                     entry["length_ds"], entry["peak"]))
+        print("row-runs item=%s %s_covered=%d %s_run=%s peak_luminance=%.1f"
+              % (probe["name"], probe["axis_name"], len(probe["covered"]),
+                 probe["axis"], format_runs(probe["coverage_runs"]),
+                 probe["peak"]))
+        print("row-runs item=%s profile_capture=%d-%d profile_luminance=%s"
+              % (probe["name"], probe["profile"][0], probe["profile"][1],
+                 ",".join("%.1f" % value
+                          for value in probe["profile_values"])))
+
+
 def usage():
     sys.stderr.write(
         "usage: measure_rows.py [--native] [--mapping M.json] "
+        "[--azahar-correction auto|on|off] [--row-runs] "
         "<frame.ppm|capture.png>\n")
 
 
@@ -314,12 +459,15 @@ def main(argv):
     native = False
     mapping_path = MAPPING_JSON
     correction = "auto"
+    row_runs = False
     positional = []
     args = list(argv[1:])
     while args:
         arg = args.pop(0)
         if arg == "--native":
             native = True
+        elif arg == "--row-runs":
+            row_runs = True
         elif arg == "--mapping":
             if not args:
                 sys.stderr.write("measure_rows: --mapping needs a path\n")
@@ -364,6 +512,8 @@ def main(argv):
                                           width, height))
             return 2
         print_native(analyse_native(pixels, width, height, data))
+        if row_runs:
+            print_row_runs(pixels, width, height, mapping, data)
         return 0
 
     try:
@@ -376,6 +526,8 @@ def main(argv):
         sys.stderr.write("measure_rows: %s\n" % exc)
         return 2
     print_capture(observations, levels, mapping, data)
+    if row_runs:
+        print_row_runs(pixels, width, height, mapping, data)
     return 0
 
 
