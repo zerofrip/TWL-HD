@@ -726,3 +726,5 @@ quantisation; the `(16,16,24)` clear colour; the alpha-0 outline). Tool and
 fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 
 **Update (2026-11-25):** EQ-4z: top-screen clear colour is now black `(0,0,0)`; see `docs/reports/eq4z-clear-black.md`.
+
+**Update (2026-11-26):** EQ-4za ran the black clear on hardware (one console, one capture session per frame, scene 4 static angle 30, arm11 3dsx from `main` `bd58fab`): background `(0,0,0)` exact, alpha-16 green 142 -> 138 (DS 134), alpha-4 blue 57 -> 41 (DS 33); see `docs/reports/eq4za-clear-black-hw-result.md`.

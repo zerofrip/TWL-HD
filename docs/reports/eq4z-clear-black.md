@@ -860,6 +860,8 @@ python3 tools/eq4_hw_compare.py --capture <capture>.png --reference <outdir>/hw_
 
 Expected: no-blend background `(0,0,0) 92966`, quads `255`/`255` unblended; blend green `135`, blue `40`, both `blended=yes`.  `off` is used because both references are hardware crops, which must not be corrected.
 
+Run on hardware, see eq4za: `docs/reports/eq4za-clear-black-hw-result.md`.
+
 ## 8. Extra runs
 
 Two builds have surviving renders.  The fixture's recorded full screenshot is from the earlier build at HEAD `39b30c23277315086173fd4cf3f7dc8b89584e70` (dirty worktree, build ID `39b30c2-diag`, 3dsx sha256 `4478db80…`, full screenshot `7c93689d…`; `tools/fixtures/eq3/README.md`).  Every §5 render and the §7 console PLAN use the later build at HEAD `3cd3bb0` (build ID `3cd3bb0-diag`, 3dsx sha256 `17eface3…`, full screenshot `e3730b86…`).  The committed crop `32d583f3…` is byte-identical from both full screenshots, so the fixture does not depend on which build supplied it.  Evidence (read-only):
