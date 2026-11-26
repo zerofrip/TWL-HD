@@ -446,6 +446,8 @@ Proposal, not applied — `LIT` switch (F13 shape):
   does not scissor, so geometry outside it can bleed (design note
   `docs/PHASE5A_V2_RENDERER_DESIGN.md:48-49`).
 
+**Result (EQ-4zg):** the partial-viewport hardware/DeSmuME/our-render comparison is in `docs/reports/eq4zg-partial-viewport.md`.
+
 ### 4. DS-mode texture formats
 
 * **ROM variant:** new `TEXFMT=1` switch (text-only diff: Makefile block plus an
