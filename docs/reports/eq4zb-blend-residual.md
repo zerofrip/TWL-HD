@@ -434,6 +434,8 @@ exit=0
   change: 1, 4, 8, 12, 15, 16, 20, 24, 26, 28, 31 — measured with
   `python3 tools/eq4w_blend_hw/measure_blend_hw.py <capture>`. Not produced now.
 
+**Update (2026-11-26):** EQ-4zc produced this frame set offline (`tools/eq4zc_alpha_sweep/`) and its Azahar verification; the hardware run remains for the owner — see `docs/reports/eq4zc-alpha-sweep.md`.
+
 ## 7. Unknowns and UNVERIFIED
 
 - PICA's float->8-bit alpha conversion and blend-unit rounding appear in no
