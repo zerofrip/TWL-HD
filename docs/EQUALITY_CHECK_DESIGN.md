@@ -898,3 +898,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 
 **Update (2026-11-26):** EQ-4zc built the arm11 alpha-sweep frames/measurer and ran the Azahar verification (offline only; no console); see `docs/reports/eq4zc-alpha-sweep.md`.
 **Update (2026-11-26):** EQ-4zd recorded the real-hardware run of the EQ-4zc sweep (one console, one capture session per frame, arm11 3dsx from `main` `dfaf611`) and analysed it against the DS convention and the EQ-4zb model; fixtures/tests `tools/eq4zd_sweep_hw/`, report `docs/reports/eq4zd-alpha-sweep-hw-result.md`.
+
+**Update (2026-11-26):** EQ-4ze surveyed GX/GPU feature coverage and ranked the next hardware experiments (offline; no console, no code change); report: `docs/reports/eq4ze-hw-coverage.md`.
