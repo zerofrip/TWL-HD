@@ -731,3 +731,4 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 **Update (2026-11-26):** EQ-4zb modelled the residual blend gap offline (no production code change): no source-derived candidate reproduces the console green 138 / blue 41 (best 135/40); see `docs/reports/eq4zb-blend-residual.md`.
 
 **Update (2026-11-26):** EQ-4zc built the arm11 alpha-sweep frames/measurer and ran the Azahar verification (offline only; no console); see `docs/reports/eq4zc-alpha-sweep.md`.
+**Update (2026-11-26):** EQ-4zd recorded the real-hardware alpha sweep (one console, one capture session per frame, arm11 3dsx from `main` `dfaf611`): hardware green/blue series pinned in `tools/eq4zd_sweep_hw/`; see `docs/reports/eq4zd-alpha-sweep-hw-result.md`.

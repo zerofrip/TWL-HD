@@ -1,4 +1,4 @@
-.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-arm9v2-blend test-eq4-hw-compare test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows host-test clean arm11-diag test-eq4za-clear-hw test-eq4zc-alpha-sweep \
+.PHONY: all arm7 arm9 arm9v2 arm11 arm11_ucode rtcom_rom test test-eq2 test-eq3 test-eq-scenes test-arm9v2-static test-arm9v2-blend test-eq4-hw-compare test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows host-test clean arm11-diag test-eq4za-clear-hw test-eq4zc-alpha-sweep test-eq4zd-sweep-hw \
 	emu-expected emu-validate emu-validate-tex azahar-host ntr-capture ntr-input
 
 all: arm7 arm9 arm9v2 arm11 arm11_ucode
@@ -706,6 +706,12 @@ test-eq4zb-blend-model:
 test-eq4zc-alpha-sweep:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4zc_alpha_sweep -p 'test_*.py'
 
+# EQ-4zd real-hardware alpha-sweep crops (tools/eq4zd_sweep_hw/). Discovered
+# explicitly: the aggregate pass below does not descend into
+# tools/eq4zd_sweep_hw (no __init__.py).
+test-eq4zd-sweep-hw:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4zd_sweep_hw -p 'test_*.py'
+
 # EQ-4p presentation-row correction module (tools/azahar_presentation.py). Run
 # explicitly; the discover pass in `test` sets AZAHAR_PRESENTATION_DISCOVER_SKIP
 # so it is not executed twice.
@@ -719,7 +725,7 @@ test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test \
 	test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows \
 	test-eq4w-blend-hw test-eq4y-gate-hw test-eq4za-clear-hw \
-	test-eq4zb-blend-model test-eq4zc-alpha-sweep test-azahar-presentation
+	test-eq4zb-blend-model test-eq4zc-alpha-sweep test-eq4zd-sweep-hw test-azahar-presentation
 	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 \
 	ARM9V2_STATIC_DISCOVER_SKIP=1 ARM9V2_BLEND_DISCOVER_SKIP=1 EQ4_HW_COMPARE_DISCOVER_SKIP=1 \
 	FIT_MAPPING_DISCOVER_SKIP=1 AZAHAR_PRESENTATION_DISCOVER_SKIP=1 \

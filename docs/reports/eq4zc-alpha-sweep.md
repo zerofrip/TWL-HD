@@ -405,6 +405,7 @@ python3 tools/eq4zc_alpha_sweep/measure_sweep.py \
   --mapping arm11 --azahar-correction off <staging>/capture_green.png
 ```
 **Expected numbers (EMULATOR run, §4).** If hardware matches the emulator: green/blue `1=16, 4=40, 8=72, 12=104, 15=128, 16=135, 20=167, 24=199, 26=215, 28=231, 31=255`, every quad except alpha 31 `blended`. If it matches the DS convention, expect the §5 columns; the measurer chooses neither.
+**Run on hardware, see EQ-4zd:** `docs/reports/eq4zd-alpha-sweep-hw-result.md`.
 ## 7. Fixtures, pointers, tests and size
 
 **FACT — fixtures** (`tools/eq4zc_alpha_sweep/fixtures/`; hashes also in `fixtures/README.md`; hash listing 2 runs, identical output; byte sizes last, each file well under 100 KB).
