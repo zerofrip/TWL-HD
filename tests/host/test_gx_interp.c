@@ -5480,6 +5480,189 @@ static void test_tex_mode3_partial_vtx_raw(void) {
 /* Main                                                                      */
 /* ------------------------------------------------------------------------- */
 
+/* ------------------------------------------------------------------------- */
+/* Culling (TWLHD_GX_OPT_CULL), POLYGON_ATTR bits 6-7                         */
+/* ------------------------------------------------------------------------- */
+
+static void run_view_opts(uint32_t entry_count, uint32_t flags) {
+    TwlhdV2View view;
+    build_view(entry_count, &view);
+    CHECK_EQ_INT(twlhd_gx_interpret_opts(&view, g_out, 256u, &g_out_count,
+                                         &g_vp, &g_st, NULL, flags),
+                 TWLHD_GX_OK);
+}
+
+/* One polygon group: attr value (bits 6-7 only), begin mode, vertex list. */
+static uint32_t add_cull_group(uint32_t *n, int with_attr, uint32_t bits,
+                               uint32_t begin_mode, const int32_t (*v)[2],
+                               uint32_t count) {
+    uint32_t i;
+
+    if (with_attr) {
+        add_entry(n, TWLHD_V2_CMD_POLYGON_ATTR, (31u << 16) | (bits << 6));
+    }
+    add_entry(n, TWLHD_V2_CMD_BEGIN_VTXS, begin_mode);
+    for (i = 0; i < count; i++) add_vtx_16(n, v[i][0], v[i][1], 0);
+    add_entry(n, TWLHD_V2_CMD_END_VTXS, 0u);
+    return *n;
+}
+
+static const int32_t CULL_CCW[3][2] = {{0, 0}, {0x1000, 0}, {0, 0x1000}};
+static const int32_t CULL_CW[3][2] = {{0, 0}, {0, 0x1000}, {0x1000, 0}};
+
+static void test_cull_triangle_modes(void) {
+    /* expected vertices out for (front CCW, back CW) per attr value 0..3:
+     * 0 neither, 1 back only, 2 front only, 3 both (hardware, EQ-4zn). */
+    static const uint32_t front_out[4] = {0u, 0u, 3u, 3u};
+    static const uint32_t back_out[4] = {0u, 3u, 0u, 3u};
+    uint32_t bits;
+
+    for (bits = 0u; bits < 4u; bits++) {
+        uint32_t n = 0u;
+
+        clear_state();
+        add_cull_group(&n, 1, bits, 0u, CULL_CCW, 3u);
+        add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+        run_view_opts(n, TWLHD_GX_OPT_CULL);
+        CHECK_EQ_INT(g_out_count, front_out[bits]);
+        CHECK_EQ_INT(g_st.culled_polygons, front_out[bits] ? 0u : 1u);
+
+        n = 0u;
+        clear_state();
+        add_cull_group(&n, 1, bits, 0u, CULL_CW, 3u);
+        add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+        run_view_opts(n, TWLHD_GX_OPT_CULL);
+        CHECK_EQ_INT(g_out_count, back_out[bits]);
+        CHECK_EQ_INT(g_st.culled_polygons, back_out[bits] ? 0u : 1u);
+        CHECK_EQ_INT(g_st.cull_undecided, 0u);
+    }
+}
+
+static void test_cull_off_by_default(void) {
+    uint32_t bits;
+
+    for (bits = 0u; bits < 4u; bits++) {
+        uint32_t n = 0u;
+
+        clear_state();
+        add_cull_group(&n, 1, bits, 0u, CULL_CW, 3u);
+        add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+        run_view_opts(n, 0u);
+        CHECK_EQ_INT(g_out_count, 3u);
+        CHECK_EQ_INT(g_st.culled_polygons, 0u);
+    }
+}
+
+static void test_cull_without_polygon_attr_draws(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_cull_group(&n, 0, 0u, 0u, CULL_CW, 3u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.culled_polygons, 0u);
+}
+
+static void test_cull_quad_list(void) {
+    /* CCW quad (front): vertex order 0,1,2,3 counter-clockwise. */
+    static const int32_t quad[4][2] = {{0, 0}, {0x1000, 0}, {0x1000, 0x1000},
+                                       {0, 0x1000}};
+    uint32_t n = 0u;
+
+    clear_state();
+    add_cull_group(&n, 1, 2u, 1u, quad, 4u);   /* front only */
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.quads_split, 1u);
+    CHECK_EQ_INT(g_st.culled_polygons, 0u);
+
+    n = 0u;
+    clear_state();
+    add_cull_group(&n, 1, 1u, 1u, quad, 4u);   /* back only: culled */
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 0u);
+    CHECK_EQ_INT(g_st.quads_split, 0u);
+    CHECK_EQ_INT(g_st.culled_polygons, 1u);
+}
+
+static void test_cull_triangle_strip_alternation(void) {
+    /* Strip of two counter-clockwise triangles; the interpreter swaps the
+     * order of odd strip triangles, so both must stay front faces. */
+    static const int32_t strip[4][2] = {{0, 0}, {0x1000, 0}, {0, 0x1000},
+                                        {0x1000, 0x1000}};
+    uint32_t n = 0u;
+
+    clear_state();
+    add_cull_group(&n, 1, 2u, 2u, strip, 4u);   /* front only */
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 6u);
+    CHECK_EQ_INT(g_st.culled_polygons, 0u);
+
+    n = 0u;
+    clear_state();
+    add_cull_group(&n, 1, 1u, 2u, strip, 4u);   /* back only */
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 0u);
+    CHECK_EQ_INT(g_st.culled_polygons, 2u);
+}
+
+static void test_cull_quad_strip(void) {
+    /* Quad strip vertices 0,1,2,3: polygon order is 0,1,3,2. */
+    static const int32_t strip[4][2] = {{0, 0}, {0, 0x1000}, {0x1000, 0},
+                                        {0x1000, 0x1000}};
+    uint32_t n = 0u;
+
+    clear_state();
+    /* order (0,1,3): (0,0) (0,0x1000) (0x1000,0x1000) is clockwise: back. */
+    add_cull_group(&n, 1, 1u, 3u, strip, 4u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 6u);
+
+    n = 0u;
+    clear_state();
+    add_cull_group(&n, 1, 2u, 3u, strip, 4u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 0u);
+    CHECK_EQ_INT(g_st.culled_polygons, 1u);
+}
+
+static void test_cull_non_positive_w_is_drawn(void) {
+    uint32_t m[16];
+    uint32_t n = 0u;
+    uint32_t i;
+
+    for (i = 0; i < 16u; i++) m[i] = 0u;
+    m[0] = m[5] = m[10] = 4096u;
+    m[15] = (uint32_t)(int32_t)-4096;           /* w = -1 */
+    clear_state();
+    add_load_4x4(&n, m);
+    add_cull_group(&n, 1, 2u, 0u, CULL_CW, 3u); /* would be culled if w > 0 */
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.cull_undecided, 1u);
+    CHECK_EQ_INT(g_st.culled_polygons, 0u);
+}
+
+static void test_cull_degenerate_polygon_is_drawn(void) {
+    static const int32_t line[3][2] = {{0, 0}, {0x1000, 0}, {0x2000, 0}};
+    uint32_t n = 0u;
+
+    clear_state();
+    add_cull_group(&n, 1, 1u, 0u, line, 3u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    run_view_opts(n, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_EQ_INT(g_st.culled_polygons, 0u);
+}
+
 int main(void) {
     test_matrix_load_identity();
     test_report("gx_interp/matrix-load-identity");
@@ -5770,5 +5953,21 @@ int main(void) {
     test_report("gx_interp/tex-mode2-base-shift-lsb");
     test_tex_mode3_partial_vtx_raw();
     test_report("gx_interp/tex-mode3-partial-vtx-raw");
+    test_cull_triangle_modes();
+    test_report("gx_interp/cull-triangle-modes");
+    test_cull_off_by_default();
+    test_report("gx_interp/cull-off-by-default");
+    test_cull_without_polygon_attr_draws();
+    test_report("gx_interp/cull-without-polygon-attr-draws");
+    test_cull_quad_list();
+    test_report("gx_interp/cull-quad-list");
+    test_cull_triangle_strip_alternation();
+    test_report("gx_interp/cull-triangle-strip-alternation");
+    test_cull_quad_strip();
+    test_report("gx_interp/cull-quad-strip");
+    test_cull_non_positive_w_is_drawn();
+    test_report("gx_interp/cull-non-positive-w-is-drawn");
+    test_cull_degenerate_polygon_is_drawn();
+    test_report("gx_interp/cull-degenerate-polygon-is-drawn");
     return test_exit_code();
 }

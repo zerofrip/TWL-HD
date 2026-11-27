@@ -750,3 +750,5 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 - EQ-4zl/4zm/4zn: texture-behaviour, Gouraud and culling probe ROMs (TEXBEH/GRAD/CULL=1); results in docs/reports/eq4zl-zm-zn-probes-hw-result.md.
 
 - EQ-4zo: decision document on the rendering differences found by the hardware comparisons: docs/reports/eq4zo-render-differences.md.
+
+- EQ-4zp: opt-in culling in the host interpreter: docs/reports/eq4zp-cull-interpreter.md.

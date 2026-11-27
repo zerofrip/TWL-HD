@@ -916,3 +916,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 - EQ-4zl/4zm/4zn: texture-behaviour, Gouraud and culling hardware results: docs/reports/eq4zl-zm-zn-probes-hw-result.md.
 
 - EQ-4zo: rendering differences and recommendations: docs/reports/eq4zo-render-differences.md.
+
+- EQ-4zp: culling in the host interpreter (opt-in, arm11 unchanged): docs/reports/eq4zp-cull-interpreter.md.

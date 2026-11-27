@@ -57,6 +57,10 @@ typedef struct {
                                          (outline-only drawing NOT implemented). */
     uint32_t tex_transform_unsupported; /* always 0: modes 2/3 are implemented
                                            (kept for CLI/output compatibility). */
+    uint32_t culled_polygons;     /* polygons dropped by the POLYGON_ATTR
+                                     culling rule (TWLHD_GX_OPT_CULL only). */
+    uint32_t cull_undecided;      /* polygons with w <= 0 on some vertex whose
+                                     facing was not decided (drawn). */
 } TwlhdGxStats;
 
 typedef enum {
@@ -103,6 +107,30 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
                                     TwlhdGxViewport *viewport,
                                     TwlhdGxStats *stats,
                                     TwlhdGxTexVertex *tex_out);
+
+/* Option flags for twlhd_gx_interpret_opts(). */
+#define TWLHD_GX_OPT_CULL 0x1u
+
+/*
+ * Same as twlhd_gx_interpret_ex(), with option flags.
+ *
+ * TWLHD_GX_OPT_CULL: apply the POLYGON_ATTR bits 6-7 culling rule measured on
+ *   real DS hardware (docs/reports/eq4zl-zm-zn-probes-hw-result.md section 4):
+ *   counter-clockwise on screen is the front face; value 3 draws both faces,
+ *   value 2 only the front, value 1 only the back, value 0 neither. The facing
+ *   is decided from the first three vertices of a polygon in the order
+ *   BEGIN_VTXS assembles them, after the projection divide; polygons with a
+ *   vertex at w <= 0 are drawn (not measured) and counted in cull_undecided.
+ *   Without the flag every polygon is emitted as before.
+ */
+TwlhdGxResult twlhd_gx_interpret_opts(const TwlhdV2View *view,
+                                      TwlhdGxVertex *out,
+                                      uint32_t out_capacity_vertices,
+                                      uint32_t *out_vertex_count,
+                                      TwlhdGxViewport *viewport,
+                                      TwlhdGxStats *stats,
+                                      TwlhdGxTexVertex *tex_out,
+                                      uint32_t flags);
 
 const char *twlhd_gx_result_string(TwlhdGxResult result);
 

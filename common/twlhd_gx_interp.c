@@ -104,6 +104,9 @@ typedef struct {
     uint32_t shininess_index; /* pending byte index (DeSmuME word counter*4). */
     uint32_t pending_light_mask; /* POLYGON_ATTR bits 0-3. */
     uint32_t applied_light_mask; /* copied from pending at BEGIN_VTXS. */
+    uint32_t pending_cull;  /* POLYGON_ATTR bits 6-7, default 3 (both faces). */
+    uint32_t applied_cull;  /* copied from pending at BEGIN_VTXS. */
+    int cull_enable;        /* TWLHD_GX_OPT_CULL. */
 
     /* Primitive assembly state. */
     int in_begin;
@@ -574,6 +577,45 @@ static void transform_vertex(GxInterp *g, float x, float y, float z,
     out->rgba[3] = g->rgba[3];
 }
 
+/*
+ * Culling decision for one polygon, from its first three vertices (a, b, c in
+ * assembly order). Returns non-zero when the polygon is dropped. Counter-
+ * clockwise in DS clip space after the divide (y up) is the front face, as
+ * measured on hardware (EQ-4zn). Mode 1 renders only back faces, mode 2 only
+ * front faces, mode 3 both, mode 0 none. A degenerate polygon (zero area) and
+ * one with a vertex at w <= 0 are drawn.
+ */
+static int cull_polygon(GxInterp *g, const TwlhdGxVertex *a,
+                        const TwlhdGxVertex *b, const TwlhdGxVertex *c) {
+    double ax, ay, bx, by, cx, cy, area;
+    uint32_t mode;
+
+    if (!g->cull_enable) return 0;
+    mode = g->applied_cull;
+    if (mode == 3u) return 0;
+    if (mode == 0u) {
+        g->stats->culled_polygons++;
+        return 1;
+    }
+    if (!(a->clip[3] > 0.0f && b->clip[3] > 0.0f && c->clip[3] > 0.0f)) {
+        g->stats->cull_undecided++;
+        return 0;
+    }
+    ax = (double)a->clip[0] / (double)a->clip[3];
+    ay = (double)a->clip[1] / (double)a->clip[3];
+    bx = (double)b->clip[0] / (double)b->clip[3];
+    by = (double)b->clip[1] / (double)b->clip[3];
+    cx = (double)c->clip[0] / (double)c->clip[3];
+    cy = (double)c->clip[1] / (double)c->clip[3];
+    area = (bx - ax) * (cy - ay) - (cx - ax) * (by - ay);
+    if (area == 0.0) return 0;
+    if ((mode == 1u && area > 0.0) || (mode == 2u && area < 0.0)) {
+        g->stats->culled_polygons++;
+        return 1;
+    }
+    return 0;
+}
+
 static int emit_triangle(GxInterp *g, const TwlhdGxVertex *a,
                          const TwlhdGxVertex *b, const TwlhdGxVertex *c,
                          const TwlhdGxTexVertex *ta,
@@ -633,7 +675,9 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
         g->prim_tex_buf[g->prim_count] = *tv;
         g->prim_count++;
         if (g->prim_count == 3u) {
-            if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
+            if (!cull_polygon(g, &g->prim_buf[0], &g->prim_buf[1],
+                              &g->prim_buf[2]) &&
+                !emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
                                &g->prim_buf[2], &g->prim_tex_buf[0],
                                &g->prim_tex_buf[1], &g->prim_tex_buf[2]))
                 return 0;
@@ -648,6 +692,12 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
         g->prim_tex_buf[g->prim_count] = *tv;
         g->prim_count++;
         if (g->prim_count == 4u) {
+            if (cull_polygon(g, &g->prim_buf[0], &g->prim_buf[1],
+                             &g->prim_buf[2])) {
+                g->prim_emitted = 1;
+                g->prim_count = 0u;
+                return 1;
+            }
             if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
                                &g->prim_buf[2], &g->prim_tex_buf[0],
                                &g->prim_tex_buf[1], &g->prim_tex_buf[2]))
@@ -669,12 +719,16 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
         g->prim_count++;
         if (g->prim_count == 3u) {
             if ((g->prim_tri_index & 1u) == 0u) {
-                if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
+                if (!cull_polygon(g, &g->prim_buf[0], &g->prim_buf[1],
+                                  &g->prim_buf[2]) &&
+                    !emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
                                    &g->prim_buf[2], &g->prim_tex_buf[0],
                                    &g->prim_tex_buf[1], &g->prim_tex_buf[2]))
                     return 0;
             } else {
-                if (!emit_triangle(g, &g->prim_buf[1], &g->prim_buf[0],
+                if (!cull_polygon(g, &g->prim_buf[1], &g->prim_buf[0],
+                                  &g->prim_buf[2]) &&
+                    !emit_triangle(g, &g->prim_buf[1], &g->prim_buf[0],
                                    &g->prim_buf[2], &g->prim_tex_buf[1],
                                    &g->prim_tex_buf[0], &g->prim_tex_buf[2]))
                     return 0;
@@ -696,15 +750,18 @@ static int add_primitive_vertex(GxInterp *g, const TwlhdGxVertex *v,
         g->prim_tex_buf[g->prim_count] = *tv;
         g->prim_count++;
         if (g->prim_count == 4u) {
-            if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
-                               &g->prim_buf[3], &g->prim_tex_buf[0],
-                               &g->prim_tex_buf[1], &g->prim_tex_buf[3]))
-                return 0;
-            if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[3],
-                               &g->prim_buf[2], &g->prim_tex_buf[0],
-                               &g->prim_tex_buf[3], &g->prim_tex_buf[2]))
-                return 0;
-            g->stats->quads_split++;
+            if (!cull_polygon(g, &g->prim_buf[0], &g->prim_buf[1],
+                              &g->prim_buf[3])) {
+                if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[1],
+                                   &g->prim_buf[3], &g->prim_tex_buf[0],
+                                   &g->prim_tex_buf[1], &g->prim_tex_buf[3]))
+                    return 0;
+                if (!emit_triangle(g, &g->prim_buf[0], &g->prim_buf[3],
+                                   &g->prim_buf[2], &g->prim_tex_buf[0],
+                                   &g->prim_tex_buf[3], &g->prim_tex_buf[2]))
+                    return 0;
+                g->stats->quads_split++;
+            }
             g->prim_emitted = 1;
             /* Roll the buffer: keep the last two vertices. */
             g->prim_buf[0] = g->prim_buf[2];
@@ -930,6 +987,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
          * bits 0..3. */
         g->pending_alpha = (params[0] >> 16) & 0x1Fu;
         g->pending_light_mask = params[0] & 0xFu;
+        g->pending_cull = (params[0] >> 6) & 0x3u;
         break;
 
     case TWLHD_V2_CMD_NORMAL:
@@ -1081,6 +1139,7 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
          * group (DeSmuME gfx3d.cpp:2727-2729). */
         g->applied_alpha = g->pending_alpha;
         g->applied_light_mask = g->pending_light_mask;
+        g->applied_cull = g->pending_cull;
         g->rgba[3] = gx_alpha_float(g->applied_alpha);
         if (g->applied_alpha == 0u) {
             g->stats->alpha_wireframe_polys++;
@@ -1131,6 +1190,19 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
                                     TwlhdGxViewport *viewport,
                                     TwlhdGxStats *stats,
                                     TwlhdGxTexVertex *tex_out) {
+    return twlhd_gx_interpret_opts(view, out, out_capacity_vertices,
+                                   out_vertex_count, viewport, stats, tex_out,
+                                   0u);
+}
+
+TwlhdGxResult twlhd_gx_interpret_opts(const TwlhdV2View *view,
+                                      TwlhdGxVertex *out,
+                                      uint32_t out_capacity_vertices,
+                                      uint32_t *out_vertex_count,
+                                      TwlhdGxViewport *viewport,
+                                      TwlhdGxStats *stats,
+                                      TwlhdGxTexVertex *tex_out,
+                                      uint32_t flags) {
     GxInterp g;
     uint32_t i = 0u;
     TwlhdGxResult result = TWLHD_GX_OK;
@@ -1165,6 +1237,9 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
     g.rgba[0] = g.rgba[1] = g.rgba[2] = 1.0f;
     g.pending_alpha = 31u; /* no-attr default: opaque. */
     g.applied_alpha = 31u;
+    g.pending_cull = 3u;   /* no-attr default: both faces (not measured). */
+    g.applied_cull = 3u;
+    g.cull_enable = (flags & TWLHD_GX_OPT_CULL) != 0u;
     g.rgba[3] = gx_alpha_float(g.applied_alpha);
 
     g.proj_stack.capacity = PROJ_STACK_CAP;

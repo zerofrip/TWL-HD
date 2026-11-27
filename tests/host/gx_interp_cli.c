@@ -42,11 +42,14 @@ int main(int argc, char **argv) {
     uint32_t i;
     int want_tex = 0;
     int want_eq2 = 0;
+    int want_cull = 0;
     const char *path = NULL;
 
     for (i = 1u; i < (uint32_t)argc; i++) {
         if (strcmp(argv[i], "--tex") == 0) {
             want_tex = 1;
+        } else if (strcmp(argv[i], "--cull") == 0) {
+            want_cull = 1;
         } else if (strcmp(argv[i], "--eq2") == 0) {
             want_eq2 = 1;
             want_tex = 1; /* the eq2 format always carries tex state */
@@ -58,7 +61,7 @@ int main(int argc, char **argv) {
         }
     }
     if (!path) {
-        fprintf(stderr, "usage: %s [--tex|--eq2] <frame_v2.bin>\n", argv[0]);
+        fprintf(stderr, "usage: %s [--tex|--eq2] [--cull] <frame_v2.bin>\n", argv[0]);
         return 2;
     }
 
@@ -124,8 +127,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    gr = twlhd_gx_interpret_ex(&view, out, capacity, &out_count, &viewport,
-                               &stats, tex_out);
+    gr = twlhd_gx_interpret_opts(&view, out, capacity, &out_count, &viewport,
+                                 &stats, tex_out,
+                                 want_cull ? TWLHD_GX_OPT_CULL : 0u);
 
     if (want_eq2) {
         printf("twlhd-eq2-clip 1\n");
@@ -189,6 +193,11 @@ print_stats:
     if (tex_out) {
         printf(" tex_transform_unsupported=%lu",
                (unsigned long)stats.tex_transform_unsupported);
+    }
+    if (want_cull) {
+        printf(" culled_polygons=%lu cull_undecided=%lu",
+               (unsigned long)stats.culled_polygons,
+               (unsigned long)stats.cull_undecided);
     }
     printf("\n");
 
