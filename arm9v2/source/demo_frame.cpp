@@ -444,6 +444,53 @@ static void draw_lit_c(void) {
     lit_material(RGB15(28, 28, 28), RGB15(8, 8, 8), 0, 0);
     draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_75, lit_quads[3]);
 }
+
+/* lit_d: specular and two-light rounding probe (gen_lit_frames.py
+ * lit_d_entries): two lights in one direction, colours 31 and 20. */
+static void draw_lit_d(void) {
+    int i;
+
+    glLight(0, RGB15(31, 31, 31),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+    glLight(1, RGB15(20, 20, 20),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+    for (i = 0; i < 32; i++) {
+        GFX_SHININESS = LIT_SHININESS[i];
+    }
+
+    lit_material(0, RGB15(1, 1, 1), RGB15(1, 1, 1) | BIT(15), 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0 | POLY_FORMAT_LIGHT1,
+                  LIT_NORMAL_FACING, lit_quads[0]);
+
+    lit_material(0, RGB15(1, 1, 1), RGB15(1, 1, 1) | BIT(15), 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[1]);
+
+    lit_material(RGB15(8, 8, 8), 0, RGB15(4, 4, 4) | BIT(15), 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0 | POLY_FORMAT_LIGHT1,
+                  LIT_NORMAL_FACING, lit_quads[2]);
+
+    lit_material(RGB15(8, 8, 8), 0, RGB15(4, 4, 4) | BIT(15), 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[3]);
+}
+
+/* lit_e: specular shininess probe (gen_lit_frames.py lit_e_entries). */
+static void draw_lit_e(void) {
+    static const uint8_t spec[4] = {23, 25, 26, 20};
+    static const uint8_t light[4] = {23, 25, 29, 31};
+    int i;
+
+    for (i = 0; i < 32; i++) {
+        GFX_SHININESS = LIT_SHININESS[i];
+    }
+    lit_material(0, 0, 0, 0);
+    for (i = 0; i < 4; i++) {
+        glLight(0, RGB15(light[i], light[i], light[i]),
+                LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+        lit_material(0, 0, RGB15(spec[i], spec[i], spec[i]) | BIT(15), 0);
+        draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING,
+                      lit_quads[i]);
+    }
+}
 #endif
 
 #ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
@@ -502,8 +549,12 @@ void twlhd_demo_draw_frame(unsigned angle) {
     draw_lit_a();
 #elif TWLHD_DEMO_LIT == 2
     draw_lit_b();
-#else
+#elif TWLHD_DEMO_LIT == 3
     draw_lit_c();
+#elif TWLHD_DEMO_LIT == 4
+    draw_lit_d();
+#else
+    draw_lit_e();
 #endif
 
     glFlush(0);

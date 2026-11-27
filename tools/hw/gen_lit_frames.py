@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generate the deterministic v2 frames for the Phase 5B-1 lighting test.
 
-Four frames are written into the output directory:
+Six frames are written into the output directory:
 
   twlhd_frame_v2_lit_a.bin   four flat quads, one white directional light,
                              four different normals (incidence-angle sweep)
@@ -11,6 +11,8 @@ Four frames are written into the output directory:
                              and two lights
   twlhd_frame_v2_lit_ctl.bin the same four quads with flat COLOR only
   twlhd_frame_v2_lit_c.bin   diffuse+ambient rounding probe (four materials)
+  twlhd_frame_v2_lit_d.bin   specular and two-light rounding probe
+  twlhd_frame_v2_lit_e.bin   specular shininess probe
 
 BUILD/UNIT tooling only.  Stdlib only.  Nothing here contacts a console or a
 network address.  The frame layout follows the scene4_alpha 2x2 quad grid
@@ -50,6 +52,8 @@ FRAME_NAMES = (
     "twlhd_frame_v2_lit_b.bin",
     "twlhd_frame_v2_lit_ctl.bin",
     "twlhd_frame_v2_lit_c.bin",
+    "twlhd_frame_v2_lit_d.bin",
+    "twlhd_frame_v2_lit_e.bin",
 )
 
 # scene4_alpha 2x2 grid (tests/host/test_demo_frame.cpp:925-930) scaled by
@@ -202,6 +206,55 @@ def lit_c_entries():
     return out
 
 
+def lit_d_entries():
+    """Specular and multi-light rounding probe (EQ-4zi follow-up 2).
+
+    Two lights share one direction (colours 31 and 20), the shininess table
+    is the 1,3,...,255 ramp and the normal faces the light, so the specular
+    term is a fixed table entry.  The quads are chosen so that the candidate
+    rounding rules (per-term floor, per-light floor of the sum, floor of the
+    sum over all lights, ...) give different 5-bit results.
+    """
+    out = [
+        (CMD_LIGHT_VECTOR, _vector_word(0, 0, LIGHT_Z)),
+        (CMD_LIGHT_COLOR, _rgb555(31, 31, 31)),
+        (CMD_LIGHT_VECTOR, _vector_word(0, 0, LIGHT_Z, index=1)),
+        (CMD_LIGHT_COLOR, _rgb555(20, 20, 20) | (1 << 30)),
+    ]
+    for word in _shininess_words():
+        out.append((CMD_SHININESS, word))
+    # (diffuse, ambient, specular, light mask)
+    probes = ((0, 1, 1, 0x3), (0, 1, 1, 0x1), (8, 0, 4, 0x3), (8, 0, 4, 0x1))
+    for corners, (diff, amb, spec, mask) in zip(QUADS, probes):
+        out.append((CMD_DIF_AMB,
+                    _dif_amb(_rgb555(diff, diff, diff),
+                             _rgb555(amb, amb, amb))))
+        out.append((CMD_SPE_EMI, _rgb555(spec, spec, spec) | 0x8000))
+        _quad(out, 31, mask, NORMAL_FACING, corners)
+    return out
+
+
+# lit_e probes: (specular level, light level).  The specular-only term is
+# floor(S * L * shininess / 2^17); each product S*L puts one level boundary at
+# a different shininess value (3964.4, 3984.6, 3998.2, 4016.7), so the four
+# measured levels bracket the shininess the hardware applies to a normal that
+# faces the light.
+LIT_E_PROBES = ((23, 23), (25, 25), (26, 29), (20, 31))
+
+
+def lit_e_entries():
+    """Specular shininess probe (EQ-4zi follow-up 2)."""
+    out = [(CMD_LIGHT_VECTOR, _vector_word(0, 0, LIGHT_Z))]
+    for word in _shininess_words():
+        out.append((CMD_SHININESS, word))
+    out.append((CMD_DIF_AMB, 0))
+    for corners, (spec, light) in zip(QUADS, LIT_E_PROBES):
+        out.append((CMD_LIGHT_COLOR, _rgb555(light, light, light)))
+        out.append((CMD_SPE_EMI, _rgb555(spec, spec, spec) | 0x8000))
+        _quad(out, 31, 0x1, NORMAL_FACING, corners)
+    return out
+
+
 def lit_ctl_entries():
     colours = (_rgb555(31, 0, 0), _rgb555(0, 31, 0),
                _rgb555(0, 0, 31), _rgb555(31, 31, 0))
@@ -216,6 +269,8 @@ _BUILDERS = {
     FRAME_NAMES[1]: lit_b_entries,
     FRAME_NAMES[2]: lit_ctl_entries,
     FRAME_NAMES[3]: lit_c_entries,
+    FRAME_NAMES[4]: lit_d_entries,
+    FRAME_NAMES[5]: lit_e_entries,
 }
 
 

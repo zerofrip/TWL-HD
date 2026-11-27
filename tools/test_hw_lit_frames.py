@@ -130,6 +130,26 @@ class LitFramesTest(unittest.TestCase):
         self.assertEqual(counts.get(0x40), 4)
         self.assertEqual(counts.get(0x41), 4)
 
+    def test_lit_d_command_mix(self):
+        view = v2.parse(self.read(self.first, gen.FRAME_NAMES[4]))
+        counts = self.counts(view)
+        self.assertEqual(counts.get(0x30), 4)   # DIF_AMB, one per quad
+        self.assertEqual(counts.get(0x31), 4)   # SPE_EMI, one per quad
+        self.assertEqual(counts.get(0x32), 2)   # two light vectors
+        self.assertEqual(counts.get(0x33), 2)   # two light colours
+        self.assertEqual(counts.get(0x34), 32)  # shininess table
+        self.assertEqual(counts.get(0x21), 4)
+        self.assertEqual(counts.get(0x29), 4)
+
+    def test_lit_e_command_mix(self):
+        view = v2.parse(self.read(self.first, gen.FRAME_NAMES[5]))
+        counts = self.counts(view)
+        self.assertEqual(counts.get(0x31), 4)   # SPE_EMI, one per quad
+        self.assertEqual(counts.get(0x33), 4)   # LIGHT_COLOR, one per quad
+        self.assertEqual(counts.get(0x34), 32)  # shininess table
+        self.assertEqual(counts.get(0x21), 4)
+        self.assertEqual(counts.get(0x29), 4)
+
     def test_lit_ctl_is_unlit(self):
         view = v2.parse(self.read(self.first, gen.FRAME_NAMES[2]))
         counts = self.counts(view)

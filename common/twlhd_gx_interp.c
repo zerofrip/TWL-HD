@@ -467,6 +467,7 @@ static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
     int32_t ambient[3];
     int32_t specular[3];
     int64_t vc[3];
+    int64_t acc[3] = {0, 0, 0};
     uint32_t i;
     uint32_t c;
 
@@ -521,18 +522,21 @@ static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
         }
 
         for (c = 0; c < 3u; c++) {
-            int64_t spec = ((int64_t)specular[c] * light[c] * shininess) >> 17;
-            /* Real DS hardware (EQ-4zi lit_c, 3 captures): diffuse and
-             * ambient are summed at full precision and truncated once,
-             * not truncated separately. ambient*light*4096 >> 17 equals
-             * the former ambient*light >> 5. Specular and the sum across
-             * lights are not covered by that measurement. */
-            int64_t diff_amb =
-                ((int64_t)diffuse[c] * light[c] * fixed_diffuse +
-                 ((int64_t)ambient[c] * light[c] << 12)) >> 17;
-            vc[c] += spec + diff_amb;
+            /* Real DS hardware (EQ-4zi lit_c/lit_d, three captures each):
+             * the specular, diffuse and ambient terms of every enabled
+             * light are accumulated at full precision and truncated once
+             * (>>17), not per term and not per light. ambient*light<<12
+             * is the former ambient*light>>5 at the same scale. The
+             * measured sums fit this model except one lit_d quad (two
+             * lights, diffuse 8, specular 4) that is one level lower than
+             * the model; see docs/reports/eq4zi-lit-hw-result.md. */
+            acc[c] += (int64_t)specular[c] * light[c] * shininess +
+                      (int64_t)diffuse[c] * light[c] * fixed_diffuse +
+                      ((int64_t)ambient[c] * light[c] << 12);
         }
     }
+
+    for (c = 0; c < 3u; c++) vc[c] += acc[c] >> 17;
 
     for (c = 0; c < 3u; c++) {
         if (vc[c] > 31) vc[c] = 31;

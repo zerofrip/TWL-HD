@@ -134,6 +134,18 @@ class LitPredictTest(unittest.TestCase):
         got = [quad["rgba8"][0] for quad in doc["quads"]]
         self.assertEqual(got, [8, 0, 0, 115])
 
+    def test_lit_d_and_e_all_terms_summed_before_truncation(self):
+        # Levels: one truncation over the specular, diffuse and ambient terms
+        # of all lights.  Hardware (EQ-4zi lit_d) measured 3, 1, 18, 11; the
+        # model gives 3, 1, 19, 11 (quad 2 is one level high, documented).
+        doc = self.docs[gen.FRAME_NAMES[4]]
+        self.assertEqual([q["rgba8"][0] for q in doc["quads"]],
+                         [25, 8, 156, 90])
+        # lit_e: specular-only levels 16, 19, 23, 19, matching hardware.
+        doc = self.docs[gen.FRAME_NAMES[5]]
+        self.assertEqual([q["rgba8"][0] for q in doc["quads"]],
+                         [132, 156, 189, 156])
+
     def test_lit_a_incidence_ordering(self):
         quads = self.doc(0)["quads"]
         brightness = [sum(q["rgba8"][:3]) for q in quads]

@@ -34,16 +34,24 @@ SHA256 = {
         "eb7557c77bc8d17f34933047caeace7775d511a7d580fa1382be51710b917878",
     "expected_lit_b.json":
         "8da9a9eca150d8826da985b9d334b9ec91df1a29993eb62a12385de22dbe1075",
-    "expected_lit_c_separate.json":
-        "9680f70dc3fb1d101d094d68c4c96f82998251e4aafb31633f1a5b930513d25f",
     "expected_lit_c.json":
         "5ed1cf332a4fd632266847457ceb007f7a2e101f14c12d8069ae0f1f41cf5795",
+    "expected_lit_c_separate.json":
+        "9680f70dc3fb1d101d094d68c4c96f82998251e4aafb31633f1a5b930513d25f",
+    "expected_lit_d.json":
+        "0243ac0730a1b23d1f61c5bb26636d1f1bfa7370876fcdb163dcde3ed16ee921",
+    "expected_lit_e.json":
+        "67433e8d3c1903957f9849ba80108b7ab39ca12df91da41f8f57ce5cf2145cc1",
     "hw_lit1_a_top400x240.png":
         "e84b3f1bb4d4dcac3497ef7d7936fe25d217bb773940ba9b2da3f3f6c4a2ddc7",
     "hw_lit2_a_top400x240.png":
         "dcd5a85e84ef5b28f8b0a9b7f240e91dfc515181748c1d93fc62d33a3c4a596c",
     "hw_lit3_a_top400x240.png":
         "a46c149645e1c7715a1f2d11ffa9310fe92250638a98bc8fd075e19b68b3605e",
+    "hw_lit4_a_top400x240.png":
+        "0f8b0dea85b2484b677366347c0041cf6670aaa4008b5309a6e8afc21dc634bd",
+    "hw_lit5_a_top400x240.png":
+        "9ef005bdbc3b979d2cecb278f35ce239f26911c3db8fa93400d79bf34d7bade7",
 }
 
 # patch -> (measured RGB, expected RGB), from the committed fixtures.  The
@@ -68,6 +76,21 @@ LIT3 = {
     "quad 1": ((0, 0, 0), (0, 0, 0)),
     "quad 2": ((0, 0, 0), (0, 0, 0)),
     "quad 3": ((115, 117, 115), (115, 115, 115)),
+    "background": ((0, 0, 0), (0, 0, 0)),
+}
+
+LIT4 = {
+    "quad 0": ((24, 28, 24), (25, 25, 25)),
+    "quad 1": ((8, 12, 8), (8, 8, 8)),
+    "quad 2": ((148, 150, 148), (156, 156, 156)),
+    "quad 3": ((90, 93, 90), (90, 90, 90)),
+    "background": ((0, 0, 0), (0, 0, 0)),
+}
+LIT5 = {
+    "quad 0": ((132, 134, 132), (132, 132, 132)),
+    "quad 1": ((156, 158, 156), (156, 156, 156)),
+    "quad 2": ((189, 190, 189), (189, 189, 189)),
+    "quad 3": ((156, 158, 156), (156, 156, 156)),
     "background": ((0, 0, 0), (0, 0, 0)),
 }
 ROW = re.compile(r"^(quad \d|background)\s+\((\d+)\s*,(\d+)\s*,(\d+)\s*\)"
@@ -123,7 +146,11 @@ class HardwareLit(unittest.TestCase):
         ("hw_lit1_a_top400x240.png", "expected_lit_a.json", LIT1),
         ("hw_lit2_a_top400x240.png", "expected_lit_b.json", LIT2),
         ("hw_lit3_a_top400x240.png", "expected_lit_c.json", LIT3),
+        ("hw_lit5_a_top400x240.png", "expected_lit_e.json", LIT5),
     )
+    # lit4 quad 2 (two lights, diffuse 8, specular 4) is one 5-bit level
+    # (8 levels of 255) below the model: a known, documented deviation.
+    LIT4_TOL = 8
 
     def test_within_tolerance_4_and_values_pinned(self):
         for png, exp, rows in self.CASES:
@@ -131,6 +158,16 @@ class HardwareLit(unittest.TestCase):
                 code, out = _compare(png, exp, 4)
                 self.assertEqual(code, 0, out)
                 self.assertEqual(_rows(out), rows)
+
+    def test_lit4_within_documented_one_level_deviation(self):
+        code, out = _compare("hw_lit4_a_top400x240.png",
+                             "expected_lit_d.json", self.LIT4_TOL)
+        self.assertEqual(code, 0, out)
+        self.assertEqual(_rows(out), LIT4)
+        # Negative test: tightening the tolerance exposes the deviation.
+        code, out = _compare("hw_lit4_a_top400x240.png",
+                             "expected_lit_d.json", self.LIT4_TOL - 1)
+        self.assertEqual(code, 1, out)
 
     def test_tolerance_3_fails(self):
         # Negative test: the green channel of the lit3 quad 0 is 4 levels

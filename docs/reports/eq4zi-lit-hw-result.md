@@ -69,8 +69,37 @@ former 8..10 level offset on the diffuse quads is gone. The cause of the
 remaining green offset is presumably the capture path (5-bit to 6-bit green
 expansion); HYPOTHESIS, UNVERIFIED.
 
-UNVERIFIED (not covered by this measurement): rounding of the specular term
-and of the sum across several lights; they are left unchanged.
+Specular and several lights: section 3b.
+
+## 3b. Specular and several lights (lit_d, lit_e)
+
+FACT — `twlhd-lit4.nds` (`LIT=4`, scene `lit_d`; two lights in one direction,
+colours 31 and 20; shininess table 1,3,...,255; three captures, identical).
+Five-bit levels of the red channel:
+
+| Quad | Material / lights | floor of everything | measured |
+|---|---|---|---|
+| 0 | ambient 1, specular 1, two lights | 3 | 3 (24) |
+| 1 | same, light 0 only | 1 | 1 (8) |
+| 2 | diffuse 8, specular 4, two lights | 19 | 18 (148) |
+| 3 | same, light 0 only | 11 | 11 (90) |
+
+Of the five candidate rules tried by arithmetic (floor per term, per light of
+the sum, floor of the sum over the lights with separate specular, ...), only
+"one floor over the specular, diffuse and ambient terms of all lights" fits
+quads 0, 1 and 3. `common/twlhd_gx_interp.c` now accumulates that sum and
+truncates once.
+
+UNEXPLAINED (one level): quad 2 is one level below that model. HYPOTHESIS,
+UNVERIFIED: a slightly smaller fixed_diffuse (about 4062 instead of 4088)
+would fit quad 2 and the lit1 quad 0 together; this needs a diffuse-only
+probe. A smaller specular shininess is rejected by `lit_e`.
+
+FACT — `twlhd-lit5.nds` (`LIT=5`, scene `lit_e`; specular only, one light,
+product of specular and light levels chosen so the level boundaries sit at
+shininess 3964, 3985, 3998 and 4017): measured levels 16, 19, 23, 19, all on
+the "shininess >= 4017" side, so the applied shininess for a normal facing the
+light is not below 4017; the interpreter value 4080 fits.
 
 ## 4. Reproduction
 
@@ -82,5 +111,5 @@ separate-truncation expectation.
 
 ## 5. Not covered
 
-Specular and multi-light rounding; scissor/over-viewport geometry; texture
+The one-level lit_d quad 2 deviation; scissor/over-viewport geometry; texture
 formats; MODULATE; Gouraud; back-face culling; the stray pixel at (0,239).
