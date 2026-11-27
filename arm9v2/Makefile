@@ -250,6 +250,105 @@ CXXFLAGS	+=	-DTWLHD_DEMO_TEXMOD=1
 endif
 
 #---------------------------------------------------------------------------------
+# Optional DS-mode hardware probe: TEXBEH=1 draws the eight-quad texture-behaviour grid. Unset/empty leaves TARGET,
+# BUILD and CFLAGS untouched. Cannot be combined with the other probe switches
+# (LIT, TEXFMT, TEXMOD, TEXBEH, GRAD, CULL: one draw path) or AUTODUMP_FRAME.
+#---------------------------------------------------------------------------------
+TEXBEH_STRIPPED	:=	$(strip $(TEXBEH))
+ifneq ($(TEXBEH_STRIPPED),)
+TEXBEH_OK := $(shell echo '$(TEXBEH_STRIPPED)' | grep -Eq '^1$$' && echo ok)
+ifeq ($(TEXBEH_OK),)
+$(error TEXBEH must be empty or 1 (got: $(TEXBEH)))
+endif
+ifneq ($(LIT_STRIPPED),)
+$(error TEXBEH cannot be combined with LIT)
+endif
+ifneq ($(TEXFMT_STRIPPED),)
+$(error TEXBEH cannot be combined with TEXFMT)
+endif
+ifneq ($(TEXMOD_STRIPPED),)
+$(error TEXBEH cannot be combined with TEXMOD)
+endif
+ifneq ($(filter-out 0,$(AUTODUMP_FRAME_STRIPPED)),)
+$(error TEXBEH cannot be combined with AUTODUMP_FRAME)
+endif
+TARGET		:=	$(TARGET)-texbeh
+BUILD		:=	$(BUILD)-texbeh
+CFLAGS		+=	-DTWLHD_DEMO_TEXBEH=1
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_TEXBEH=1
+endif
+
+#---------------------------------------------------------------------------------
+# Optional DS-mode hardware probe: GRAD=1 draws two Gouraud triangles. Unset/empty leaves TARGET,
+# BUILD and CFLAGS untouched. Cannot be combined with the other probe switches
+# (LIT, TEXFMT, TEXMOD, TEXBEH, GRAD, CULL: one draw path) or AUTODUMP_FRAME.
+#---------------------------------------------------------------------------------
+GRAD_STRIPPED	:=	$(strip $(GRAD))
+ifneq ($(GRAD_STRIPPED),)
+GRAD_OK := $(shell echo '$(GRAD_STRIPPED)' | grep -Eq '^1$$' && echo ok)
+ifeq ($(GRAD_OK),)
+$(error GRAD must be empty or 1 (got: $(GRAD)))
+endif
+ifneq ($(LIT_STRIPPED),)
+$(error GRAD cannot be combined with LIT)
+endif
+ifneq ($(TEXFMT_STRIPPED),)
+$(error GRAD cannot be combined with TEXFMT)
+endif
+ifneq ($(TEXMOD_STRIPPED),)
+$(error GRAD cannot be combined with TEXMOD)
+endif
+ifneq ($(TEXBEH_STRIPPED),)
+$(error GRAD cannot be combined with TEXBEH)
+endif
+ifneq ($(filter-out 0,$(AUTODUMP_FRAME_STRIPPED)),)
+$(error GRAD cannot be combined with AUTODUMP_FRAME)
+endif
+TARGET		:=	$(TARGET)-grad
+BUILD		:=	$(BUILD)-grad
+CFLAGS		+=	-DTWLHD_DEMO_GRAD=1
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_GRAD=1
+endif
+
+#---------------------------------------------------------------------------------
+# Optional DS-mode hardware probe: CULL=1 draws the eight-quad culling probe. Unset/empty leaves TARGET,
+# BUILD and CFLAGS untouched. Cannot be combined with the other probe switches
+# (LIT, TEXFMT, TEXMOD, TEXBEH, GRAD, CULL: one draw path) or AUTODUMP_FRAME.
+#---------------------------------------------------------------------------------
+CULL_STRIPPED	:=	$(strip $(CULL))
+ifneq ($(CULL_STRIPPED),)
+CULL_OK := $(shell echo '$(CULL_STRIPPED)' | grep -Eq '^1$$' && echo ok)
+ifeq ($(CULL_OK),)
+$(error CULL must be empty or 1 (got: $(CULL)))
+endif
+ifneq ($(LIT_STRIPPED),)
+$(error CULL cannot be combined with LIT)
+endif
+ifneq ($(TEXFMT_STRIPPED),)
+$(error CULL cannot be combined with TEXFMT)
+endif
+ifneq ($(TEXMOD_STRIPPED),)
+$(error CULL cannot be combined with TEXMOD)
+endif
+ifneq ($(TEXBEH_STRIPPED),)
+$(error CULL cannot be combined with TEXBEH)
+endif
+ifneq ($(GRAD_STRIPPED),)
+$(error CULL cannot be combined with GRAD)
+endif
+ifneq ($(filter-out 0,$(AUTODUMP_FRAME_STRIPPED)),)
+$(error CULL cannot be combined with AUTODUMP_FRAME)
+endif
+TARGET		:=	$(TARGET)-cull
+BUILD		:=	$(BUILD)-cull
+CFLAGS		+=	-DTWLHD_DEMO_CULL=1
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_CULL=1
+endif
+
+#---------------------------------------------------------------------------------
 # Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the frame-counter
 # modelview rotation with a fixed angle (degrees) in every draw path, so every
 # frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS untouched so

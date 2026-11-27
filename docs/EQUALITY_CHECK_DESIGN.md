@@ -912,3 +912,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 - EQ-4zj: DS-mode texture-format hardware result: docs/reports/eq4zj-texfmt-hw-result.md.
 
 - EQ-4zk: DS-mode MODULATE hardware result: docs/reports/eq4zk-texmod-hw-result.md.
+
+- EQ-4zl/4zm/4zn: texture-behaviour, Gouraud and culling hardware results: docs/reports/eq4zl-zm-zn-probes-hw-result.md.

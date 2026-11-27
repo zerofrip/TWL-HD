@@ -18,6 +18,11 @@ extern "C" {
 
 void twlhd_demo_draw_frame(unsigned angle);
 
+#if TWLHD_DEMO_TEXBEH
+/* Upload the texture-behaviour grid (texels, palettes) once. */
+void twlhd_demo_texbeh_upload_textures(void);
+#endif
+
 #if TWLHD_DEMO_TEXMOD
 /* Upload the MODULATE probe textures once. */
 void twlhd_demo_texmod_upload_textures(void);

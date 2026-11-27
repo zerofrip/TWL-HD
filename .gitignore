@@ -39,3 +39,9 @@ arm9v2/build-texfmt/
 arm9v2/build-*texfmt*/
 arm9v2/build-texmod/
 arm9v2/build-*texmod*/
+arm9v2/build-texbeh/
+arm9v2/build-grad/
+arm9v2/build-cull/
+arm9v2/build-*texbeh*/
+arm9v2/build-*grad*/
+arm9v2/build-*cull*/
