@@ -340,6 +340,7 @@ static const uint32_t LIT_NORMAL_FACING = 0x1FF00000u;
 static const uint32_t LIT_NORMAL_60 = (256u << 20) | 443u;
 static const uint32_t LIT_NORMAL_GRAZING = 511u;
 static const uint32_t LIT_NORMAL_AWAY = 513u << 20;
+static const uint32_t LIT_NORMAL_75 = (128u << 20) | 495u;
 
 static const uint32_t LIT_SHININESS[32] = {
     0x07050301u, 0x0F0D0B09u, 0x17151311u, 0x1F1D1B19u,
@@ -425,6 +426,24 @@ static void draw_lit_b(void) {
     draw_lit_quad(31, POLY_FORMAT_LIGHT0 | POLY_FORMAT_LIGHT1,
                   LIT_NORMAL_FACING, lit_quads[3]);
 }
+
+/* lit_c: diffuse+ambient rounding probe (gen_lit_frames.py lit_c_entries). */
+static void draw_lit_c(void) {
+    glLight(0, RGB15(31, 31, 31),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+
+    lit_material(RGB15(1, 1, 1), RGB15(1, 1, 1), 0, 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[0]);
+
+    lit_material(RGB15(1, 1, 1), 0, 0, 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[1]);
+
+    lit_material(RGB15(1, 1, 1), 0, 0, 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_60, lit_quads[2]);
+
+    lit_material(RGB15(28, 28, 28), RGB15(8, 8, 8), 0, 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_75, lit_quads[3]);
+}
 #endif
 
 #ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
@@ -481,8 +500,10 @@ void twlhd_demo_draw_frame(unsigned angle) {
 
 #if TWLHD_DEMO_LIT == 1
     draw_lit_a();
-#else
+#elif TWLHD_DEMO_LIT == 2
     draw_lit_b();
+#else
+    draw_lit_c();
 #endif
 
     glFlush(0);

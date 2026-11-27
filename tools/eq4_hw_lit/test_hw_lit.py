@@ -30,29 +30,44 @@ except ImportError:  # pragma: no cover - depends on the host
     HAVE_PIL = False
 
 SHA256 = {
+    "expected_lit_a.json":
+        "eb7557c77bc8d17f34933047caeace7775d511a7d580fa1382be51710b917878",
+    "expected_lit_b.json":
+        "8da9a9eca150d8826da985b9d334b9ec91df1a29993eb62a12385de22dbe1075",
+    "expected_lit_c_separate.json":
+        "9680f70dc3fb1d101d094d68c4c96f82998251e4aafb31633f1a5b930513d25f",
+    "expected_lit_c.json":
+        "5ed1cf332a4fd632266847457ceb007f7a2e101f14c12d8069ae0f1f41cf5795",
     "hw_lit1_a_top400x240.png":
         "e84b3f1bb4d4dcac3497ef7d7936fe25d217bb773940ba9b2da3f3f6c4a2ddc7",
     "hw_lit2_a_top400x240.png":
         "dcd5a85e84ef5b28f8b0a9b7f240e91dfc515181748c1d93fc62d33a3c4a596c",
-    "expected_lit_a.json":
-        "5d28bc4b8f9fd6e0e6a1684cee19e35390564258684ad8a5b45fdfb4429476d7",
-    "expected_lit_b.json":
-        "ac25bf665bc5c57ad3d1b2776c6f366344c0b3fa365481eebb08a01c82613601",
+    "hw_lit3_a_top400x240.png":
+        "a46c149645e1c7715a1f2d11ffa9310fe92250638a98bc8fd075e19b68b3605e",
 }
 
-# patch -> (measured RGB, expected RGB), from the committed fixtures.
+# patch -> (measured RGB, expected RGB), from the committed fixtures.  The
+# expectation is the host interpreter with diffuse and ambient summed before
+# truncation (see docs/reports/eq4zi-lit-hw-result.md).
 LIT1 = {
-    "quad 0": ((206, 207, 206), (197, 197, 197)),
-    "quad 1": ((115, 117, 115), (107, 107, 107)),
+    "quad 0": ((206, 207, 206), (206, 206, 206)),
+    "quad 1": ((115, 117, 115), (115, 115, 115)),
     "quad 2": ((24, 28, 24), (25, 25, 25)),
     "quad 3": ((24, 28, 24), (25, 25, 25)),
     "background": ((0, 0, 0), (0, 0, 0)),
 }
 LIT2 = {
-    "quad 0": ((206, 0, 0), (197, 0, 0)),
+    "quad 0": ((206, 0, 0), (206, 0, 0)),
     "quad 1": ((33, 231, 33), (33, 230, 33)),
     "quad 2": ((239, 239, 239), (239, 239, 239)),
     "quad 3": ((173, 0, 148), (173, 0, 148)),
+    "background": ((0, 0, 0), (0, 0, 0)),
+}
+LIT3 = {
+    "quad 0": ((8, 12, 8), (8, 8, 8)),
+    "quad 1": ((0, 0, 0), (0, 0, 0)),
+    "quad 2": ((0, 0, 0), (0, 0, 0)),
+    "quad 3": ((115, 117, 115), (115, 115, 115)),
     "background": ((0, 0, 0), (0, 0, 0)),
 }
 ROW = re.compile(r"^(quad \d|background)\s+\((\d+)\s*,(\d+)\s*,(\d+)\s*\)"
@@ -95,46 +110,47 @@ class FixtureHashes(unittest.TestCase):
             self.assertEqual(got, want, name)
 
     def test_no_home_path(self):
-        for name in ("expected_lit_a.json", "expected_lit_b.json"):
+        for name in sorted(SHA256):
+            if not name.endswith(".json"):
+                continue
             with open(_fix(name), encoding="utf-8") as handle:
                 self.assertNotIn("/home/", handle.read(), name)
 
 
 @unittest.skipUnless(HAVE_PIL, "Pillow not installed")
 class HardwareLit(unittest.TestCase):
-    def test_lit1_within_tolerance_12(self):
-        code, out = _compare("hw_lit1_a_top400x240.png",
-                             "expected_lit_a.json", 12)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(_rows(out), LIT1)
+    CASES = (
+        ("hw_lit1_a_top400x240.png", "expected_lit_a.json", LIT1),
+        ("hw_lit2_a_top400x240.png", "expected_lit_b.json", LIT2),
+        ("hw_lit3_a_top400x240.png", "expected_lit_c.json", LIT3),
+    )
 
-    def test_lit2_within_tolerance_12(self):
-        code, out = _compare("hw_lit2_a_top400x240.png",
-                             "expected_lit_b.json", 12)
-        self.assertEqual(code, 0, out)
-        self.assertEqual(_rows(out), LIT2)
+    def test_within_tolerance_4_and_values_pinned(self):
+        for png, exp, rows in self.CASES:
+            with self.subTest(png=png):
+                code, out = _compare(png, exp, 4)
+                self.assertEqual(code, 0, out)
+                self.assertEqual(_rows(out), rows)
 
-    def test_tolerance_5_fails_on_diffuse_quads(self):
-        # Negative test: the diffuse quads are 8..10 levels brighter on
-        # hardware, so a tight tolerance must be rejected (exit 1).
-        for png, exp in (("hw_lit1_a_top400x240.png", "expected_lit_a.json"),
-                         ("hw_lit2_a_top400x240.png", "expected_lit_b.json")):
-            code, out = _compare(png, exp, 5)
-            self.assertEqual(code, 1, out)
+    def test_tolerance_3_fails(self):
+        # Negative test: the green channel of the lit3 quad 0 is 4 levels
+        # off (presumably capture path; unverified), so tolerance 3 is rejected.
+        code, out = _compare("hw_lit3_a_top400x240.png",
+                             "expected_lit_c.json", 3)
+        self.assertEqual(code, 1, out)
 
     def test_swapped_expectation_fails(self):
         # Negative test: lit1 capture against the lit2 expectation.
         code, out = _compare("hw_lit1_a_top400x240.png",
-                             "expected_lit_b.json", 12)
+                             "expected_lit_b.json", 4)
         self.assertEqual(code, 1, out)
 
-    def test_diffuse_offset_is_one_five_bit_level(self):
-        # Measured minus expected on the diffuse-lit red channel is 8..10
-        # levels, i.e. one 5-bit step (8.2 levels), never zero or two steps.
-        for rows, quads in ((LIT1, ("quad 0", "quad 1")), (LIT2, ("quad 0",))):
-            for quad in quads:
-                meas, exp = rows[quad]
-                self.assertIn(meas[0] - exp[0], (8, 9, 10), quad)
+    def test_old_separate_truncation_would_fail(self):
+        # Negative test (the EQ-4zi finding): the lit3 capture against an
+        # expectation with 0 levels in quad 0 (separate truncation) fails.
+        code, out = _compare("hw_lit3_a_top400x240.png",
+                             "expected_lit_c_separate.json", 4)
+        self.assertEqual(code, 1, out)
 
 
 if __name__ == "__main__":

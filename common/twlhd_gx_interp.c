@@ -522,10 +522,15 @@ static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
 
         for (c = 0; c < 3u; c++) {
             int64_t spec = ((int64_t)specular[c] * light[c] * shininess) >> 17;
-            int64_t diff =
-                ((int64_t)diffuse[c] * light[c] * fixed_diffuse) >> 17;
-            int64_t amb = ((int64_t)ambient[c] * light[c]) >> 5;
-            vc[c] += spec + diff + amb;
+            /* Real DS hardware (EQ-4zi lit_c, 3 captures): diffuse and
+             * ambient are summed at full precision and truncated once,
+             * not truncated separately. ambient*light*4096 >> 17 equals
+             * the former ambient*light >> 5. Specular and the sum across
+             * lights are not covered by that measurement. */
+            int64_t diff_amb =
+                ((int64_t)diffuse[c] * light[c] * fixed_diffuse +
+                 ((int64_t)ambient[c] * light[c] << 12)) >> 17;
+            vc[c] += spec + diff_amb;
         }
     }
 

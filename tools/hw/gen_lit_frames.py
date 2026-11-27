@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generate the deterministic v2 frames for the Phase 5B-1 lighting test.
 
-Three frames are written into the output directory:
+Four frames are written into the output directory:
 
   twlhd_frame_v2_lit_a.bin   four flat quads, one white directional light,
                              four different normals (incidence-angle sweep)
@@ -10,6 +10,7 @@ Three frames are written into the output directory:
                              emission only, specular with a shininess table,
                              and two lights
   twlhd_frame_v2_lit_ctl.bin the same four quads with flat COLOR only
+  twlhd_frame_v2_lit_c.bin   diffuse+ambient rounding probe (four materials)
 
 BUILD/UNIT tooling only.  Stdlib only.  Nothing here contacts a console or a
 network address.  The frame layout follows the scene4_alpha 2x2 quad grid
@@ -48,6 +49,7 @@ FRAME_NAMES = (
     "twlhd_frame_v2_lit_a.bin",
     "twlhd_frame_v2_lit_b.bin",
     "twlhd_frame_v2_lit_ctl.bin",
+    "twlhd_frame_v2_lit_c.bin",
 )
 
 # scene4_alpha 2x2 grid (tests/host/test_demo_frame.cpp:925-930) scaled by
@@ -68,6 +70,7 @@ NORMAL_FACING = 511 << 20          # (0, 0, +4088) towards the light
 NORMAL_60 = 443 | (256 << 20)      # (3544, 0, 2048) ~ 60 deg off the light
 NORMAL_GRAZING = 511               # (4088, 0, 0) ~ 90 deg
 NORMAL_AWAY = 513 << 20            # (0, 0, -4088) facing away
+NORMAL_75 = 495 | (128 << 20)      # (3960, 0, 1024): fixed_diffuse 1022
 
 
 def _rgb555(r, g, b):
@@ -174,6 +177,31 @@ def lit_b_entries():
     return out
 
 
+def lit_c_entries():
+    """Diffuse+ambient rounding probe (EQ-4zi follow-up).
+
+    One white light, four materials/normals chosen so that the candidate
+    rounding rules (separate floor, floor of the sum, ceil, round) give
+    different 5-bit results.
+    """
+    out = [
+        (CMD_LIGHT_VECTOR, _vector_word(0, 0, LIGHT_Z)),
+        (CMD_LIGHT_COLOR, _rgb555(31, 31, 31)),
+    ]
+    probes = (
+        (1, 1, NORMAL_FACING),
+        (1, 0, NORMAL_FACING),
+        (1, 0, NORMAL_60),
+        (28, 8, NORMAL_75),
+    )
+    for corners, (diff, amb, normal) in zip(QUADS, probes):
+        out.append((CMD_DIF_AMB,
+                    _dif_amb(_rgb555(diff, diff, diff),
+                             _rgb555(amb, amb, amb))))
+        _quad(out, 31, 0x1, normal, corners)
+    return out
+
+
 def lit_ctl_entries():
     colours = (_rgb555(31, 0, 0), _rgb555(0, 31, 0),
                _rgb555(0, 0, 31), _rgb555(31, 31, 0))
@@ -187,6 +215,7 @@ _BUILDERS = {
     FRAME_NAMES[0]: lit_a_entries,
     FRAME_NAMES[1]: lit_b_entries,
     FRAME_NAMES[2]: lit_ctl_entries,
+    FRAME_NAMES[3]: lit_c_entries,
 }
 
 

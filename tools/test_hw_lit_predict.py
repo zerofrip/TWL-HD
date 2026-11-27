@@ -33,13 +33,18 @@ def _dot20_12(a, b):
 
 def _diffuse_ambient_rgb8(diffuse, ambient, light_colour, light_dir,
                           normal):
-    """Integer DeSmuME equation with emission and specular zero."""
+    """Integer equation with emission and specular zero.
+
+    Diffuse and ambient are summed before the single truncation (real DS
+    hardware, EQ-4zi lit_c); the earlier DeSmuME-derived form truncated them
+    separately.
+    """
     fixed_diffuse = max(0, -_dot20_12(light_dir, normal))
     out = []
     for channel in range(3):
-        diff = (diffuse[channel] * light_colour[channel] * fixed_diffuse) >> 17
-        amb = (ambient[channel] * light_colour[channel]) >> 5
-        value = min(diff + amb, 31)
+        value = min(((diffuse[channel] * light_colour[channel] * fixed_diffuse)
+                     + ((ambient[channel] * light_colour[channel]) << 12))
+                    >> 17, 31)
         out.append(int(value * 255 / 31 + 0.5))
     return out
 
@@ -117,9 +122,17 @@ class LitPredictTest(unittest.TestCase):
                 self.assertEqual(quads[index]["rgba8"][:3], wanted)
 
         # Two literals written out so a shared bug in the helper cannot hide.
-        self.assertEqual(quads[0]["rgba8"], [197, 197, 197, 255])
-        self.assertEqual(quads[1]["rgba8"], [107, 107, 107, 255])
+        self.assertEqual(quads[0]["rgba8"], [206, 206, 206, 255])
+        self.assertEqual(quads[1]["rgba8"], [115, 115, 115, 255])
         self.assertEqual(quads[2]["rgba8"], [25, 25, 25, 255])
+
+    def test_lit_c_matches_hardware_levels(self):
+        # Real-hardware 5-bit levels (EQ-4zi, three captures): the sum of
+        # diffuse and ambient is truncated once.  Separate truncation would
+        # give 0, 0, 0, 13 (levels), ceil of the diffuse term 1, 1, 1, 14.
+        doc = self.docs[gen.FRAME_NAMES[3]]
+        got = [quad["rgba8"][0] for quad in doc["quads"]]
+        self.assertEqual(got, [8, 0, 0, 115])
 
     def test_lit_a_incidence_ordering(self):
         quads = self.doc(0)["quads"]
@@ -133,7 +146,7 @@ class LitPredictTest(unittest.TestCase):
     def test_lit_b_expected_colours_and_spread(self):
         quads = self.doc(1)["quads"]
         self.assertEqual([q["rgba8"] for q in quads], [
-            [197, 0, 0, 255],      # diffuse + ambient under the red light
+            [206, 0, 0, 255],      # diffuse + ambient under the red light
             [33, 230, 33, 255],    # emission only
             [239, 239, 239, 255],  # specular through the shininess table
             [173, 0, 148, 255],    # red light 0 + blue light 1

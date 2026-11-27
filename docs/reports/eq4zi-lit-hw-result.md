@@ -40,22 +40,47 @@ Consequences (FACT): the `POLY_CULL_NONE` fix works on hardware (no black
 screen); ambient-only, emission, specular (shininess table) and two-light
 quads match within 3 levels; the diffuse quads are 8..10 levels brighter.
 
-## 3. HYPOTHESIS — diffuse rounding
+The tables in section 2 use the interpreter before the fix in section 3
+(separate truncation); after it the same captures deviate by at most 4 levels.
 
-The diffuse offset (8..10 of 255) equals one 5-bit step (255/31 = 8.2).
-Hardware showing 25/31 where the DeSmuME-derived interpreter gives 24/31
-suggests a floor-vs-round difference in the diffuse term. **UNVERIFIED**: only
-two dot products and one material were sampled. A change to the interpreter
-needs more data points (other dot products and materials).
+## 3. Diffuse + ambient rounding: measured and fixed
+
+HYPOTHESIS (made before lit_c, from the section 2 data): diffuse and ambient
+are summed at full precision and truncated once. The alternative "ceil of the
+diffuse term" was rejected by the existing data: lit2 quad 3 would be 181,
+measured 173. The lit_c measurement below is the FACT that confirms "floor of
+the sum".
+
+FACT — `twlhd-lit3.nds` (`LIT=3`, scene `lit_c`, white light, three captures,
+identical). Five-bit levels of the red channel, predicted per rule:
+
+| Quad (diffuse/ambient, fixed_diffuse) | separate floor | floor of sum | ceil diffuse | measured |
+|---|---|---|---|---|
+| 0 (1/1, 4088) | 0 | 1 | 1 | 1 (8) |
+| 1 (1/0, 4088) | 0 | 0 | 1 | 0 |
+| 2 (1/0, 2044) | 0 | 0 | 1 | 0 |
+| 3 (28/8, 1022) | 13 | 14 | 14 | 14 (115) |
+
+Only "floor of the sum" matches all four. `common/twlhd_gx_interp.c` now sums
+`diffuse*light*fixed_diffuse` and `ambient*light<<12` before the single `>>17`.
+After the change the lit1/lit2/lit3 captures deviate from the prediction by at
+most 4 levels (FACT, e.g. lit3 quad 0: measured G=12, expected 8), and the
+former 8..10 level offset on the diffuse quads is gone. The cause of the
+remaining green offset is presumably the capture path (5-bit to 6-bit green
+expansion); HYPOTHESIS, UNVERIFIED.
+
+UNVERIFIED (not covered by this measurement): rounding of the specular term
+and of the sum across several lights; they are left unchanged.
 
 ## 4. Reproduction
 
 Fixtures: `tools/fixtures/eq4_hw_lit/` (README lists SHA-256). Test:
-`make test-eq4zi-lit-hw` (also part of `make test`). The test pins the values
-in section 2, requires PASS at tolerance 12, requires failure at tolerance 5
-and with a swapped expectation.
+`make test-eq4zi-lit-hw` (also part of `make test`). The test pins the
+measured and expected values, requires PASS at tolerance 4, and requires
+failure at tolerance 3, with a swapped expectation and with the former
+separate-truncation expectation.
 
 ## 5. Not covered
 
-Interpreter fix for diffuse rounding; scissor/over-viewport geometry; texture
+Specular and multi-light rounding; scissor/over-viewport geometry; texture
 formats; MODULATE; Gouraud; back-face culling; the stray pixel at (0,239).

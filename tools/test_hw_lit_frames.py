@@ -118,6 +118,18 @@ class LitFramesTest(unittest.TestCase):
         self.assertEqual(counts.get(0x40), 4)
         self.assertEqual(counts.get(0x41), 4)
 
+    def test_lit_c_command_mix(self):
+        view = v2.parse(self.read(self.first, gen.FRAME_NAMES[3]))
+        counts = self.counts(view)
+        self.assertEqual(counts.get(0x30), 4)   # DIF_AMB, one per quad
+        self.assertIsNone(counts.get(0x31))     # no SPE_EMI
+        self.assertEqual(counts.get(0x32), 1)   # one light vector
+        self.assertEqual(counts.get(0x33), 1)   # one white light colour
+        self.assertEqual(counts.get(0x21), 4)   # NORMAL per quad
+        self.assertEqual(counts.get(0x29), 4)
+        self.assertEqual(counts.get(0x40), 4)
+        self.assertEqual(counts.get(0x41), 4)
+
     def test_lit_ctl_is_unlit(self):
         view = v2.parse(self.read(self.first, gen.FRAME_NAMES[2]))
         counts = self.counts(view)
