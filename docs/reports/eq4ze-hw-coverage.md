@@ -688,3 +688,5 @@ exit=0
 
 
 **Result (EQ-4zj):** the DS-mode texture-format grid (TEXFMT=1) and its hardware comparison are in `docs/reports/eq4zj-texfmt-hw-result.md`.
+
+**Result (EQ-4zk):** the DS MODULATE probe (TEXMOD=1) and its hardware comparison are in `docs/reports/eq4zk-texmod-hw-result.md`.

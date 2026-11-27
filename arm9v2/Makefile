@@ -221,6 +221,35 @@ CXXFLAGS	+=	-DTWLHD_DEMO_TEXFMT=1
 endif
 
 #---------------------------------------------------------------------------------
+# Optional DS-mode MODULATE probe: TEXMOD=1 draws eight flat quads, each with a
+# solid 16bpp texture and a flat vertex colour (tools/hw/gen_texmod_rom_data.py,
+# source/texmod_data.h). Unset/empty leaves TARGET, BUILD and CFLAGS untouched.
+# It cannot be combined with LIT, TEXFMT (one draw path) or AUTODUMP (no
+# texture sources registered).
+#---------------------------------------------------------------------------------
+TEXMOD_STRIPPED	:=	$(strip $(TEXMOD))
+ifneq ($(TEXMOD_STRIPPED),)
+TEXMOD_OK := $(shell echo '$(TEXMOD_STRIPPED)' | grep -Eq '^1$$' && echo ok)
+ifeq ($(TEXMOD_OK),)
+$(error TEXMOD must be empty or 1 (got: $(TEXMOD)))
+endif
+ifneq ($(LIT_STRIPPED),)
+$(error TEXMOD cannot be combined with LIT)
+endif
+ifneq ($(TEXFMT_STRIPPED),)
+$(error TEXMOD cannot be combined with TEXFMT)
+endif
+ifneq ($(filter-out 0,$(AUTODUMP_FRAME_STRIPPED)),)
+$(error TEXMOD cannot be combined with AUTODUMP_FRAME)
+endif
+TARGET		:=	$(TARGET)-texmod
+BUILD		:=	$(BUILD)-texmod
+CFLAGS		+=	-DTWLHD_DEMO_TEXMOD=1
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_TEXMOD=1
+endif
+
+#---------------------------------------------------------------------------------
 # Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the frame-counter
 # modelview rotation with a fixed angle (degrees) in every draw path, so every
 # frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS untouched so

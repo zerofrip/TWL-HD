@@ -910,3 +910,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 - EQ-4zi: hardware measurement of the lighting scenes: docs/reports/eq4zi-lit-hw-result.md.
 
 - EQ-4zj: DS-mode texture-format hardware result: docs/reports/eq4zj-texfmt-hw-result.md.
+
+- EQ-4zk: DS-mode MODULATE hardware result: docs/reports/eq4zk-texmod-hw-result.md.

@@ -744,3 +744,5 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 - EQ-4zi: real-hardware result for the LIT ROMs recorded in docs/reports/eq4zi-lit-hw-result.md.
 
 - EQ-4zj: DS-mode texture-format grid ROM (TEXFMT=1) built from tools/hw/gen_texfmt_rom_data.py; result in docs/reports/eq4zj-texfmt-hw-result.md once measured.
+
+- EQ-4zk: DS-mode MODULATE probe ROM (TEXMOD=1); result in docs/reports/eq4zk-texmod-hw-result.md.

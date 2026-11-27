@@ -37,3 +37,5 @@ arm9v2/build-*lit*/
 arm11/build-diag/
 arm9v2/build-texfmt/
 arm9v2/build-*texfmt*/
+arm9v2/build-texmod/
+arm9v2/build-*texmod*/

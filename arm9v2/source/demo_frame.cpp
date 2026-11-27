@@ -22,6 +22,10 @@
 #define TWLHD_DEMO_TEXFMT 0
 #endif
 
+#ifndef TWLHD_DEMO_TEXMOD
+#define TWLHD_DEMO_TEXMOD 0
+#endif
+
 #include "demo_frame.hpp"
 
 #if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
@@ -580,6 +584,57 @@ static void draw_texfmt(void) {
 }
 #endif
 
+#if TWLHD_DEMO_TEXMOD
+/*
+ * DS MODULATE probe for EQ-4zk.  Eight flat quads, each with one solid 8x8
+ * 16bpp texture and one flat vertex colour (tools/hw/gen_texmod_rom_data.py ->
+ * texmod_data.h).  Texture registers are written directly, like scene 5;
+ * the ROM is not recorder-compatible, so TEXMOD cannot be combined with
+ * AUTODUMP.  Polygon mode is the default MODULATE (POLYGON_ATTR bits 4-5 = 0).
+ */
+#include "texmod_data.h"
+
+void twlhd_demo_texmod_upload_textures(void) {
+    uint32_t i;
+
+    vramSetBankA(VRAM_A_LCD);
+    for (i = 0; i < sizeof(texmod_slot0) / 2u; i++) {
+        ((volatile uint16_t *)0x06800000u)[i] = texmod_slot0[i];
+    }
+    vramSetBankA(VRAM_A_TEXTURE);
+}
+
+static void draw_texmod_quad(const struct TexmodQuad *q) {
+    static const uint8_t order[6] = {0, 1, 2, 0, 2, 3};
+    static const uint8_t su[4] = {0, 1, 1, 0};
+    static const uint8_t tv[4] = {0, 0, 1, 1};
+    int i;
+
+    GFX_TEX_FORMAT = q->param;
+    GFX_COLOR = q->colour;
+    glBegin(GL_TRIANGLES);
+    for (i = 0; i < 6; i++) {
+        uint32_t k = order[i];
+        int s = su[k] ? 8 * 16 : 0;
+        int t = tv[k] ? 8 * 16 : 0;
+
+        GFX_TEX_COORD = TEXTURE_PACK(s, t);
+        glVertex3v16((v16)q->corners[k][0], (v16)q->corners[k][1], 0);
+    }
+    glEnd();
+}
+
+static void draw_texmod(void) {
+    int i;
+
+    glEnable(GL_TEXTURE_2D);
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+    for (i = 0; i < 8; i++) {
+        draw_texmod_quad(&texmod_quads[i]);
+    }
+}
+#endif
+
 #ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
 /* Fixed modelview angle for every draw path (STATIC_ANGLE=0..359). */
 #define TWLHD_DEMO_STATIC_ANGLE_BIN \
@@ -614,6 +669,25 @@ void twlhd_demo_draw_frame(unsigned angle) {
 
     simple_tri_rotateX += 3.0f;
     simple_tri_rotateY += 3.0f;
+
+    glFlush(0);
+    return;
+#endif
+#if TWLHD_DEMO_TEXMOD
+    /* Static MODULATE probe; rotation is deliberately absent. */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(TWLHD_DEMO_VP_X1, TWLHD_DEMO_VP_Y1,
+               TWLHD_DEMO_VP_X2, TWLHD_DEMO_VP_Y2);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    draw_texmod();
 
     glFlush(0);
     return;
