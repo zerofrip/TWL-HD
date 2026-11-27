@@ -33,6 +33,13 @@
 #define TWLHD_BUILD_ID "unknown"
 #endif
 
+/* Interpreter option flags (TWLHD_GX_OPT_*). Default 0 = unchanged behaviour;
+ * build with -DTWLHD_ARM11_GX_OPTS=0x2u (TWLHD_GX_OPT_DS_STACK) to replay
+ * frames dumped from retail games, which use DS matrix-stack semantics. */
+#ifndef TWLHD_ARM11_GX_OPTS
+#define TWLHD_ARM11_GX_OPTS 0u
+#endif
+
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
 #define CLIP_VERTEX_CAPACITY 6144u
@@ -323,10 +330,11 @@ static int load_sd_frame(const char *path,
             return -1;
         }
 
-        gx_result = twlhd_gx_interpret_ex(&g_v2view, g_clip_vertices,
-                                          CLIP_VERTEX_CAPACITY,
-                                          &vertex_count, out_viewport,
-                                          out_gx_stats, g_tex_vertices);
+        gx_result = twlhd_gx_interpret_opts(&g_v2view, g_clip_vertices,
+                                            CLIP_VERTEX_CAPACITY,
+                                            &vertex_count, out_viewport,
+                                            out_gx_stats, g_tex_vertices,
+                                            TWLHD_ARM11_GX_OPTS);
         if (gx_result != TWLHD_GX_OK) {
             snprintf(g_status, sizeof g_status,
                      "gx:%s s%lu c%lu i%lu",
