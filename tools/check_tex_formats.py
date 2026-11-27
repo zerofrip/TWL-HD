@@ -52,6 +52,20 @@ def _is_clear(pixel, tolerance):
     return all(abs(pixel[i] - CLEAR[i]) <= tolerance for i in range(3))
 
 
+def _parse_clear(text):
+    """Parse --clear R,G,B (0..255 each)."""
+    parts = text.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError("expected R,G,B")
+    try:
+        values = tuple(int(part) for part in parts)
+    except ValueError:
+        raise argparse.ArgumentTypeError("expected integers R,G,B")
+    if any(v < 0 or v > 255 for v in values):
+        raise argparse.ArgumentTypeError("values must be 0..255")
+    return values
+
+
 def _pixel_at(data, width, x, y):
     off = (y * width + x) * 3
     return (data[off], data[off + 1], data[off + 2])
@@ -154,9 +168,15 @@ def main(argv=None):
     parser.add_argument("ppm", help="input P6 PPM file")
     parser.add_argument("--tolerance", type=int, default=TOLERANCE,
                         help="per-channel RGB tolerance (default 28)")
+    parser.add_argument("--clear", type=_parse_clear, default=None,
+                        help="clear colour R,G,B of the capture (default "
+                             "16,16,24; a black-clear DS ROM needs 0,0,0)")
     parser.add_argument("--emulator-expected", action="store_true",
                         help="accepted for CLI compatibility; no effect")
     args = parser.parse_args(argv)
+    if args.clear is not None:
+        global CLEAR
+        CLEAR = args.clear
 
     width, height, data = parse_ppm(args.ppm)
     if width != 400 or height not in (240, 480):

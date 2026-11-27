@@ -227,6 +227,9 @@ int main(void) {
 #else
     (void)rec; /* recorder bypassed for this variant */
 #endif
+#if TWLHD_DEMO_TEXFMT
+    twlhd_demo_texfmt_upload_textures();
+#endif
 #if TWLHD_DEMO_SCENE == 5
     twlhd_tex_source_reset(&g_tex_source);
     twlhd_demo_scene5_register_sources(&g_tex_source);

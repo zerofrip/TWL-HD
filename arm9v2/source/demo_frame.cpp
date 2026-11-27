@@ -18,6 +18,10 @@
 #define TWLHD_DEMO_LIT 0
 #endif
 
+#ifndef TWLHD_DEMO_TEXFMT
+#define TWLHD_DEMO_TEXFMT 0
+#endif
+
 #include "demo_frame.hpp"
 
 #if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
@@ -508,6 +512,74 @@ static void draw_lit_f(void) {
 }
 #endif
 
+#if TWLHD_DEMO_TEXFMT
+/*
+ * DS texture-format grid for EQ-4zj.  The VRAM images and per-quad words come
+ * from tools/hw/gen_texfmt_rom_data.py (committed as texfmt_data.h); the quads
+ * reproduce the eight-quad grid of tools/gen_tex_format_frames.py.
+ *
+ * No libnds texture helper is used: the texture registers are written
+ * directly, like scene 5.  The ROM is not recorder-compatible (no texture
+ * sources are registered), so TEXFMT cannot be combined with AUTODUMP.
+ */
+#include "texfmt_data.h"
+
+/* Bank A = texture slot 0 (texels), bank B = slot 1 (4x4 indices), bank E =
+ * texture palette.  Mapped banks cannot be CPU-written, so copy through LCDC
+ * mappings with 16-bit stores first. */
+void twlhd_demo_texfmt_upload_textures(void) {
+    uint32_t i;
+
+    vramSetBankA(VRAM_A_LCD);
+    vramSetBankB(VRAM_B_LCD);
+    vramSetBankE(VRAM_E_LCD);
+    for (i = 0; i < sizeof(texfmt_slot0) / 2u; i++) {
+        ((volatile uint16_t *)0x06800000u)[i] = texfmt_slot0[i];
+    }
+    for (i = 0; i < sizeof(texfmt_slot1) / 2u; i++) {
+        ((volatile uint16_t *)0x06820000u)[i] = texfmt_slot1[i];
+    }
+    for (i = 0; i < sizeof(texfmt_palette) / 2u; i++) {
+        ((volatile uint16_t *)0x06880000u)[i] = texfmt_palette[i];
+    }
+    vramSetBankA(VRAM_A_TEXTURE);
+    vramSetBankB(VRAM_B_TEXTURE);
+    vramSetBankE(VRAM_E_TEX_PALETTE);
+}
+
+static void draw_texfmt_quad(const struct TexfmtQuad *q) {
+    /* Two triangles, texcoords as QUAD_TEXCOORDS in the generator. */
+    static const uint8_t order[6] = {0, 1, 2, 0, 2, 3};
+    static const uint8_t su[4] = {0, 1, 1, 0};
+    static const uint8_t tv[4] = {0, 0, 1, 1};
+    int i;
+
+    GFX_TEX_FORMAT = q->param;
+    GFX_PAL_FORMAT = q->pltt;
+    GFX_COLOR = 0x7FFFu;
+    glBegin(GL_TRIANGLES);
+    for (i = 0; i < 6; i++) {
+        uint32_t k = order[i];
+        int s = su[k] ? q->s_max : 0;
+        int t = tv[k] ? q->t_max : 0;
+
+        GFX_TEX_COORD = TEXTURE_PACK(s, t);
+        glVertex3v16((v16)q->corners[k][0], (v16)q->corners[k][1], 0);
+    }
+    glEnd();
+}
+
+static void draw_texfmt(void) {
+    int i;
+
+    glEnable(GL_TEXTURE_2D);
+    glPolyFmt(POLY_ALPHA(31) | POLY_CULL_NONE);
+    for (i = 0; i < 8; i++) {
+        draw_texfmt_quad(&texfmt_quads[i]);
+    }
+}
+#endif
+
 #ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
 /* Fixed modelview angle for every draw path (STATIC_ANGLE=0..359). */
 #define TWLHD_DEMO_STATIC_ANGLE_BIN \
@@ -542,6 +614,25 @@ void twlhd_demo_draw_frame(unsigned angle) {
 
     simple_tri_rotateX += 3.0f;
     simple_tri_rotateY += 3.0f;
+
+    glFlush(0);
+    return;
+#endif
+#if TWLHD_DEMO_TEXFMT
+    /* Static texture-format grid; rotation is deliberately absent. */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(TWLHD_DEMO_VP_X1, TWLHD_DEMO_VP_Y1,
+               TWLHD_DEMO_VP_X2, TWLHD_DEMO_VP_Y2);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    draw_texfmt();
 
     glFlush(0);
     return;

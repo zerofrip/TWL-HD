@@ -41,8 +41,8 @@ LIT_TOKENS = (
 )
 
 GLNORMAL_ALLOWLIST = (
-    (os.path.join(ROOT, "arm9v2/source/demo_frame.cpp"), 84),
-    (os.path.join(ROOT, "arm9v2/source/demo_frame.cpp"), 372),
+    (os.path.join(ROOT, "arm9v2/source/demo_frame.cpp"), 88),
+    (os.path.join(ROOT, "arm9v2/source/demo_frame.cpp"), 376),
 )
 
 

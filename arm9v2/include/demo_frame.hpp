@@ -18,6 +18,11 @@ extern "C" {
 
 void twlhd_demo_draw_frame(unsigned angle);
 
+#if TWLHD_DEMO_TEXFMT
+/* Upload the texture-format grid (texels, 4x4 indices, palettes) once. */
+void twlhd_demo_texfmt_upload_textures(void);
+#endif
+
 #if TWLHD_DEMO_SCENE == 5
 /* Register the scene-5 texture/palette source arrays with the capture backend. */
 void twlhd_demo_scene5_register_sources(TwlhdTexSourceCtx *ctx);

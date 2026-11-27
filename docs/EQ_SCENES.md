@@ -742,3 +742,5 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 **Update (2026-11-26):** EQ-4zh added the `LIT=1/2` arm9v2 build switch and the host-side lighting oracle proof; report `docs/reports/eq4zh-lit-rom.md`.
 
 - EQ-4zi: real-hardware result for the LIT ROMs recorded in docs/reports/eq4zi-lit-hw-result.md.
+
+- EQ-4zj: DS-mode texture-format grid ROM (TEXFMT=1) built from tools/hw/gen_texfmt_rom_data.py; result in docs/reports/eq4zj-texfmt-hw-result.md once measured.

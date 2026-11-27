@@ -686,3 +686,5 @@ exit=0
 682 docs/reports/eq4ze-hw-coverage.md
 ```
 
+
+**Result (EQ-4zj):** the DS-mode texture-format grid (TEXFMT=1) and its hardware comparison are in `docs/reports/eq4zj-texfmt-hw-result.md`.

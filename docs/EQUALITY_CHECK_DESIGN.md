@@ -908,3 +908,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 **Update (2026-11-26):** EQ-4zh added the `LIT=1/2` arm9v2 build switch, the host-side stream/oracle proof (DeSmuME + `predict_lit.py` + Azahar/PICA + `compare_ppm.py`), and the owner console-run PLAN for DS-mode lighting; report `docs/reports/eq4zh-lit-rom.md`.
 
 - EQ-4zi: hardware measurement of the lighting scenes: docs/reports/eq4zi-lit-hw-result.md.
+
+- EQ-4zj: DS-mode texture-format hardware result: docs/reports/eq4zj-texfmt-hw-result.md.
