@@ -918,3 +918,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 - EQ-4zo: rendering differences and recommendations: docs/reports/eq4zo-render-differences.md.
 
 - EQ-4zp: culling in the host interpreter (opt-in, arm11 unchanged): docs/reports/eq4zp-cull-interpreter.md.
+
+- EQ-4zq: retail GX dump tool and the DeSmuME stack model option: docs/reports/eq4zq-retail-gx-dump.md.

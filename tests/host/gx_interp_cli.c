@@ -43,6 +43,7 @@ int main(int argc, char **argv) {
     int want_tex = 0;
     int want_eq2 = 0;
     int want_cull = 0;
+    int want_ds_stack = 0;
     const char *path = NULL;
 
     for (i = 1u; i < (uint32_t)argc; i++) {
@@ -50,6 +51,8 @@ int main(int argc, char **argv) {
             want_tex = 1;
         } else if (strcmp(argv[i], "--cull") == 0) {
             want_cull = 1;
+        } else if (strcmp(argv[i], "--ds-stack") == 0) {
+            want_ds_stack = 1;
         } else if (strcmp(argv[i], "--eq2") == 0) {
             want_eq2 = 1;
             want_tex = 1; /* the eq2 format always carries tex state */
@@ -61,7 +64,7 @@ int main(int argc, char **argv) {
         }
     }
     if (!path) {
-        fprintf(stderr, "usage: %s [--tex|--eq2] [--cull] <frame_v2.bin>\n", argv[0]);
+        fprintf(stderr, "usage: %s [--tex|--eq2] [--cull] [--ds-stack] <frame_v2.bin>\n", argv[0]);
         return 2;
     }
 
@@ -129,7 +132,8 @@ int main(int argc, char **argv) {
 
     gr = twlhd_gx_interpret_opts(&view, out, capacity, &out_count, &viewport,
                                  &stats, tex_out,
-                                 want_cull ? TWLHD_GX_OPT_CULL : 0u);
+                                 (want_cull ? TWLHD_GX_OPT_CULL : 0u) |
+                                 (want_ds_stack ? TWLHD_GX_OPT_DS_STACK : 0u));
 
     if (want_eq2) {
         printf("twlhd-eq2-clip 1\n");

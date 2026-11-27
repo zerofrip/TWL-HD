@@ -5663,6 +5663,125 @@ static void test_cull_degenerate_polygon_is_drawn(void) {
     CHECK_EQ_INT(g_st.culled_polygons, 0u);
 }
 
+/* ------------------------------------------------------------------------- */
+/* DeSmuME matrix stack model (TWLHD_GX_OPT_DS_STACK)                         */
+/* ------------------------------------------------------------------------- */
+
+static void add_probe_triangle(uint32_t *n) {
+    add_entry(n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(n, 0, 0, 0);
+    add_vtx_16(n, 0, 0, 0);
+    add_vtx_16(n, 0, 0, 0);
+    add_entry(n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+}
+
+static TwlhdGxResult run_probe(uint32_t n, uint32_t flags) {
+    TwlhdV2View view;
+    build_view(n, &view);
+    return twlhd_gx_interpret_opts(&view, g_out, 256u, &g_out_count, &g_vp,
+                                   &g_st, NULL, flags);
+}
+
+static void test_ds_stack_pop_zero_loads_the_top_slot(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_trans(&n, 4096u, 0u, 0u);                  /* current = T(1,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);      /* stack[0] = T, sp = 1 */
+    add_trans(&n, 4096u, 0u, 0u);                  /* current = T(2,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);       /* current = T(1,0,0), sp 0 */
+    add_trans(&n, 8192u, 0u, 0u);                  /* current = T(3,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 0u);       /* current = stack[0] */
+    add_probe_triangle(&n);
+    CHECK_EQ_INT(run_probe(n, TWLHD_GX_OPT_DS_STACK), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_NEAR(g_out[0].clip[0], 1.0, 1e-6);
+
+    /* Without the flag the same stream is a stack error (stricter model). */
+    memset(&g_st, 0, sizeof g_st);
+    CHECK_EQ_INT(run_probe(n, 0u), TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+}
+
+static void test_ds_stack_index_wraps_in_six_bits(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_trans(&n, 12288u, 0u, 0u);                 /* current = T(3,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_STORE, 31u);    /* slot 31 = T(3,0,0) */
+    add_trans(&n, 4096u, 0u, 0u);                  /* current = T(4,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);       /* sp 0 -> 63, slot 31 */
+    add_probe_triangle(&n);
+    CHECK_EQ_INT(run_probe(n, TWLHD_GX_OPT_DS_STACK), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_NEAR(g_out[0].clip[0], 3.0, 1e-6);
+
+    /* Negative: the default model rejects the store to slot 31 (capacity 31)
+     * and the pop below an empty stack. */
+    memset(&g_st, 0, sizeof g_st);
+    CHECK_EQ_INT(run_probe(n, 0u), TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+}
+
+static void test_ds_stack_store_restore_slot_31(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_trans(&n, 8192u, 0u, 0u);                  /* current = T(2,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_STORE, 31u);    /* slot 31 */
+    add_trans(&n, 4096u, 0u, 0u);                  /* current = T(3,0,0) */
+    add_entry(&n, TWLHD_V2_CMD_MTX_RESTORE, 31u);
+    add_probe_triangle(&n);
+    CHECK_EQ_INT(run_probe(n, TWLHD_GX_OPT_DS_STACK), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+    CHECK_NEAR(g_out[0].clip[0], 2.0, 1e-6);
+
+    /* Negative: the default model rejects slot 31 (capacity 31). */
+    memset(&g_st, 0, sizeof g_st);
+    CHECK_EQ_INT(run_probe(n, 0u), TWLHD_GX_ERR_STACK);
+    CHECK_EQ_INT(g_st.stack_errors, 1u);
+}
+
+static void test_ds_stack_projection_push_toggles(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);      /* second push: no error */
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_probe_triangle(&n);
+    CHECK_EQ_INT(run_probe(n, TWLHD_GX_OPT_DS_STACK), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.stack_errors, 0u);
+
+    /* Negative: the default model rejects the second push. */
+    memset(&g_st, 0, sizeof g_st);
+    CHECK_EQ_INT(run_probe(n, 0u), TWLHD_GX_ERR_STACK);
+}
+
+static void test_ds_stack_off_matches_default_on_valid_streams(void) {
+    uint32_t n = 0u;
+    TwlhdGxVertex first[3];
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_MTX_MODE, 1u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_PUSH, 0u);
+    add_trans(&n, 4096u, 0u, 0u);
+    add_entry(&n, TWLHD_V2_CMD_MTX_POP, 1u);
+    add_probe_triangle(&n);
+    CHECK_EQ_INT(run_probe(n, 0u), TWLHD_GX_OK);
+    memcpy(first, g_out, sizeof first);
+    memset(&g_st, 0, sizeof g_st);
+    CHECK_EQ_INT(run_probe(n, TWLHD_GX_OPT_DS_STACK), TWLHD_GX_OK);
+    CHECK(memcmp(first, g_out, sizeof first) == 0);
+}
+
 int main(void) {
     test_matrix_load_identity();
     test_report("gx_interp/matrix-load-identity");
@@ -5969,5 +6088,15 @@ int main(void) {
     test_report("gx_interp/cull-non-positive-w-is-drawn");
     test_cull_degenerate_polygon_is_drawn();
     test_report("gx_interp/cull-degenerate-polygon-is-drawn");
+    test_ds_stack_pop_zero_loads_the_top_slot();
+    test_report("gx_interp/ds-stack-pop-zero-loads-the-top-slot");
+    test_ds_stack_index_wraps_in_six_bits();
+    test_report("gx_interp/ds-stack-index-wraps-in-six-bits");
+    test_ds_stack_store_restore_slot_31();
+    test_report("gx_interp/ds-stack-store-restore-slot-31");
+    test_ds_stack_projection_push_toggles();
+    test_report("gx_interp/ds-stack-projection-push-toggles");
+    test_ds_stack_off_matches_default_on_valid_streams();
+    test_report("gx_interp/ds-stack-off-matches-default-on-valid-streams");
     return test_exit_code();
 }

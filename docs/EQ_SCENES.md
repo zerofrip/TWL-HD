@@ -752,3 +752,5 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 - EQ-4zo: decision document on the rendering differences found by the hardware comparisons: docs/reports/eq4zo-render-differences.md.
 
 - EQ-4zp: opt-in culling in the host interpreter: docs/reports/eq4zp-cull-interpreter.md.
+
+- EQ-4zq: GX frame dump from retail software (out-of-tree DeSmuME tool) and TWLHD_GX_OPT_DS_STACK: docs/reports/eq4zq-retail-gx-dump.md.

@@ -110,6 +110,7 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
 
 /* Option flags for twlhd_gx_interpret_opts(). */
 #define TWLHD_GX_OPT_CULL 0x1u
+#define TWLHD_GX_OPT_DS_STACK 0x2u
 
 /*
  * Same as twlhd_gx_interpret_ex(), with option flags.
@@ -122,6 +123,13 @@ TwlhdGxResult twlhd_gx_interpret_ex(const TwlhdV2View *view,
  *   BEGIN_VTXS assembles them, after the projection divide; polygons with a
  *   vertex at w <= 0 are drawn (not measured) and counted in cull_undecided.
  *   Without the flag every polygon is emitted as before.
+ *
+ * TWLHD_GX_OPT_DS_STACK: model the matrix stacks as DeSmuME does
+ *   (gfx3d.cpp:831-1012): a six-bit wrapping stack index, MTX_POP loads the
+ *   matrix at the resulting slot (also for a pop of 0), STORE/RESTORE index
+ *   modulo 32, no error return. Needed for captures of retail software,
+ *   which use these idioms; without the flag the stricter model (stack
+ *   errors) is unchanged.
  */
 TwlhdGxResult twlhd_gx_interpret_opts(const TwlhdV2View *view,
                                       TwlhdGxVertex *out,

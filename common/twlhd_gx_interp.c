@@ -48,7 +48,8 @@ typedef struct {
 } GxMatrix;
 
 typedef struct {
-    GxMatrix stack[31];     /* projection uses only index 0. */
+    GxMatrix stack[32];     /* projection uses only index 0; 32 slots for the
+                               DS stack model (TWLHD_GX_OPT_DS_STACK). */
     uint32_t sp;            /* next free slot; 0 means stack empty. */
     uint32_t capacity;      /* PROJ_STACK_CAP or POS_STACK_CAP. */
 } GxStack;
@@ -107,6 +108,7 @@ typedef struct {
     uint32_t pending_cull;  /* POLYGON_ATTR bits 6-7, default 3 (both faces). */
     uint32_t applied_cull;  /* copied from pending at BEGIN_VTXS. */
     int cull_enable;        /* TWLHD_GX_OPT_CULL. */
+    int ds_stack;           /* TWLHD_GX_OPT_DS_STACK. */
 
     /* Primitive assembly state. */
     int in_begin;
@@ -278,6 +280,20 @@ static GxMatrix *current_matrix(GxInterp *g) {
 static int stack_push(GxInterp *g) {
     GxStack *s = current_stack(g);
 
+    if (g->ds_stack) {
+        /* DeSmuME model (gfx3d.cpp:831-891): wrapping index, no error. */
+        if (g->mode == 0u || g->mode == 3u) {
+            matrix_copy(&s->stack[0], current_matrix(g));
+            s->sp = (s->sp + 1u) & 1u;
+            return 1;
+        }
+        matrix_copy(&s->stack[s->sp & 31u], current_matrix(g));
+        matrix_copy(&g->vec_stack.stack[s->sp & 31u], &g->vec);
+        s->sp = (s->sp + 1u) & 0x3Fu;
+        g->vec_stack.sp = s->sp;
+        return 1;
+    }
+
     /* Texture mode uses the one-entry _mtxStackTexture[0]; DeSmuME sets
      * gxstat.se on a second PUSH but keeps going (gfx3d.cpp:860-871). We keep
      * the pre-existing stricter behaviour: count a stack error and abort. */
@@ -299,6 +315,22 @@ static int stack_push(GxInterp *g) {
 static int stack_pop(GxInterp *g, int32_t n) {
     GxStack *s = current_stack(g);
     uint32_t new_sp;
+
+    if (g->ds_stack) {
+        /* DeSmuME model (gfx3d.cpp:893-950): the index wraps in six bits, the
+         * matrix at the resulting slot is loaded, errors only set a flag. */
+        if (g->mode == 0u || g->mode == 3u) {
+            s->sp ^= 1u;
+            matrix_copy(current_matrix(g), &s->stack[0]);
+            return 1;
+        }
+        new_sp = (s->sp - ((uint32_t)n & 0x3Fu)) & 0x3Fu;
+        matrix_copy(current_matrix(g), &s->stack[new_sp & 31u]);
+        matrix_copy(&g->vec, &g->vec_stack.stack[new_sp & 31u]);
+        s->sp = new_sp;
+        g->vec_stack.sp = new_sp;
+        return 1;
+    }
 
     if (g->mode == 0u || g->mode == 3u) {
         /* Projection and texture stacks are one entry deep; the parameter is
@@ -344,6 +376,11 @@ static int stack_store(GxInterp *g, uint32_t index) {
         return 1;
     }
 
+    if (g->ds_stack) {
+        matrix_copy(&s->stack[index & 31u], current_matrix(g));
+        matrix_copy(&g->vec_stack.stack[index & 31u], &g->vec);
+        return 1;
+    }
     if (index >= s->capacity) {
         g->stats->stack_errors++;
         return 0;
@@ -366,6 +403,11 @@ static int stack_restore(GxInterp *g, uint32_t index) {
         return 1;
     }
 
+    if (g->ds_stack) {
+        matrix_copy(current_matrix(g), &s->stack[index & 31u]);
+        matrix_copy(&g->vec, &g->vec_stack.stack[index & 31u]);
+        return 1;
+    }
     if (index >= s->capacity) {
         g->stats->stack_errors++;
         return 0;
@@ -1240,6 +1282,7 @@ TwlhdGxResult twlhd_gx_interpret_opts(const TwlhdV2View *view,
     g.pending_cull = 3u;   /* no-attr default: both faces (not measured). */
     g.applied_cull = 3u;
     g.cull_enable = (flags & TWLHD_GX_OPT_CULL) != 0u;
+    g.ds_stack = (flags & TWLHD_GX_OPT_DS_STACK) != 0u;
     g.rgba[3] = gx_alpha_float(g.applied_alpha);
 
     g.proj_stack.capacity = PROJ_STACK_CAP;
