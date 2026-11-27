@@ -491,6 +491,21 @@ static void draw_lit_e(void) {
                       lit_quads[i]);
     }
 }
+
+/* lit_f: diffuse factor probe (gen_lit_frames.py lit_f_entries). */
+static void draw_lit_f(void) {
+    static const uint8_t diff[4] = {17, 25, 26, 26};
+    static const uint8_t light[4] = {21, 31, 31, 26};
+    int i;
+
+    for (i = 0; i < 4; i++) {
+        glLight(0, RGB15(light[i], light[i], light[i]),
+                LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+        lit_material(RGB15(diff[i], diff[i], diff[i]), 0, 0, 0);
+        draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING,
+                      lit_quads[i]);
+    }
+}
 #endif
 
 #ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
@@ -553,8 +568,10 @@ void twlhd_demo_draw_frame(unsigned angle) {
     draw_lit_c();
 #elif TWLHD_DEMO_LIT == 4
     draw_lit_d();
-#else
+#elif TWLHD_DEMO_LIT == 5
     draw_lit_e();
+#else
+    draw_lit_f();
 #endif
 
     glFlush(0);

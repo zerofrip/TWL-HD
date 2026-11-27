@@ -1,0 +1,141 @@
+{
+  "background": {
+    "pixel_centre": [
+      12.0,
+      12.0
+    ],
+    "rgba8": [
+      0,
+      0,
+      0,
+      255
+    ]
+  },
+  "clear_colour": [
+    0,
+    0,
+    0,
+    255
+  ],
+  "mapping": "clipfix x'=hh*y+cy, y'=-0.8*(hw*x+cx); fb 240x400: fb_x=120*(x'+1), fb_y=200*(1-y'); top-screen PPM 400x240: sx=fb_y, sy=239-fb_x",
+  "quads": [
+    {
+      "clip_centre": [
+        -0.546875,
+        -0.3515625,
+        0.0,
+        1.0
+      ],
+      "index": 0,
+      "ndc_centre": [
+        -0.546875,
+        -0.3515625
+      ],
+      "pixel_centre": [
+        112.5,
+        161.1875
+      ],
+      "rgba8": [
+        90,
+        90,
+        90,
+        255
+      ]
+    },
+    {
+      "clip_centre": [
+        0.546875,
+        -0.3515625,
+        0.0,
+        1.0
+      ],
+      "index": 1,
+      "ndc_centre": [
+        0.546875,
+        -0.3515625
+      ],
+      "pixel_centre": [
+        287.5,
+        161.1875
+      ],
+      "rgba8": [
+        197,
+        197,
+        197,
+        255
+      ]
+    },
+    {
+      "clip_centre": [
+        -0.546875,
+        0.3515625,
+        0.0,
+        1.0
+      ],
+      "index": 2,
+      "ndc_centre": [
+        -0.546875,
+        0.3515625
+      ],
+      "pixel_centre": [
+        112.5,
+        76.8125
+      ],
+      "rgba8": [
+        206,
+        206,
+        206,
+        255
+      ]
+    },
+    {
+      "clip_centre": [
+        0.546875,
+        0.3515625,
+        0.0,
+        1.0
+      ],
+      "index": 3,
+      "ndc_centre": [
+        0.546875,
+        0.3515625
+      ],
+      "pixel_centre": [
+        287.5,
+        76.8125
+      ],
+      "rgba8": [
+        173,
+        173,
+        173,
+        255
+      ]
+    }
+  ],
+  "result": "OK",
+  "screen": {
+    "height": 240,
+    "width": 400
+  },
+  "stats": {
+    "capacity_dropped": 0,
+    "commands": 41,
+    "dropped_incomplete": 0,
+    "geometry_incomplete": 0,
+    "ignored_no_effect": 0,
+    "ignored_outside_begin": 0,
+    "quads_split": 4,
+    "raw_fifo_skipped": 0,
+    "stack_errors": 0,
+    "triangles_out": 8,
+    "unsupported": 0,
+    "vertices_in": 16
+  },
+  "viewport": {
+    "present": false,
+    "x1": 0,
+    "x2": 255,
+    "y1": 0,
+    "y2": 191
+  }
+}

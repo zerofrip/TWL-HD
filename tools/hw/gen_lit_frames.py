@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Generate the deterministic v2 frames for the Phase 5B-1 lighting test.
 
-Six frames are written into the output directory:
+Seven frames are written into the output directory:
 
   twlhd_frame_v2_lit_a.bin   four flat quads, one white directional light,
                              four different normals (incidence-angle sweep)
@@ -13,6 +13,7 @@ Six frames are written into the output directory:
   twlhd_frame_v2_lit_c.bin   diffuse+ambient rounding probe (four materials)
   twlhd_frame_v2_lit_d.bin   specular and two-light rounding probe
   twlhd_frame_v2_lit_e.bin   specular shininess probe
+  twlhd_frame_v2_lit_f.bin   diffuse factor probe
 
 BUILD/UNIT tooling only.  Stdlib only.  Nothing here contacts a console or a
 network address.  The frame layout follows the scene4_alpha 2x2 quad grid
@@ -54,6 +55,7 @@ FRAME_NAMES = (
     "twlhd_frame_v2_lit_c.bin",
     "twlhd_frame_v2_lit_d.bin",
     "twlhd_frame_v2_lit_e.bin",
+    "twlhd_frame_v2_lit_f.bin",
 )
 
 # scene4_alpha 2x2 grid (tests/host/test_demo_frame.cpp:925-930) scaled by
@@ -255,6 +257,24 @@ def lit_e_entries():
     return out
 
 
+# lit_f probes: (diffuse level, light level).  The diffuse-only term is
+# floor(D * L * fixed_diffuse / 2^17); each product D*L puts one level
+# boundary at a different fixed_diffuse value (4038.6, 4059.0, 4065.5, 4071.8),
+# so the four measured levels bracket the factor the hardware applies to a
+# normal that faces the light (the interpreter uses 4088).
+LIT_F_PROBES = ((17, 21), (25, 31), (26, 31), (26, 26))
+
+
+def lit_f_entries():
+    """Diffuse factor probe (EQ-4zi follow-up 3)."""
+    out = [(CMD_LIGHT_VECTOR, _vector_word(0, 0, LIGHT_Z))]
+    for corners, (diff, light) in zip(QUADS, LIT_F_PROBES):
+        out.append((CMD_LIGHT_COLOR, _rgb555(light, light, light)))
+        out.append((CMD_DIF_AMB, _dif_amb(_rgb555(diff, diff, diff), 0)))
+        _quad(out, 31, 0x1, NORMAL_FACING, corners)
+    return out
+
+
 def lit_ctl_entries():
     colours = (_rgb555(31, 0, 0), _rgb555(0, 31, 0),
                _rgb555(0, 0, 31), _rgb555(31, 31, 0))
@@ -271,6 +291,7 @@ _BUILDERS = {
     FRAME_NAMES[3]: lit_c_entries,
     FRAME_NAMES[4]: lit_d_entries,
     FRAME_NAMES[5]: lit_e_entries,
+    FRAME_NAMES[6]: lit_f_entries,
 }
 
 

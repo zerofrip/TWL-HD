@@ -77,7 +77,7 @@ FACT — `twlhd-lit4.nds` (`LIT=4`, scene `lit_d`; two lights in one direction,
 colours 31 and 20; shininess table 1,3,...,255; three captures, identical).
 Five-bit levels of the red channel:
 
-| Quad | Material / lights | floor of everything | measured |
+| Quad | Material / lights | one floor over everything | measured |
 |---|---|---|---|
 | 0 | ambient 1, specular 1, two lights | 3 | 3 (24) |
 | 1 | same, light 0 only | 1 | 1 (8) |
@@ -86,14 +86,20 @@ Five-bit levels of the red channel:
 
 Of the five candidate rules tried by arithmetic (floor per term, per light of
 the sum, floor of the sum over the lights with separate specular, ...), only
-"one floor over the specular, diffuse and ambient terms of all lights" fits
-quads 0, 1 and 3. `common/twlhd_gx_interp.c` now accumulates that sum and
-truncates once.
+"one floor over all terms of all lights" fits quads 0, 1 and 3; quad 2 is one
+level lower than that (19 predicted, 18 measured).
 
-UNEXPLAINED (one level): quad 2 is one level below that model. HYPOTHESIS,
-UNVERIFIED: a slightly smaller fixed_diffuse (about 4062 instead of 4088)
-would fit quad 2 and the lit1 quad 0 together; this needs a diffuse-only
-probe. A smaller specular shininess is rejected by `lit_e`.
+HYPOTHESIS (fit, UNVERIFIED as a hardware property): every term of every
+light (specular, diffuse, ambient) is truncated to 1/16 of a 5-bit level
+(`>>13` at the `>>17` scale), the terms are summed over the lights and the sum
+is truncated to whole levels. Among the granularities 1/8, 1/16 and 1/32 only
+1/16 reproduces every measured quad of lit1..lit6 (1/8 gives 2 for lit_d quad
+0, 1/32 gives 19 for lit_d quad 2). `common/twlhd_gx_interp.c` implements this
+model; with it all 21 measured quads of lit1..lit6 deviate by at most 4
+levels of 255 (FACT: red/blue at most 1, green at most 4, the green offset
+being presumably the capture path, unverified). It is a fit through 21
+quads, not a documented property; a quad with several terms whose fractions
+fall differently would test it further.
 
 FACT — `twlhd-lit5.nds` (`LIT=5`, scene `lit_e`; specular only, one light,
 product of specular and light levels chosen so the level boundaries sit at
@@ -101,15 +107,21 @@ shininess 3964, 3985, 3998 and 4017): measured levels 16, 19, 23, 19, all on
 the "shininess >= 4017" side, so the applied shininess for a normal facing the
 light is not below 4017; the interpreter value 4080 fits.
 
+FACT — `twlhd-lit6.nds` (`LIT=6`, scene `lit_f`; diffuse only, one light,
+products of diffuse and light levels put boundaries at fixed_diffuse 4039,
+4059, 4066 and 4072): measured levels 11, 24, 25, 21, all on the upper side,
+so the factor is not below 4072; the interpreter value 4088 fits. A smaller
+diffuse factor (the idea tried for lit_d quad 2) is rejected.
+
 ## 4. Reproduction
 
 Fixtures: `tools/fixtures/eq4_hw_lit/` (README lists SHA-256). Test:
 `make test-eq4zi-lit-hw` (also part of `make test`). The test pins the
-measured and expected values, requires PASS at tolerance 4, and requires
+measured and expected values, requires PASS at tolerance 4 on all six captures, and requires
 failure at tolerance 3, with a swapped expectation and with the former
 separate-truncation expectation.
 
 ## 5. Not covered
 
-The one-level lit_d quad 2 deviation; scissor/over-viewport geometry; texture
+The 1/16-level truncation as a hardware property (only a fit); scissor/over-viewport geometry; texture
 formats; MODULATE; Gouraud; back-face culling; the stray pixel at (0,239).

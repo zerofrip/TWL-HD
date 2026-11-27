@@ -522,21 +522,22 @@ static void gx_compute_normal_colour(GxInterp *g, uint32_t param) {
         }
 
         for (c = 0; c < 3u; c++) {
-            /* Real DS hardware (EQ-4zi lit_c/lit_d, three captures each):
-             * the specular, diffuse and ambient terms of every enabled
-             * light are accumulated at full precision and truncated once
-             * (>>17), not per term and not per light. ambient*light<<12
-             * is the former ambient*light>>5 at the same scale. The
-             * measured sums fit this model except one lit_d quad (two
-             * lights, diffuse 8, specular 4) that is one level lower than
-             * the model; see docs/reports/eq4zi-lit-hw-result.md. */
-            acc[c] += (int64_t)specular[c] * light[c] * shininess +
-                      (int64_t)diffuse[c] * light[c] * fixed_diffuse +
-                      ((int64_t)ambient[c] * light[c] << 12);
+            /* Real DS hardware (EQ-4zi lit_c..lit_f, three captures each):
+             * the specular, diffuse and ambient term of every enabled
+             * light is truncated to 1/16 of a 5-bit level (>>13), the terms
+             * of all lights are summed, and the sum is truncated to whole
+             * levels (>>4). ambient*light<<12 is the former
+             * ambient*light>>5 at the >>17 scale. The 1/16 step is the
+             * only granularity that fits every measured quad (1/8 and
+             * 1/32 do not); it is a fit, not a documented hardware
+             * property (HYPOTHESIS). */
+            acc[c] += (((int64_t)specular[c] * light[c] * shininess) >> 13) +
+                      (((int64_t)diffuse[c] * light[c] * fixed_diffuse) >> 13) +
+                      (((int64_t)ambient[c] * light[c] << 12) >> 13);
         }
     }
 
-    for (c = 0; c < 3u; c++) vc[c] += acc[c] >> 17;
+    for (c = 0; c < 3u; c++) vc[c] += acc[c] >> 4;
 
     for (c = 0; c < 3u; c++) {
         if (vc[c] > 31) vc[c] = 31;

@@ -173,7 +173,7 @@ CXXFLAGS	+=	-DTWLHD_DEMO_BLEND=1
 endif
 
 #---------------------------------------------------------------------------------
-# Optional DS-mode lighting build: LIT=1..5 draws the lit_a / lit_b / lit_c / lit_d / lit_e quad
+# Optional DS-mode lighting build: LIT=1..6 draws the lit_a / lit_b / lit_c / lit_d / lit_e / lit_f quad
 # layout from tools/hw/gen_lit_frames.py for hardware comparison. Unset/empty
 # leaves TARGET, BUILD and CFLAGS untouched so the default ROM is byte-identical.
 # This block runs after AUTODUMP/VP/CUBES/SCENE/BLEND and before STATIC_ANGLE/
@@ -182,9 +182,9 @@ endif
 #---------------------------------------------------------------------------------
 LIT_STRIPPED	:=	$(strip $(LIT))
 ifneq ($(LIT_STRIPPED),)
-LIT_OK := $(shell echo '$(LIT_STRIPPED)' | grep -Eq '^[12345]$$' && echo ok)
+LIT_OK := $(shell echo '$(LIT_STRIPPED)' | grep -Eq '^[123456]$$' && echo ok)
 ifeq ($(LIT_OK),)
-$(error LIT must be empty or 1..5 (got: $(LIT)))
+$(error LIT must be empty or 1..6 (got: $(LIT)))
 endif
 TARGET		:=	$(TARGET)-lit$(LIT_STRIPPED)
 BUILD		:=	$(BUILD)-lit$(LIT_STRIPPED)

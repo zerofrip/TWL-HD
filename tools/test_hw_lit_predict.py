@@ -136,15 +136,19 @@ class LitPredictTest(unittest.TestCase):
 
     def test_lit_d_and_e_all_terms_summed_before_truncation(self):
         # Levels: one truncation over the specular, diffuse and ambient terms
-        # of all lights.  Hardware (EQ-4zi lit_d) measured 3, 1, 18, 11; the
-        # model gives 3, 1, 19, 11 (quad 2 is one level high, documented).
+        # of all lights, each term first truncated to 1/16 level.  Hardware
+        # (EQ-4zi lit_d) measured the levels 3, 1, 18, 11.
         doc = self.docs[gen.FRAME_NAMES[4]]
         self.assertEqual([q["rgba8"][0] for q in doc["quads"]],
-                         [25, 8, 156, 90])
+                         [25, 8, 148, 90])
         # lit_e: specular-only levels 16, 19, 23, 19, matching hardware.
         doc = self.docs[gen.FRAME_NAMES[5]]
         self.assertEqual([q["rgba8"][0] for q in doc["quads"]],
                          [132, 156, 189, 156])
+        # lit_f: diffuse-only levels 11, 24, 25, 21, matching hardware.
+        doc = self.docs[gen.FRAME_NAMES[6]]
+        self.assertEqual([q["rgba8"][0] for q in doc["quads"]],
+                         [90, 197, 206, 173])
 
     def test_lit_a_incidence_ordering(self):
         quads = self.doc(0)["quads"]

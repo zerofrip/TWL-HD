@@ -22,7 +22,7 @@ DEVKIT = bool(os.environ.get("DEVKITARM") and os.environ.get("DEVKITPRO"))
 # test-arm9v2-lit target.
 DISCOVER_SKIP = os.environ.get("ARM9V2_LIT_DISCOVER_SKIP") is not None
 
-ERROR_TEXT = "LIT must be empty or 1..5"
+ERROR_TEXT = "LIT must be empty or 1..6"
 
 LIT_TOKENS = (
     "glLight",
@@ -176,6 +176,13 @@ class LitMakefileTest(unittest.TestCase):
                       result.stdout + result.stderr)
         self.assertIn("-DTWLHD_DEMO_LIT=5", result.stdout + result.stderr)
 
+    def test_lit_six_names_lit6_rom(self):
+        result = dry_run("LIT=6")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("twlhd-arm9v2-lit6.nds",
+                      result.stdout + result.stderr)
+        self.assertIn("-DTWLHD_DEMO_LIT=6", result.stdout + result.stderr)
+
     def test_lit_composes_with_autodump(self):
         result = dry_run("LIT=1", "AUTODUMP_FRAME=240")
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -207,7 +214,7 @@ class LitMakefileTest(unittest.TestCase):
                          result.stdout + result.stderr)
 
     def test_invalid_values_fail_with_a_clear_error(self):
-        for value in ("0", "6", "abc", "-1"):
+        for value in ("0", "7", "abc", "-1"):
             with self.subTest(value=value):
                 result = dry_run("LIT=" + value)
                 self.assertNotEqual(result.returncode, 0, result.stdout)
@@ -247,8 +254,9 @@ class LitMakefileTest(unittest.TestCase):
         # draw_lit_c: 1 glLight + 4 POLY
         # draw_lit_d: 2 glLight + 1 GFX_SHININESS + 4 POLY
         # draw_lit_e: 1 GFX_SHININESS + 1 glLight + 1 POLY (loop body; 3 sites)
-        self.assertEqual(len(all_sites), 31,
-                         "expected exactly 31 guarded lighting-port sites")
+        # draw_lit_f: 1 glLight + 1 POLY (loop body; 2 sites)
+        self.assertEqual(len(all_sites), 33,
+                         "expected exactly 33 guarded lighting-port sites")
         # glNormal is allowed only for the cube and the lit helper.
         self.assertEqual(sorted((p, l) for p, l, _ in glnormal_sites),
                          sorted(GLNORMAL_ALLOWLIST),
@@ -270,7 +278,7 @@ class LitMakefileTest(unittest.TestCase):
         mutated = list(lines)
         mutated.insert(insert_idx, "    glLight(0, 0, 0, 0, 0);")
         sites, violations = scan_unguarded_lit_sites(mutated)
-        self.assertEqual(len(sites), 32)
+        self.assertEqual(len(sites), 34)
         self.assertEqual(len(violations), 1,
                          "mutated copy should produce exactly one violation")
         self.assertIn("glLight", violations[0][2])
