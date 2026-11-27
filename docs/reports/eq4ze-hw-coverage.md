@@ -432,6 +432,8 @@ Proposal, not applied — `LIT` switch (F13 shape):
 * **Deviation risk:** MEDIUM — the equations are DeSmuME-derived and only the
   PICA arm (Run 18) was measured, never the DS.
 
+**Implemented (2026-11-26):** EQ-4zh added the `LIT=1/2` switch and the host-side proof; the console capture is still PLAN; see `docs/reports/eq4zh-lit-rom.md`.
+
 ### 3. Partial viewport
 
 * **ROM variant:** existing switches, no new code:

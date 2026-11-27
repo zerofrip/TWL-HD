@@ -156,8 +156,8 @@ endif
 # draw path so a ROM can be compared with the blend bit set (EQ-4u §6.3
 # falsification ROM). Unset/empty leaves TARGET, BUILD and CFLAGS untouched so
 # default ROMs stay byte-identical. This block runs after AUTODUMP/VP/CUBES/SCENE
-# and before STATIC_ANGLE/DIAGSCREEN, so suffixes compose as
-# -autodump...-cN-sN-bl-stN-diagN (e.g. twlhd-arm9v2-autodump-s4-bl-st30).
+# and before LIT/STATIC_ANGLE/DIAGSCREEN, so suffixes compose as
+# -autodump...-cN-sN-bl-litN-stN-diagN (e.g. twlhd-arm9v2-autodump-s4-bl-st30).
 #---------------------------------------------------------------------------------
 BLEND_STRIPPED	:=	$(strip $(BLEND))
 ifneq ($(BLEND_STRIPPED),)
@@ -173,11 +173,32 @@ CXXFLAGS	+=	-DTWLHD_DEMO_BLEND=1
 endif
 
 #---------------------------------------------------------------------------------
+# Optional DS-mode lighting build: LIT=1 or LIT=2 draws the lit_a / lit_b quad
+# layout from tools/hw/gen_lit_frames.py for hardware comparison. Unset/empty
+# leaves TARGET, BUILD and CFLAGS untouched so the default ROM is byte-identical.
+# This block runs after AUTODUMP/VP/CUBES/SCENE/BLEND and before STATIC_ANGLE/
+# DIAGSCREEN, so suffixes compose as
+# -autodump...-cN-sN-bl-litN-stN-diagN.
+#---------------------------------------------------------------------------------
+LIT_STRIPPED	:=	$(strip $(LIT))
+ifneq ($(LIT_STRIPPED),)
+LIT_OK := $(shell echo '$(LIT_STRIPPED)' | grep -Eq '^[12]$$' && echo ok)
+ifeq ($(LIT_OK),)
+$(error LIT must be empty, 1, or 2 (got: $(LIT)))
+endif
+TARGET		:=	$(TARGET)-lit$(LIT_STRIPPED)
+BUILD		:=	$(BUILD)-lit$(LIT_STRIPPED)
+CFLAGS		+=	-DTWLHD_DEMO_LIT=$(LIT_STRIPPED)
+# CXXFLAGS was expanded from CFLAGS with := above, so it needs the define too.
+CXXFLAGS	+=	-DTWLHD_DEMO_LIT=$(LIT_STRIPPED)
+endif
+
+#---------------------------------------------------------------------------------
 # Optional fixed-angle build: STATIC_ANGLE=0..359 replaces the frame-counter
 # modelview rotation with a fixed angle (degrees) in every draw path, so every
 # frame is identical. Unset/empty leaves TARGET, BUILD and CFLAGS untouched so
 # the default ROM is byte-identical. This block runs after the AUTODUMP, VP,
-# CUBES and SCENE blocks, so the suffixes compose; the define applies to the
+# CUBES, SCENE, BLEND and LIT blocks, so the suffixes compose; the define applies to the
 # cube baseline, SCENE=1..4, CUBES>1 and the textured SCENE=5.
 # The DS binary angle convention is 32768 == 360 degrees (main.cpp:262-263),
 # so the source converts degrees to binary units with truncation:
@@ -244,7 +265,7 @@ $(shell mkdir -p $(BUILD))
 
 # make cannot see -D changes in the object prerequisites, so record the define
 # set in the variant BUILD directory and drop stale objects when it changes.
-TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_BLEND=$(BLEND_STRIPPED) TWLHD_DEMO_STATIC_ANGLE=$(STATIC_ANGLE_STRIPPED) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
+TWLHD_FLAGS_STAMP := AUTODUMP=$(AUTODUMP_FRAME_STRIPPED) $(VP_FLAGS) TWLHD_DEMO_CUBES=$(if $(CUBES_STRIPPED),$(CUBES_STRIPPED),1) TWLHD_DEMO_SCENE=$(if $(SCENE_STRIPPED),$(SCENE_STRIPPED),0) TWLHD_DEMO_BLEND=$(BLEND_STRIPPED) TWLHD_DEMO_LIT=$(LIT_STRIPPED) TWLHD_DEMO_STATIC_ANGLE=$(STATIC_ANGLE_STRIPPED) TWLHD_DEMO_DIAGSCREEN=$(DIAGSCREEN_STRIPPED)
 ifneq ($(strip $(TWLHD_FLAGS_STAMP)),$(strip $(shell cat $(BUILD)/flags.stamp 2>/dev/null)))
 $(shell rm -f $(BUILD)/*.o $(BUILD)/*.d)
 endif
@@ -311,6 +332,8 @@ clean:
 	@rm -f twlhd-arm9v2*st[0-9]*.elf twlhd-arm9v2*st[0-9]*.nds twlhd-arm9v2*st[0-9]*.arm9 twlhd-arm9v2*st[0-9]*.guard twlhd-arm9v2*st[0-9]*.guard.nm twlhd-arm9v2*st[0-9]*.map
 	@rm -fr build-bl build-*bl*
 	@rm -f twlhd-arm9v2*-bl*.elf twlhd-arm9v2*-bl*.nds twlhd-arm9v2*-bl*.arm9 twlhd-arm9v2*-bl*.guard twlhd-arm9v2*-bl*.guard.nm twlhd-arm9v2*-bl*.map
+	@rm -fr build-lit* build-*lit*
+	@rm -f twlhd-arm9v2*-lit*.elf twlhd-arm9v2*-lit*.nds twlhd-arm9v2*-lit*.arm9 twlhd-arm9v2*-lit*.guard twlhd-arm9v2*-lit*.guard.nm twlhd-arm9v2*-lit*.map
 
 #---------------------------------------------------------------------------------
 else

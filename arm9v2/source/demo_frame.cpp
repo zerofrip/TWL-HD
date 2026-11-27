@@ -14,6 +14,10 @@
 #define TWLHD_DEMO_DIAGSCREEN 0
 #endif
 
+#ifndef TWLHD_DEMO_LIT
+#define TWLHD_DEMO_LIT 0
+#endif
+
 #include "demo_frame.hpp"
 
 #if TWLHD_DEMO_DIAGSCREEN == 2 || TWLHD_DEMO_DIAGSCREEN >= 5
@@ -309,6 +313,120 @@ static void draw_scene_alpha_quads(void) {
 #endif
 #endif
 
+#if TWLHD_DEMO_LIT
+/*
+ * DS-mode lighting reproduction for EQ-4zh.  Constants are copied verbatim from
+ * tools/hw/gen_lit_frames.py.
+ *
+ * glLight(), glNormal() and glPolyFmt() are libnds static-inline helpers, so
+ * they expand through the recording GFX_* proxy and stay in the captured v2
+ * stream.
+ *
+ * glMaterialf() is only declared out-of-line in libnds (videoGL.h:523) and
+ * glMaterialShinyness() installs a fixed 0,2,4,...,254 ramp out-of-line
+ * (videoGL.h:727-740).  No libnds material API therefore goes through the
+ * recording proxy; both the material words (GFX_DIFFUSE_AMBIENT and
+ * GFX_SPECULAR_EMISSION) and the custom 1,3,5,...,255 shininess ramp are
+ * emitted through the proxy directly.
+ */
+static const int16_t lit_quads[4][4][2] = {
+    {{-3840, -2560}, {-640, -2560}, {-640, -320}, {-3840, -320}},
+    {{640, -2560}, {3840, -2560}, {3840, -320}, {640, -320}},
+    {{-3840, 320}, {-640, 320}, {-640, 2560}, {-3840, 2560}},
+    {{640, 320}, {3840, 320}, {3840, 2560}, {640, 2560}},
+};
+
+static const uint32_t LIT_NORMAL_FACING = 0x1FF00000u;
+static const uint32_t LIT_NORMAL_60 = (256u << 20) | 443u;
+static const uint32_t LIT_NORMAL_GRAZING = 511u;
+static const uint32_t LIT_NORMAL_AWAY = 513u << 20;
+
+static const uint32_t LIT_SHININESS[32] = {
+    0x07050301u, 0x0F0D0B09u, 0x17151311u, 0x1F1D1B19u,
+    0x27252321u, 0x2F2D2B29u, 0x37353331u, 0x3F3D3B39u,
+    0x47454341u, 0x4F4D4B49u, 0x57555351u, 0x5F5D5B59u,
+    0x67656361u, 0x6F6D6B69u, 0x77757371u, 0x7F7D7B79u,
+    0x87858381u, 0x8F8D8B89u, 0x97959391u, 0x9F9D9B99u,
+    0xA7A5A3A1u, 0xAFADABA9u, 0xB7B5B3B1u, 0xBFBDBBB9u,
+    0xC7C5C3C1u, 0xCFCDCBC9u, 0xD7D5D3D1u, 0xDFDDDBD9u,
+    0xE7E5E3E1u, 0xEFEDEBE9u, 0xF7F5F3F1u, 0xFFFDFBF9u,
+};
+
+/* Light vectors from gen_lit_frames.py are 20.12 fixed point; glLight takes
+ * the raw 10-bit field, so each component is divided by 8 (exact, all values
+ * are multiples of 8). */
+static const v10 LIT_LIGHT0_X = 0;
+static const v10 LIT_LIGHT0_Y = 0;
+static const v10 LIT_LIGHT0_Z = -511;  /* -4088 / 8 */
+static const v10 LIT_LIGHT1_X = 256;   /*  2048 / 8 */
+static const v10 LIT_LIGHT1_Y = 0;
+static const v10 LIT_LIGHT1_Z = -443;  /* -3544 / 8 */
+
+static void draw_lit_quad(uint32_t alpha, uint32_t light_mask,
+                          uint32_t normal, const int16_t corners[4][2]) {
+    int i;
+
+    glPolyFmt(POLY_ALPHA(alpha) | POLY_CULL_NONE | light_mask);
+    glBegin(GL_QUADS);
+    glNormal(normal);
+    for (i = 0; i < 4; i++) {
+        glVertex3v16((v16)corners[i][0], (v16)corners[i][1], 0);
+    }
+    glEnd();
+}
+
+static void lit_material(uint32_t diffuse, uint32_t ambient,
+                         uint32_t specular, uint32_t emission) {
+    /* glMaterialf() is out-of-line in libnds, so it does not go through the recording proxy. */
+    GFX_DIFFUSE_AMBIENT = (ambient << 16) | diffuse;
+    GFX_SPECULAR_EMISSION = (emission << 16) | specular;
+}
+
+static void draw_lit_a(void) {
+    glLight(0, RGB15(31, 31, 31),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+    lit_material(RGB15(22, 22, 22), RGB15(4, 4, 4), 0, 0);
+
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[0]);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_60, lit_quads[1]);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_GRAZING, lit_quads[2]);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_AWAY, lit_quads[3]);
+}
+
+static void draw_lit_b(void) {
+    int i;
+
+    glLight(0, RGB15(31, 0, 0),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+    glLight(1, RGB15(0, 0, 31),
+            LIT_LIGHT1_X, LIT_LIGHT1_Y, LIT_LIGHT1_Z);
+
+    /* quad 0: diffuse + ambient lit by the red light */
+    lit_material(RGB15(22, 22, 22), RGB15(4, 4, 4), 0, 0);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[0]);
+
+    /* quad 1: emission only */
+    lit_material(0, 0, 0, RGB15(4, 28, 4));
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_AWAY, lit_quads[1]);
+
+    /* quad 2: specular through the shininess table, white light */
+    lit_material(0, 0, RGB15(31, 31, 31) | BIT(15), 0);
+    glLight(0, RGB15(31, 31, 31),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+    for (i = 0; i < 32; i++) {
+        GFX_SHININESS = LIT_SHININESS[i];
+    }
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0, LIT_NORMAL_FACING, lit_quads[2]);
+
+    /* quad 3: two lights from different directions */
+    lit_material(RGB15(22, 22, 22), 0, 0, 0);
+    glLight(0, RGB15(31, 0, 0),
+            LIT_LIGHT0_X, LIT_LIGHT0_Y, LIT_LIGHT0_Z);
+    draw_lit_quad(31, POLY_FORMAT_LIGHT0 | POLY_FORMAT_LIGHT1,
+                  LIT_NORMAL_FACING, lit_quads[3]);
+}
+#endif
+
 #ifdef TWLHD_DEMO_STATIC_ANGLE_DEG
 /* Fixed modelview angle for every draw path (STATIC_ANGLE=0..359). */
 #define TWLHD_DEMO_STATIC_ANGLE_BIN \
@@ -343,6 +461,29 @@ void twlhd_demo_draw_frame(unsigned angle) {
 
     simple_tri_rotateX += 3.0f;
     simple_tri_rotateY += 3.0f;
+
+    glFlush(0);
+    return;
+#endif
+#if TWLHD_DEMO_LIT
+    /* Static lit scene; rotation is deliberately absent. */
+    glEnable(GL_ANTIALIAS);
+    glClearColor(0, 0, 0, 31);
+    glClearPolyID(63);
+    glClearDepth(GL_MAX_DEPTH);
+    glViewport(TWLHD_DEMO_VP_X1, TWLHD_DEMO_VP_Y1,
+               TWLHD_DEMO_VP_X2, TWLHD_DEMO_VP_Y2);
+
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+#if TWLHD_DEMO_LIT == 1
+    draw_lit_a();
+#else
+    draw_lit_b();
+#endif
 
     glFlush(0);
     return;

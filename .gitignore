@@ -30,6 +30,8 @@ arm9v2/build-diag*/
 arm9v2/build-*-diag*/
 arm9v2/build-bl/
 arm9v2/build-*bl*/
+arm9v2/build-lit*/
+arm9v2/build-*lit*/
 *.guard.nm
 
 arm11/build-diag/

@@ -738,3 +738,5 @@ fixtures: `tools/eq4y_gate_hw/`. Report: `docs/reports/eq4y-gate-hw-result.md`.
 **Update (2026-11-26):** EQ-4zf measured the 1-px `hline`/`vline` fill rule on the committed hardware capture, DeSmuME and our render (offline; no console, no production source change): `docs/reports/eq4zf-1px-lines.md`.
 
 **Update (2026-11-26):** EQ-4zg measured the partial viewport `(32,96)-(159,191)` on hardware, DeSmuME and our render (offline; no console, no production source change): fixtures/tests `tools/eq4_hw_vp/`, report `docs/reports/eq4zg-partial-viewport.md`.
+
+**Update (2026-11-26):** EQ-4zh added the `LIT=1/2` arm9v2 build switch and the host-side lighting oracle proof; report `docs/reports/eq4zh-lit-rom.md`.
