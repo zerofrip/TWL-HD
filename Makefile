@@ -693,6 +693,11 @@ test-eq4w-blend-hw:
 test-eq4zg-vp:
 	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4_hw_vp -p 'test_*.py'
 
+# EQ-4zi DS-mode lighting hardware fixtures (tools/eq4_hw_lit/). Discovered
+# explicitly (no __init__.py).
+test-eq4zi-lit-hw:
+	PYTHONDONTWRITEBYTECODE=1 python3 -B -I -m unittest discover -s tools/eq4_hw_lit -p 'test_*.py'
+
 # EQ-4y arm11 blend-gate hardware fixtures (tools/eq4y_gate_hw/). Discovered
 # explicitly: the aggregate pass below does not descend into tools/eq4y_gate_hw
 # (no __init__.py).
@@ -736,7 +741,7 @@ test: host-test tests/host/build/gx_interp_cli tests/host/build/tex_decode_cli \
 	test-fit-mapping test-cc3dsfs test-ds-scale-test test-ds-vtxcolor-test \
 	test-ds-alpha-test test-ds-edge-test test-eq4o-hw-rows \
 	test-eq4w-blend-hw test-eq4y-gate-hw test-eq4za-clear-hw \
-	test-eq4zb-blend-model test-eq4zc-alpha-sweep test-eq4zd-sweep-hw test-eq4zg-vp \
+	test-eq4zb-blend-model test-eq4zc-alpha-sweep test-eq4zd-sweep-hw test-eq4zg-vp test-eq4zi-lit-hw \
 	test-azahar-presentation
 	EQ2_DISCOVER_SKIP=1 EQ3_DISCOVER_SKIP=1 EQ_SCENES_DISCOVER_SKIP=1 \
 	ARM9V2_STATIC_DISCOVER_SKIP=1 ARM9V2_BLEND_DISCOVER_SKIP=1 ARM9V2_LIT_DISCOVER_SKIP=1 EQ4_HW_COMPARE_DISCOVER_SKIP=1 \

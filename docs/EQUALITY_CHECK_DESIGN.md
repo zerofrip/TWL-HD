@@ -906,3 +906,5 @@ DeSmuME (`$HOME/3ds/desmume/desmume/src`, revision `fc504ee0`):
 **Update (2026-11-26):** EQ-4zg measured the partial viewport `(32,96)-(159,191)` on hardware, DeSmuME and our render (offline; no console, no production source change): no bleed outside the viewport in any arm; the `bbox_dev_top=6` FAIL is the known s4 alpha-0 outline difference, not placement; fixtures/tests `tools/eq4_hw_vp/`, report `docs/reports/eq4zg-partial-viewport.md`.
 
 **Update (2026-11-26):** EQ-4zh added the `LIT=1/2` arm9v2 build switch, the host-side stream/oracle proof (DeSmuME + `predict_lit.py` + Azahar/PICA + `compare_ppm.py`), and the owner console-run PLAN for DS-mode lighting; report `docs/reports/eq4zh-lit-rom.md`.
+
+- EQ-4zi: hardware measurement of the lighting scenes: docs/reports/eq4zi-lit-hw-result.md.
