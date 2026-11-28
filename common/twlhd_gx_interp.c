@@ -1368,6 +1368,29 @@ TwlhdGxResult twlhd_gx_interpret_opts(const TwlhdV2View *view,
     return TWLHD_GX_OK;
 }
 
+TwlhdGxResult twlhd_gx_interpret_auto(const TwlhdV2View *view,
+                                      TwlhdGxVertex *out,
+                                      uint32_t out_capacity_vertices,
+                                      uint32_t *out_vertex_count,
+                                      TwlhdGxViewport *viewport,
+                                      TwlhdGxStats *stats,
+                                      TwlhdGxTexVertex *tex_out,
+                                      uint32_t flags, uint32_t *used_flags) {
+    TwlhdGxResult r = twlhd_gx_interpret_opts(view, out, out_capacity_vertices,
+                                              out_vertex_count, viewport, stats,
+                                              tex_out, flags);
+
+    if (used_flags) *used_flags = flags;
+    if (r == TWLHD_GX_ERR_CAPACITY && (flags & TWLHD_GX_OPT_CULL) == 0u) {
+        flags |= TWLHD_GX_OPT_CULL;
+        r = twlhd_gx_interpret_opts(view, out, out_capacity_vertices,
+                                    out_vertex_count, viewport, stats, tex_out,
+                                    flags);
+        if (used_flags) *used_flags = flags;
+    }
+    return r;
+}
+
 const char *twlhd_gx_result_string(TwlhdGxResult result) {
     switch (result) {
     case TWLHD_GX_OK:         return "OK";

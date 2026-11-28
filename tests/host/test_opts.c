@@ -153,8 +153,11 @@ static void test_arm11_wiring(void) {
     CHECK_EQ_INT(count_substr(buf, "twlhd_opts_parse("), 1);
     CHECK_EQ_INT(count_substr(buf, "static uint32_t g_gx_opts = TWLHD_ARM11_GX_OPTS;"), 1);
     /* The interpreter is called with the runtime mask, not the constant. */
-    CHECK_EQ_INT(count_substr(buf, "                                            g_gx_opts);"), 1);
+    CHECK_EQ_INT(count_substr(buf, "twlhd_gx_interpret_auto("), 1);
+    CHECK_EQ_INT(count_substr(buf, "g_gx_opts, &used_gx_opts);"), 1);
+    CHECK_EQ_INT(count_substr(buf, "twlhd_gx_interpret_opts("), 0);
     CHECK_EQ_INT(count_substr(buf, "TWLHD_ARM11_GX_OPTS);"), 0);
+    CHECK_EQ_INT(count_substr(buf, "renderer_trace(\"auto cull\");"), 1);
     /* The file is re-read on every frame load. */
     CHECK_EQ_INT(count_substr(buf, "    load_opts_file();\n"), 1);
     test_report("opts/arm11-wiring");

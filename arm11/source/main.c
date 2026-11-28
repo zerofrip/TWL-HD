@@ -347,6 +347,7 @@ static int load_sd_frame(const char *path,
     if (format == TWLHD_FILE_V2) {
         TwlhdV2Result v2_result;
         TwlhdGxResult gx_result;
+        uint32_t used_gx_opts = 0u;
         uint32_t vertex_count;
 
         v2_result = twlhd_v2_parse(g_frame_bytes, (size_t)size, &g_v2view);
@@ -356,11 +357,14 @@ static int load_sd_frame(const char *path,
             return -1;
         }
 
-        gx_result = twlhd_gx_interpret_opts(&g_v2view, g_clip_vertices,
+        gx_result = twlhd_gx_interpret_auto(&g_v2view, g_clip_vertices,
                                             CLIP_VERTEX_CAPACITY,
                                             &vertex_count, out_viewport,
                                             out_gx_stats, g_tex_vertices,
-                                            g_gx_opts);
+                                            g_gx_opts, &used_gx_opts);
+        if (used_gx_opts != g_gx_opts) {
+            renderer_trace("auto cull");
+        }
         if (gx_result != TWLHD_GX_OK) {
             snprintf(g_status, sizeof g_status,
                      "gx:%s s%lu c%lu i%lu",

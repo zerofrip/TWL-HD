@@ -140,6 +140,26 @@ TwlhdGxResult twlhd_gx_interpret_opts(const TwlhdV2View *view,
                                       TwlhdGxTexVertex *tex_out,
                                       uint32_t flags);
 
+/*
+ * twlhd_gx_interpret_opts() with an overflow fallback: when the interpretation
+ * with `flags` fails with TWLHD_GX_ERR_CAPACITY and TWLHD_GX_OPT_CULL is not
+ * set, the frame is interpreted again with TWLHD_GX_OPT_CULL added (the
+ * culled polygons need no output space), and *used_flags (may be NULL) is set
+ * to the flags of the interpretation whose result is returned. Statistics,
+ * viewport, count and output arrays hold that second pass only. If the culled
+ * pass overflows too, TWLHD_GX_ERR_CAPACITY is returned with the second pass's
+ * partial output. Every other result is returned unchanged from the first
+ * pass, so frames that fit never change.
+ */
+TwlhdGxResult twlhd_gx_interpret_auto(const TwlhdV2View *view,
+                                      TwlhdGxVertex *out,
+                                      uint32_t out_capacity_vertices,
+                                      uint32_t *out_vertex_count,
+                                      TwlhdGxViewport *viewport,
+                                      TwlhdGxStats *stats,
+                                      TwlhdGxTexVertex *tex_out,
+                                      uint32_t flags, uint32_t *used_flags);
+
 const char *twlhd_gx_result_string(TwlhdGxResult result);
 
 #ifdef __cplusplus

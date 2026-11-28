@@ -5865,6 +5865,108 @@ static void test_ds_stack_off_matches_default_on_valid_streams(void) {
     CHECK(memcmp(first, g_out, sizeof first) == 0);
 }
 
+/* ------------------------------------------------------------------------- */
+/* Overflow fallback (twlhd_gx_interpret_auto)                                */
+/* ------------------------------------------------------------------------- */
+
+/* Front-only polygons: two counter-clockwise (kept) and two clockwise
+ * (culled) triangles, so 12 vertices without culling and 6 with it. */
+static uint32_t build_overflow_frame(void) {
+    uint32_t n = 0u;
+
+    clear_state();
+    add_cull_group(&n, 1, 2u, 0u, CULL_CCW, 3u);
+    add_cull_group(&n, 1, 2u, 0u, CULL_CW, 3u);
+    add_cull_group(&n, 1, 2u, 0u, CULL_CCW, 3u);
+    add_cull_group(&n, 1, 2u, 0u, CULL_CW, 3u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    return n;
+}
+
+static TwlhdGxResult run_auto(uint32_t n, uint32_t capacity, uint32_t flags,
+                              uint32_t *used) {
+    TwlhdV2View view;
+
+    build_view(n, &view);
+    return twlhd_gx_interpret_auto(&view, g_out, capacity, &g_out_count, &g_vp,
+                                   &g_st, NULL, flags, used);
+}
+
+static void test_auto_falls_back_to_culling(void) {
+    uint32_t n = build_overflow_frame();
+    uint32_t used = 0xFFu;
+    TwlhdV2View view;
+
+    /* The plain interpretation overflows (12 vertices into a 6 slot buffer). */
+    build_view(n, &view);
+    CHECK_EQ_INT(twlhd_gx_interpret_opts(&view, g_out, 6u, &g_out_count, &g_vp,
+                                         &g_st, NULL, 0u),
+                 TWLHD_GX_ERR_CAPACITY);
+
+    CHECK_EQ_INT(run_auto(n, 6u, 0u, &used), TWLHD_GX_OK);
+    CHECK_EQ_INT(used, TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 6u);
+    /* Statistics are those of the second pass only. */
+    CHECK_EQ_INT(g_st.culled_polygons, 2u);
+    CHECK_EQ_INT(g_st.capacity_dropped, 0u);
+
+    /* The same output as an explicit culled run with a large buffer. */
+    {
+        uint32_t i;
+        static TwlhdGxVertex ref[256];
+        uint32_t ref_count = 0u;
+        TwlhdGxViewport vp;
+        TwlhdGxStats st;
+
+        CHECK_EQ_INT(twlhd_gx_interpret_opts(&view, ref, 256u, &ref_count, &vp,
+                                             &st, NULL, TWLHD_GX_OPT_CULL),
+                     TWLHD_GX_OK);
+        CHECK_EQ_INT(ref_count, 6u);
+        for (i = 0; i < 6u; i++) {
+            CHECK(memcmp(&ref[i], &g_out[i], sizeof ref[i]) == 0);
+        }
+    }
+}
+
+static void test_auto_keeps_other_flags(void) {
+    uint32_t n = build_overflow_frame();
+    uint32_t used = 0u;
+
+    CHECK_EQ_INT(run_auto(n, 6u, TWLHD_GX_OPT_DS_STACK, &used), TWLHD_GX_OK);
+    CHECK_EQ_INT(used, TWLHD_GX_OPT_DS_STACK | TWLHD_GX_OPT_CULL);
+    CHECK_EQ_INT(g_out_count, 6u);
+}
+
+static void test_auto_unchanged_when_frame_fits(void) {
+    uint32_t n = build_overflow_frame();
+    uint32_t used = 0xFFu;
+
+    /* Fits without culling: no second pass, culling stays off. */
+    CHECK_EQ_INT(run_auto(n, 12u, 0u, &used), TWLHD_GX_OK);
+    CHECK_EQ_INT(used, 0u);
+    CHECK_EQ_INT(g_out_count, 12u);
+    CHECK_EQ_INT(g_st.culled_polygons, 0u);
+    /* used_flags may be NULL. */
+    CHECK_EQ_INT(run_auto(n, 12u, 0u, NULL), TWLHD_GX_OK);
+}
+
+static void test_auto_culling_already_on_or_still_too_big(void) {
+    uint32_t n = build_overflow_frame();
+    uint32_t used = 0u;
+
+    /* Culling already requested and still too big: no retry, error returned. */
+    CHECK_EQ_INT(run_auto(n, 3u, TWLHD_GX_OPT_CULL, &used),
+                 TWLHD_GX_ERR_CAPACITY);
+    CHECK_EQ_INT(used, TWLHD_GX_OPT_CULL);
+    /* Without culling and too big even with culling: error after the retry. */
+    CHECK_EQ_INT(run_auto(n, 3u, 0u, &used), TWLHD_GX_ERR_CAPACITY);
+    CHECK_EQ_INT(used, TWLHD_GX_OPT_CULL);
+    /* NULL arguments are reported like the plain call. */
+    CHECK_EQ_INT(twlhd_gx_interpret_auto(NULL, g_out, 6u, &g_out_count, &g_vp,
+                                         &g_st, NULL, 0u, &used),
+                 TWLHD_GX_ERR_NULL);
+}
+
 int main(void) {
     test_matrix_load_identity();
     test_report("gx_interp/matrix-load-identity");
@@ -6167,6 +6269,14 @@ int main(void) {
     test_report("gx_interp/cull-triangle-modes");
     test_cull_off_by_default();
     test_report("gx_interp/cull-off-by-default");
+    test_auto_falls_back_to_culling();
+    test_report("gx_interp/auto-falls-back-to-culling");
+    test_auto_keeps_other_flags();
+    test_report("gx_interp/auto-keeps-other-flags");
+    test_auto_unchanged_when_frame_fits();
+    test_report("gx_interp/auto-unchanged-when-frame-fits");
+    test_auto_culling_already_on_or_still_too_big();
+    test_report("gx_interp/auto-culling-on-or-still-too-big");
     test_cull_without_polygon_attr_draws();
     test_report("gx_interp/cull-without-polygon-attr-draws");
     test_cull_quad_list();
