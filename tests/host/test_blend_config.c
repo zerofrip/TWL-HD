@@ -163,7 +163,9 @@ static void test_renderer_call_sites(void) {
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaBlend("), 1);
             CHECK_EQ_INT(count_substr(clip, "C3D_AlphaTest("), 1);
             CHECK_EQ_INT(count_substr(clip, "twlhd_alpha_test_gt_zero("), 1);
-            CHECK_EQ_INT(count_substr(clip, "!g_blend_enabled"), 1);
+            /* EQ-5d: the alpha-0 discard no longer depends on the blend gate. */
+            CHECK_EQ_INT(count_substr(clip, "!g_blend_enabled"), 0);
+            CHECK_EQ_INT(count_substr(clip, "at = twlhd_alpha_test_gt_zero();"), 1);
         }
 
         if (debug != NULL) {

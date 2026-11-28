@@ -1563,9 +1563,10 @@ static void draw_clip_internal(int committed) {
         if (diag->mode == 0) {
             blend = g_blend_enabled ? twlhd_blend_config_alpha()
                                     : twlhd_blend_config_opaque();
-            if (!g_blend_enabled) {
-                at = twlhd_alpha_test_gt_zero();
-            }
+            /* DS discards fragments with alpha 0 (a fully transparent texel
+             * or vertex alpha) whether or not blending is on; without the
+             * test they are still drawn and write depth (EQ-5d). */
+            at = twlhd_alpha_test_gt_zero();
         } else {
             blend = diag->blend;
         }
