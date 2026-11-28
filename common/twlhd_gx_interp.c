@@ -1159,14 +1159,19 @@ static TwlhdGxResult process_command(GxInterp *g, uint32_t id,
         if (r != TWLHD_GX_OK) return r;
         break;
 
-    case TWLHD_V2_CMD_VTX_DIFF:
-        g->stats->unsupported++;
-        if (g->in_begin) {
-            /* VTX_DIFF inside a primitive corrupts assembly; callers must know
-             * the resulting geometry is incomplete. */
-            g->stats->geometry_incomplete++;
-        }
+    case TWLHD_V2_CMD_VTX_DIFF: {
+        /* DeSmuME gfx3d.cpp:1503-1519 (SetCurrentVertexPosition3s10Relative):
+         * three sign-extended 10-bit fields are added, as raw integer units of
+         * the s16 (1.3.12) vertex coordinate, to the current vertex position.
+         * The sum wraps like the engine's s16 register. */
+        int32_t rx = (int32_t)(int16_t)(g->raw_vtx[0] + sign_extend10(params[0]));
+        int32_t ry = (int32_t)(int16_t)(g->raw_vtx[1] + sign_extend10(params[0] >> 10));
+        int32_t rz = (int32_t)(int16_t)(g->raw_vtx[2] + sign_extend10(params[0] >> 20));
+        r = emit_vertex(g, (float)rx / 4096.0f, (float)ry / 4096.0f,
+                        (float)rz / 4096.0f, rx, ry, rz);
+        if (r != TWLHD_GX_OK) return r;
         break;
+    }
 
     case TWLHD_V2_CMD_BEGIN_VTXS:
         if (g->in_begin) {

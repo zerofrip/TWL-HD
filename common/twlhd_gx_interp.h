@@ -45,12 +45,12 @@ typedef struct {
     uint32_t dropped_incomplete;  /* vertices left over at END/BEGIN. */
     uint32_t ignored_outside_begin; /* vertex commands outside BEGIN..END. */
     uint32_t ignored_no_effect;   /* commands with no visible effect here. */
-    uint32_t unsupported;         /* VTX_DIFF and anything deliberately skipped. */
+    uint32_t unsupported;         /* anything deliberately skipped (none since VTX_DIFF is implemented). */
     uint32_t raw_fifo_skipped;    /* RAW_FIFO opaque entries. */
     uint32_t stack_errors;        /* stack overflow/underflow attempts. */
     uint32_t capacity_dropped;    /* vertices dropped by out[] overflow. */
-    uint32_t geometry_incomplete; /* VTX_DIFF inside BEGIN..END: output may
-                                       miss expected geometry. */
+    uint32_t geometry_incomplete; /* reserved; always 0 since VTX_DIFF is
+                                       implemented. */
     uint32_t alpha_translucent_polys; /* BEGIN groups with applied raw alpha
                                          1..30 (one per group, not per poly). */
     uint32_t alpha_wireframe_polys;   /* BEGIN groups with applied raw alpha 0

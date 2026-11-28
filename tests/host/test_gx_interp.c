@@ -2308,9 +2308,92 @@ static void test_raw_fifo_and_unsupported(void) {
     r = twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp, &g_st);
     CHECK_EQ_INT(r, TWLHD_GX_OK);
     CHECK_EQ_INT(g_st.raw_fifo_skipped, 1u);
-    CHECK_EQ_INT(g_st.unsupported, 1u);
-    CHECK_EQ_INT(g_st.geometry_incomplete, 1u);
+    /* VTX_DIFF is a real vertex now: 4 vertices, one triangle, one leftover. */
+    CHECK_EQ_INT(g_st.unsupported, 0u);
+    CHECK_EQ_INT(g_st.geometry_incomplete, 0u);
+    CHECK_EQ_INT(g_st.vertices_in, 4u);
+    CHECK_EQ_INT(g_st.dropped_incomplete, 1u);
     CHECK_EQ_INT(g_out_count, 3u);
+}
+
+/* VTX_DIFF parameter: x | (y << 10) | (z << 20), each a 10-bit signed field. */
+static uint32_t diff_param(int32_t dx, int32_t dy, int32_t dz) {
+    return ((uint32_t)dx & 0x3FFu) | (((uint32_t)dy & 0x3FFu) << 10) |
+           (((uint32_t)dz & 0x3FFu) << 20);
+}
+
+static void run_diff_triangle(int32_t x0, int32_t y0, int32_t z0,
+                              uint32_t p1, uint32_t p2) {
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, x0, y0, z0);
+    add_entry(&n, TWLHD_V2_CMD_VTX_DIFF, p1);
+    add_entry(&n, TWLHD_V2_CMD_VTX_DIFF, p2);
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp,
+                                    &g_st), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_out_count, 3u);
+}
+
+static void test_vtx_diff_adds_to_previous_vertex(void) {
+    /* v0 = (0x100,0x200,0x300); v1 = v0 + (5,-3,1); v2 = v1 + (-2,0,7). */
+    run_diff_triangle(0x100, 0x200, 0x300, diff_param(5, -3, 1),
+                      diff_param(-2, 0, 7));
+    CHECK_NEAR(g_out[0].clip[0], 256.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[1].clip[0], 261.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[1].clip[1], 509.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[1].clip[2], 769.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[2].clip[0], 259.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[2].clip[1], 509.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[2].clip[2], 776.0f / 4096.0f, 0.00001f);
+    CHECK_EQ_INT(g_st.unsupported, 0u);
+    CHECK_EQ_INT(g_st.vertices_in, 3u);
+}
+
+static void test_vtx_diff_field_is_ten_bit_signed(void) {
+    /* 0x3FF is -1, 0x200 is -512, 0x1FF is +511 (sign extension of bit 9). */
+    run_diff_triangle(0, 0, 0, 0x3FFu | (0x200u << 10) | (0x1FFu << 20), 0u);
+    CHECK_NEAR(g_out[1].clip[0], -1.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[1].clip[1], -512.0f / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[1].clip[2], 511.0f / 4096.0f, 0.00001f);
+}
+
+static void test_vtx_diff_wraps_like_s16(void) {
+    /* 0x7FFF + 1 wraps to -0x8000 (DeSmuME keeps an s16 coordinate). */
+    run_diff_triangle(0x7FFF, -0x8000, 0, diff_param(1, -1, 0), 0u);
+    CHECK_NEAR(g_out[1].clip[0], -8.0f, 0.0001f);
+    CHECK_NEAR(g_out[1].clip[1], 7.999756f, 0.0001f);
+}
+
+static void test_vtx_diff_after_xy_uses_current_z(void) {
+    /* The base of VTX_DIFF is the last vertex including components a VTX_XY
+     * kept from an earlier command. */
+    uint32_t n = 0u;
+    size_t size;
+    TwlhdV2View view;
+
+    clear_state();
+    add_entry(&n, TWLHD_V2_CMD_BEGIN_VTXS, 0u);
+    add_vtx_16(&n, 0x100, 0x200, 0x300);
+    add_entry(&n, TWLHD_V2_CMD_VTX_XY, 0x00400030u); /* x=0x30 y=0x40, z kept */
+    add_entry(&n, TWLHD_V2_CMD_VTX_DIFF, diff_param(1, 1, 1));
+    add_entry(&n, TWLHD_V2_CMD_END_VTXS, 0u);
+    add_entry(&n, TWLHD_V2_CMD_SWAP_BUFFERS, 0u);
+    size = build_file(n);
+    CHECK_EQ_INT(twlhd_v2_parse(g_file, size, &view), TWLHD_V2_OK);
+    CHECK_EQ_INT(twlhd_gx_interpret(&view, g_out, 12u, &g_out_count, &g_vp,
+                                    &g_st), TWLHD_GX_OK);
+    CHECK_EQ_INT(g_st.vertices_in, 3u);
+    CHECK_NEAR(g_out[2].clip[0], 0x31 / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[2].clip[1], 0x41 / 4096.0f, 0.00001f);
+    CHECK_NEAR(g_out[2].clip[2], 0x301 / 4096.0f, 0.00001f);
 }
 
 static void test_viewport(void) {
@@ -5842,6 +5925,14 @@ int main(void) {
     test_report("gx_interp/capacity-error");
     test_raw_fifo_and_unsupported();
     test_report("gx_interp/raw-fifo-and-unsupported");
+    test_vtx_diff_adds_to_previous_vertex();
+    test_report("gx_interp/vtx-diff-adds-to-previous-vertex");
+    test_vtx_diff_field_is_ten_bit_signed();
+    test_report("gx_interp/vtx-diff-field-is-ten-bit-signed");
+    test_vtx_diff_wraps_like_s16();
+    test_report("gx_interp/vtx-diff-wraps-like-s16");
+    test_vtx_diff_after_xy_uses_current_z();
+    test_report("gx_interp/vtx-diff-after-xy-uses-current-z");
     test_viewport();
     test_report("gx_interp/viewport");
     test_mode2_uses_position();
