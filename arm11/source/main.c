@@ -44,7 +44,7 @@
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
 #define OPTS_PATH "sdmc:/twlhd_opts.txt"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
-#define CLIP_VERTEX_CAPACITY 8192u
+#define CLIP_VERTEX_CAPACITY 16384u
 #define CLIP_PLAN_CAPACITY (CLIP_VERTEX_CAPACITY / 3u)
 
 typedef struct {
