@@ -60,7 +60,7 @@ HOST_HEADERS := common/twlhd_frame_parse.h common/twlhd_vertex_convert.h \
 	common/twlhd_pica_tex.h \
 	common/twlhd_pica_frame.h \
 	common/twlhd_attr_pad.h \
-	common/twlhd_clipfix.h common/twlhd_seq.h \
+	common/twlhd_clipfix.h common/twlhd_seq.h common/twlhd_opts.h \
 	common/twlhd_tex_draw_plan.h \
 	common/twlhd_tex_capture.h \
 	common/twlhd_tex_source.h \
@@ -84,6 +84,7 @@ HOST_TESTS := tests/host/build/test_parser \
 	tests/host/build/test_tex_capture \
 	tests/host/build/test_gx_record_tex \
 	tests/host/build/test_clipfix \
+	tests/host/build/test_opts \
 	tests/host/build/test_seq \
 	tests/host/build/test_libnds_shim \
 	tests/host/build/test_demo_frame \
@@ -157,6 +158,10 @@ tests/host/build/test_gx_interp: tests/host/test_gx_interp.c $(HOST_V2_COMMON) \
 tests/host/build/test_tex_decode: tests/host/test_tex_decode.c \
 		$(HOST_V2_COMMON) $(HOST_HEADERS) | tests/host/build
 	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< $(HOST_V2_COMMON) $(HOST_LDFLAGS)
+
+tests/host/build/test_opts: tests/host/test_opts.c common/twlhd_opts.c \
+		$(HOST_HEADERS) | tests/host/build
+	$(HOST_CC) $(HOST_CFLAGS) -o $@ $< common/twlhd_opts.c $(HOST_LDFLAGS)
 
 tests/host/build/test_clipfix: tests/host/test_clipfix.c common/twlhd_clipfix.c \
 		$(HOST_HEADERS) | tests/host/build

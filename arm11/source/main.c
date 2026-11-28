@@ -21,6 +21,7 @@
 #include "twlhd_frame_parse.h"
 #include "twlhd_v2_parse.h"
 #include "twlhd_gx_interp.h"
+#include "twlhd_opts.h"
 #include "twlhd_pica_frame.h"
 #include "twlhd_pica_tex.h"
 #include "twlhd_tex_draw_plan.h"
@@ -41,6 +42,7 @@
 #endif
 
 #define FRAME_PATH "sdmc:/twlhd_frame.bin"
+#define OPTS_PATH "sdmc:/twlhd_opts.txt"
 #define MAX_VERTICES (3u * TWLHD_RING_CAPACITY)
 #define CLIP_VERTEX_CAPACITY 8192u
 #define CLIP_PLAN_CAPACITY (CLIP_VERTEX_CAPACITY / 3u)
@@ -74,6 +76,28 @@ static TwlhdPicaTexCoord g_texcoords[CLIP_VERTEX_CAPACITY];
 static _Alignas(128) uint8_t g_arena[TWLHD_PICA_FRAME_ARENA_PRACTICAL_BYTES];
 static uint8_t g_scratch[TWLHD_PICA_FRAME_SCRATCH_BYTES];
 _Static_assert(sizeof(TwlhdGxVertex) == 32, "TwlhdGxVertex must be 32 bytes for the clip vertex layout");
+
+/* Interpreter option mask in effect: the compile-time default, or the value
+ * of sdmc:/twlhd_opts.txt re-read on every frame load (common/twlhd_opts.h). */
+static uint32_t g_gx_opts = TWLHD_ARM11_GX_OPTS;
+
+static void load_opts_file(void) {
+    char text[TWLHD_OPTS_MAX_BYTES + 1u];
+    FILE *file;
+    size_t n;
+    uint32_t value = TWLHD_ARM11_GX_OPTS;
+
+    g_gx_opts = TWLHD_ARM11_GX_OPTS;
+    file = fopen(OPTS_PATH, "rb");
+    if (!file) return; /* absent: keep the compile-time default */
+    n = fread(text, 1, sizeof text, file);
+    fclose(file);
+    if (twlhd_opts_parse(text, n, &value) == TWLHD_OPTS_OK) {
+        g_gx_opts = value;
+    } else {
+        renderer_trace("opts file invalid");
+    }
+}
 
 static SceneInfo g_scene;
 static char g_status[96];
@@ -285,6 +309,8 @@ static int load_sd_frame(const char *path,
         return -1;
     }
 
+    load_opts_file();
+
     file = fopen(path, "rb");
     if (!file) {
         snprintf(g_status, sizeof g_status, "SD: cannot open %s", path);
@@ -334,7 +360,7 @@ static int load_sd_frame(const char *path,
                                             CLIP_VERTEX_CAPACITY,
                                             &vertex_count, out_viewport,
                                             out_gx_stats, g_tex_vertices,
-                                            TWLHD_ARM11_GX_OPTS);
+                                            g_gx_opts);
         if (gx_result != TWLHD_GX_OK) {
             snprintf(g_status, sizeof g_status,
                      "gx:%s s%lu c%lu i%lu",
